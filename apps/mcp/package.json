@@ -1,0 +1,12 @@
+{
+  "name": "@emailer/mcp",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@effect/platform-node": "catalog:",
+    "@emailer/api": "workspace:*",
+    "@modelcontextprotocol/server": "catalog:",
+    "effect": "catalog:"
+  }
+}

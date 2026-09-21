@@ -1,0 +1,39 @@
+{
+  "name": "emailer",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "prepare": "effect-tsgo patch --oxlint",
+    "emailer": "node apps/cli/src/main.ts",
+    "feedback:replay": "node apps/backend/src/ReplayFeedback.ts",
+    "format": "oxfmt --write .",
+    "format:check": "oxfmt --check .",
+    "lint": "oxlint --type-aware --type-check --deny-warnings .",
+    "lint:fix": "oxlint --type-aware --fix .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --project unit",
+    "test:watch": "vitest --project unit",
+    "test:integration": "vitest run --project integration",
+    "check:imports": "node --input-type=module -e 'await import(\"alchemy\"); await import(\"alchemy/AWS\"); await import(\"@effect/platform-node/NodeRuntime\")'",
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm check:imports"
+  },
+  "devDependencies": {
+    "@effect/platform-node": "catalog:",
+    "@effect/tsgo": "catalog:",
+    "@oxlint/plugins": "catalog:",
+    "@types/node": "catalog:",
+    "alchemy": "catalog:",
+    "effect": "catalog:",
+    "oxfmt": "catalog:",
+    "oxlint": "catalog:",
+    "oxlint-tsgolint": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:"
+  },
+  "engines": {
+    "node": ">=24.19.0 <25"
+  },
+  "packageManager": "pnpm@12.3.4"
+}

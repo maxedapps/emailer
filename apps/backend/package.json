@@ -1,0 +1,13 @@
+{
+  "name": "@emailer/backend",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@distilled.cloud/aws": "catalog:",
+    "@effect/platform-node": "catalog:",
+    "@emailer/api": "workspace:*",
+    "alchemy": "catalog:",
+    "effect": "catalog:"
+  }
+}

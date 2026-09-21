@@ -1,0 +1,11 @@
+{
+  "name": "@emailer/cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@effect/platform-node": "catalog:",
+    "@emailer/api": "workspace:*",
+    "effect": "catalog:"
+  }
+}

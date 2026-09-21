@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Segmentation without a second list</title>
+<style>
+:root{color-scheme:light;--page:#fbfaf8;--surface:#fff;--ink:#17160f;--ink-2:#4d4b44;--muted:#8a877d;--line:#e6e3da;--accent:#2f6fd0;--code-bg:#f4f2ed;--good:#2e7d32;--good-bg:#eaf4ea;--flag:#9a6400;--flag-bg:#fdf3e0;--hot:#b3261e;--hot-bg:#fdeceb}
+@media(prefers-color-scheme:dark){:root{color-scheme:dark;--page:#100f0d;--surface:#1a1917;--ink:#f5f3ee;--ink-2:#c0bcb1;--muted:#8a877d;--line:#2e2c28;--accent:#78aef5;--code-bg:#201f1c;--good:#7fc783;--good-bg:#1a241a;--flag:#e8b45e;--flag-bg:#2a2216;--hot:#f28b82;--hot-bg:#2b1817}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink-2);font:16px/1.65 system-ui,-apple-system,"Segoe UI",sans-serif}
+.wrap{max-width:760px;margin:0 auto;padding:48px 22px 90px}
+.kicker{color:var(--muted);font-size:13px;letter-spacing:.08em;text-transform:uppercase}
+h1{color:var(--ink);font-size:32px;line-height:1.2;margin:8px 0 18px;letter-spacing:-.015em}
+h2{color:var(--ink);font-size:22px;margin:52px 0 2px;letter-spacing:-.01em}
+h2 .num{color:var(--muted);font-weight:400;margin-right:8px}
+h3{color:var(--ink);font-size:17px;margin:32px 0 6px}
+p{margin:14px 0}
+strong{color:var(--ink)}
+a{color:var(--accent)}
+.lede{font-size:17.5px}
+.verdict{background:var(--surface);border:1px solid var(--line);border-left:4px solid var(--good);border-radius:4px 10px 10px 4px;padding:18px 22px;margin:26px 0 8px}
+.verdict p:first-child{margin-top:0}
+.verdict p:last-child{margin-bottom:0}
+code{background:var(--code-bg);border-radius:4px;padding:1.5px 5px;font-size:.88em;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+pre{background:var(--code-bg);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin:16px 0;overflow-x:auto;font-size:13px;line-height:1.6;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+pre code{background:none;padding:0;font-size:inherit}
+pre b{color:var(--ink)}
+pre .c{color:var(--muted)}
+.where{font-size:12.5px;color:var(--muted);margin:18px 0 -10px}
+.step{border-left:2px solid var(--line);padding-left:20px;margin:26px 0}
+.step h3{margin-top:0}
+.step h3 .n{display:inline-block;background:var(--accent);color:#fff;font-size:12px;font-weight:700;width:20px;height:20px;line-height:20px;text-align:center;border-radius:50%;margin-right:8px;vertical-align:1.5px}
+.item{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:16px 20px;margin:14px 0}
+.item.hot{border-left:4px solid var(--hot);border-radius:4px 10px 10px 4px}
+.item h3{margin:0 0 2px}
+.item p{margin:8px 0 0;font-size:15px}
+.item p:first-of-type{margin-top:6px}
+.item .do{margin-top:12px;padding-top:10px;border-top:1px solid var(--line);font-size:14.5px}
+.tag{display:inline-block;font-size:11.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;padding:2px 9px;border-radius:20px;vertical-align:2px;margin-left:8px;white-space:nowrap}
+.t-ask{color:var(--flag);background:var(--flag-bg);border:1px solid var(--flag)}
+.t-small{color:var(--muted);background:var(--code-bg);border:1px solid var(--line)}
+.t-good{color:var(--good);background:var(--good-bg);border:1px solid var(--good)}
+.t-hot{color:var(--hot);background:var(--hot-bg);border:1px solid var(--hot)}
+ul{padding-left:22px}
+li{margin:9px 0}
+.num-strip{display:flex;flex-wrap:wrap;gap:10px 28px;margin:22px 0;padding:16px 20px;background:var(--surface);border:1px solid var(--line);border-radius:10px}
+.num-strip div{flex:1 1 120px}
+.num-strip .v{color:var(--ink);font-size:20px;font-weight:650;display:block;line-height:1.3}
+.num-strip .l{font-size:12.5px;color:var(--muted)}
+.split{display:grid;grid-template-columns:1fr 1fr;gap:0 26px}
+.split h3{margin-top:18px}
+.check{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:6px 22px 16px;margin:18px 0}
+.check li{margin:12px 0}
+hr{border:0;border-top:1px solid var(--line);margin:48px 0 0}
+footer{margin-top:22px;font-size:13px;color:var(--muted)}
+@media(max-width:560px){.wrap{padding:32px 16px 60px}h1{font-size:26px}.step{padding-left:14px}.split{grid-template-columns:1fr}}
+@media print{.item,pre{break-inside:avoid}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div class="kicker">Emailer · PR #9 · 17 Sep 2026</div>
+<h1>Segmentation without a second list</h1>
+<p class="lede"><a href="https://github.com/maxedapps/emailer/pull/9">PR #9</a> lets an operator narrow a campaign to contacts whose attributes match every supplied equality. This review traces a filtered send, explains the delivery guarantees, and separates code findings from rollout and operating risks.</p>
+<div class="verdict"><p><strong>Verdict: merge-ready. No material code findings.</strong></p>
+<p><strong>Deploy the compatible API and dispatcher before using filters.</strong> An older API discards the input filter; an older dispatcher ignores a stored filter and sends to the whole list. Keep filtered campaigns away from those versions during deployment or rollback.</p>
+<p><strong>Keep the documented audience semantics:</strong> attributes are read when each page is processed, and excluded contacts produce neither delivery rows nor a filtered count. These are deliberate scope choices, not missing implementation.</p></div>
+
+<h2 id="s1"><span class="num">1</span>Where it started</h2>
+<p>The old dispatcher already paged the live list, checked consent and suppression, paced sends, and recorded each recipient's outcome. It had no campaign-specific predicate. Every member reached the address-status lookup:</p>
+<p class="where">Dispatching.ts before this PR</p>
+<pre><code>for (const member of page.items) {
+  <b>const status = yield* audience.addressStatus(member.email);</b>
+  const now = yield* nowIso;
+  if (status !== &quot;mailable&quot;) {
+<span class="c">    // Record a consent or deliverability skip.</span>
+  }
+}</code></pre>
+<p>Contact hydration already returned attributes. The PR uses that existing data; it adds no secondary index, audience snapshot, resource, or extra per-contact read. Existing campaigns omit the new field and retain their previous behavior.</p>
+
+<h2 id="s2"><span class="num">2</span>Follow one filtered campaign through</h2>
+<div class="step">
+<h3><span class="n">1</span>Define the intended audience</h3>
+<p>An operator creates a campaign with <code>--filter plan=pro --filter city=Berlin</code>, or sends the corresponding JSON map to <code>POST /campaigns</code>. The shared schema allows at most 20 string-valued entries, keys of up to 64 UTF-16 code units, and values of up to 512. Both equalities must match exactly. An absent filter or <code>{}</code> includes the whole list.</p>
+</div>
+<div class="step">
+<h3><span class="n">2</span>Preserve the predicate</h3>
+<p>The CLI and domain <code>create</code> explicitly copy the optional map. Storage writes it as a DynamoDB map on the campaign's <code>META</code> item. The existing body-first creation sequence stays intact. <code>summaryOf</code> exposes the filter on list/get responses, and <code>beginRun</code> hands it to the dispatcher. Each projection omits an absent field instead of introducing <code>filter: undefined</code>, which this optional-key schema rejects.</p>
+</div>
+<div class="step">
+<h3><span class="n">3</span>Read one live page</h3>
+<p>The dispatcher begins the run, applies reputation and quota guards, and asks membership storage for up to 50 contacts. The existing contact hydration supplies their current attributes. It reads the campaign body once, then evaluates the filter before consulting address status.</p>
+</div>
+<div class="step">
+<h3><span class="n">4</span>Exclude without creating a recipient</h3>
+<p>A <code>plan=free</code> member advances <code>lastProcessed</code> and immediately continues. There is no address-status lookup, limiter reservation, recipient claim, delivery row, or counter increment for that member. A matching contact still passes through the original consent and suppression checks before it can be sent.</p>
+</div>
+<div class="step">
+<h3><span class="n">5</span>Continue and finish safely</h3>
+<p>The existing conditional checkpoint determines which invocation may enqueue the next page. A wholly excluded page still follows <code>nextCursor</code>. If the next matching recipient cannot fit the remaining time budget, the last excluded contact is a valid checkpoint. A final page with no matches completes with zero outcomes. Recipient claims still prevent a redelivered page from sending the same contact twice.</p>
+</div>
+
+<h2 id="s3"><span class="num">3</span>The subtle decision: excluded is different from skipped</h2>
+<p><code>skipped</code> continues to mean a recipient was blocked by consent or deliverability. A contact outside the filter is not a recipient of this campaign. Giving every exclusion a row would add transactions for the very audience the operator is trying to avoid sending to.</p>
+<p class="where">Dispatching.ts:177–184</p>
+<pre><code>if (filter !== undefined &amp;&amp; !matchesFilter(filter, member.attributes)) {
+  <b>lastProcessed = member.id;</b>
+  continue;
+}
+const status = yield* audience.addressStatus(member.email);</code></pre>
+<p>Advancing <code>lastProcessed</code> is the essential detail: excluding a contact still counts as progress through the list. The tradeoff is observability, discussed below. ADR-0011's amendment and the README make the distinction explicit; it does not require another segment entity or ledger.</p>
+
+<h2 id="s4"><span class="num">4</span>What held up under review</h2>
+<div class="item">
+<h3>Filtering does not bypass delivery safeguards<span class="tag t-good">solid</span></h3>
+<p>Matching members still encounter consent, suppression, conditional claims, pacing and outcome settlement. The added tests inspect actual rows and recipients, so a mistakenly dropped predicate or an exclusion counted as a skip would fail them.</p>
+
+</div>
+<div class="item">
+<h3>The field survives every projection<span class="tag t-good">solid</span></h3>
+<p>Schema, domain, storage and HTTP tests cover input, persistence and responses. Direct probes also preserved own keys such as <code>__proto__</code>, <code>constructor</code> and <code>toString</code>; they do not disappear and turn a restrictive predicate into an empty one. Stored malformed maps fail decoding rather than being treated as absent.</p>
+
+</div>
+<div class="item">
+<h3>Excluded pages do not strand the campaign<span class="tag t-good">solid</span></h3>
+<p>The existing tests protect checkpoint behavior around the new branch. Additional probes of the real <code>runSlice</code> confirmed empty filters, wholly excluded pages, continuation to a later match, and completion when the final page contains no matching members.</p>
+
+</div>
+<div class="item">
+<h3>Old campaigns remain readable<span class="tag t-good">solid</span></h3>
+<p>The stored field is optional and no update expression changes. No table or index migration is introduced. This is backward compatibility for the new reader; it does not make the old dispatcher safe for new filtered campaigns.</p>
+
+</div>
+
+<h2 id="s5"><span class="num">5</span>Risks to account for</h2>
+<div class="item hot">
+<h3>R1 — Old versions silently broaden a filtered audience<span class="tag t-hot">high</span></h3>
+<p>The API and dispatcher are separate Lambda functions. A partial deployment or rollback can pair a filter-aware client/API with an older consumer. I reproduced both compatibility failures locally: the baseline API schema removes the new input field, and baseline <code>beginRun</code> accepts a stored filter but omits it from the run projection. The baseline dispatcher then applies no predicate. Consent checks remain, but otherwise excluded contacts can receive the message.</p>
+<p>This is a conditional operating risk, not a defect in the fully deployed PR. The fresh-stage integration case cannot exercise mixed versions. Lambda updates and published versions operate per function; there is no application-wide atomic switch in this stack. <a href="https://docs.aws.amazon.com/lambda/latest/dg/configuration-versions.html">AWS function versions</a> and the project's Alchemy lifecycle wiki support that boundary.</p>
+<p class="do"><strong>Consider:</strong> allow filtered sends only after both functions are verified on the new release. For rollback, stop dispatch, let current invocations finish, and ensure no filtered draft, queued, sending or paused campaign can be processed by the older dispatcher. If uninterrupted mixed-version operation becomes a requirement, add an explicit consumer capability/version guard.</p>
+</div>
+<div class="item">
+<h3>R2 — Large filters increase every counter write<span class="tag t-small">medium</span></h3>
+<p>The predicate lives on <code>META</code>, which is also updated for each outcome. DynamoDB charges <code>UpdateItem</code> for the whole item even when only a counter changes, and transactional writes double the write units. A schema-valid maximum-size Unicode filter contains 34,560 bytes of keys and values before map and campaign overhead. It can therefore make settlements much more expensive than the small <code>META</code> described by ADR-0014. <a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/read-write-operations.html">AWS write-capacity calculation</a>.</p>
+<p>Short predicates such as <code>plan=pro</code> have little effect, and no throughput regression was observed or benchmarked. The useful distinction is between a bounded map and a cheap map; they are not equivalent at the schema ceiling.</p>
+<p class="do"><strong>Consider:</strong> measure consumed capacity with representative large filters before sustained volume. If that workload matters, compare a tighter filter byte budget with storing immutable audience configuration outside the counter item.</p>
+</div>
+<div class="item">
+<h3>R3 — Progress cannot explain every exclusion<span class="tag t-small">consideration</span></h3>
+<p>Attributes are evaluated at page-read time. An edit after a contact's page is finished does not make the dispatcher revisit it; reprocessing an unfinished page can observe a newer value. Because exclusions leave no rows and there is no filtered count, <code>completed</code> with zero outcomes cannot distinguish a typo in the filter from a list with no matches. Filtering also still reads the whole list in 50-member pages.</p>
+<p>These are explicitly accepted boundaries, not merge blockers. A saved segment or snapshot would change the product contract and add substantial machinery.</p>
+<p class="do"><strong>Consider:</strong> retain the README's live-audience explanation in operator-facing workflows. Add a preview only if operators need it, making clear that a preview is not a frozen recipient set.</p>
+</div>
+
+<h2 id="s6"><span class="num">6</span>The size of the change</h2>
+<div class="num-strip"><div><span class="v">74 / 20</span><span class="l">source lines added / removed across 5 files</span></div><div><span class="v">391 / 27</span><span class="l">test lines added / removed across 7 files</span></div><div><span class="v">168 / 10</span><span class="l">documentation lines added / removed across 4 files</span></div><div><span class="v">0</span><span class="l">material code findings</span></div></div>
+<p>The 633 additions are mostly tests and review/plan records. The runtime change is a field propagated through existing boundaries and one branch in the send loop. There are no dependency or infrastructure declaration changes.</p>
+
+<h2 id="s7"><span class="num">7</span>What I checked, what I trusted</h2>
+<div class="split"><div><h3>Independently checked</h3><ul><li>Exact PR commit 9378cdf against origin/main 9cd7e40; their merge base is origin/main, so the PR head is the merged result while the target stays there.</li><li>Fresh frozen-lockfile install in an isolated worktree; format, warning-denying lint and typecheck passed.</li><li>All 605 unit tests passed with one worker; the CLI suite also passed separately. Import smoke check and manual CLI help passed.</li><li>Full changed-source/test inspection across two review lanes; unchanged storage, hydration, queue and Lambda boundaries; accepted ADRs and wiki.</li><li>Direct old/new compatibility and unusual-key probes. GitHub's check run independently reports success.</li></ul></div><div><h3>Author-reported, not rerun</h3><ul><li>The plan records 25 live integration cases passing on test-seg, a manual filtered simulator send, and complete teardown.</li><li>No AWS deployment, real SES submission, cloud inventory check, or upgrade/rollback rehearsal was performed in this review.</li><li>No throughput benchmark establishes a practical limit for large filters or sparse audiences.</li></ul></div></div>
+<p>The default local <code>pnpm check</code> reached unit tests twice and timed out on two different pre-existing CLI cases. Each run passed the other 604 tests. The CLI suite passed in isolation with all 26 tests; a subsequent full run with <code>--maxWorkers=1</code> passed all 605 tests across 29 files, and the import check passed. No source or timeout was changed. Concurrent work was running on the shared host; that is consistent with resource contention but does not prove the timeout's cause. The <a href="https://github.com/maxedapps/emailer/actions/runs/35214259697/job/105178854320">CI check</a> passed. The adjacent <code>pr-9-review-evidence.md</code> records execution details and the plan matrix.</p>
+<p>This is a second opinion after the implementation review committed on the branch. That earlier report had no material findings. This review adds independent execution, unusual-input checks, and the mixed-version/storage-cost analysis above.</p>
+
+<h2 id="s8"><span class="num">8</span>Before the first filtered send</h2>
+<div class="check"><ul><li><strong>Use compatible deployed versions</strong> — finish the API/dispatcher rollout before sending a filtered campaign, and keep the rollback restriction explicit.</li><li><strong>Retain the agreed semantics</strong> — live attributes and no exclusion ledger/count are the delivered behavior. No new architectural decision is proposed by this review.</li><li><strong>Treat the local gate honestly</strong> — CI and all 605 tests with one worker passed; local default runs encountered CLI timeouts.</li></ul></div>
+<p>For a quick source check, open <a href="https://github.com/maxedapps/emailer/blob/9378cdfbce273ec92d5166c6f8c7b2b1c3899d7e/apps/backend/src/Dispatching.ts#L177">Dispatching.ts</a>, <a href="https://github.com/maxedapps/emailer/blob/9378cdfbce273ec92d5166c6f8c7b2b1c3899d7e/apps/backend/src/Storage/Campaigns.ts#L255">Storage/Campaigns.ts</a>, and <a href="https://github.com/maxedapps/emailer/blob/9378cdfbce273ec92d5166c6f8c7b2b1c3899d7e/apps/backend/src/Api.integration.test.ts#L252">Api.integration.test.ts</a>. They show the exclusion branch, the durable predicate, and the test that distinguishes two intended recipients from three actual sends.</p>
+
+<hr />
+<footer>Reviewed 9378cdf against origin/main 9cd7e40. Independent second opinion; source unchanged. AWS deployment evidence is author-reported.</footer>
+</div>
+</body>
+</html>

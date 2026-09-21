@@ -1,0 +1,21 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "printWidth": 100,
+  "semi": true,
+  "singleQuote": false,
+  "tabWidth": 2,
+  "useTabs": false,
+  "ignorePatterns": [
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/coverage/**",
+    ".vitest/**",
+    ".alchemy/**",
+    ".agents/**",
+    ".progress/**",
+    "tools/oxlint/anti-slop/**",
+    ".adr/**",
+    "wiki/**",
+    "pnpm-lock.yaml"
+  ]
+}
