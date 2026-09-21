@@ -12,7 +12,6 @@ export default defineConfig({
     "**/coverage/**",
     ".vitest/**",
     ".alchemy/**",
-    ".agents/**",
     ".progress/**",
     "tools/oxlint/anti-slop/**",
     "wiki/**",
