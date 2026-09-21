@@ -17,6 +17,7 @@ export default defineConfig({
     "wiki/**",
   ],
   jsPlugins: [
+    // Vendored from https://github.com/dmmulroy/anti-slop (MIT, Dillon Mulroy).
     { name: "anti-slop", specifier: "./tools/oxlint/anti-slop/index.ts" },
     { name: "anti-slop-effect", specifier: "./tools/oxlint/anti-slop/effect/index.ts" },
   ],

@@ -1,5 +1,7 @@
 # Upstream provenance
 
+Vendored from [dmmulroy/anti-slop](https://github.com/dmmulroy/anti-slop) by Dillon Mulroy, MIT licensed. Keep [LICENSE](LICENSE) with this copy.
+
 - Repository: https://github.com/dmmulroy/anti-slop
 - Commit: `c44ef22ca116d0ba62a3ff663a0bd13a3f3fa40b`
 - Source: `src/` copied unchanged, including upstream tests and nested licenses.

@@ -2,7 +2,7 @@
 
 Self-hosted marketing email over Amazon SES. Deploy it to your AWS account, then manage contacts, lists and campaigns from the CLI.
 
-License: [MIT](LICENSE).
+License: [MIT](LICENSE). Oxlint rules in `tools/oxlint/anti-slop` are vendored from [dmmulroy/anti-slop](https://github.com/dmmulroy/anti-slop) (MIT, Dillon Mulroy).
 
 ## Requirements
 
@@ -202,3 +202,7 @@ aws sqs start-message-move-task \
 Gmail sends no complaint feedback loop to SES. Watch the domain in Google Postmaster Tools, and read DMARC aggregate reports at the `rua` address you published.
 
 The account suppression list survives `alchemy destroy`. A test run can leave `simulator.amazonses.com` entries; remove them with the exact string `addresses status` returns.
+
+## Credits
+
+This repository vendors [anti-slop](https://github.com/dmmulroy/anti-slop) by Dillon Mulroy, MIT licensed. The copy lives at `tools/oxlint/anti-slop` with its [LICENSE](tools/oxlint/anti-slop/LICENSE) and [provenance](tools/oxlint/anti-slop/UPSTREAM.md).
