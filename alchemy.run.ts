@@ -1,8 +1,10 @@
 import { Stack } from "alchemy";
 import * as AWS from "alchemy/AWS";
-import { Config, Effect, Option } from "effect";
+import { Config, Effect, Layer, Option } from "effect";
 
 import ApiFunction from "./apps/backend/src/api/Api.ts";
+import PreviewPage from "./apps/backend/src/campaigns/PreviewPage.ts";
+import { PreviewFunction } from "./apps/backend/src/campaigns/Previews.ts";
 import { dispatchFailures } from "./apps/backend/src/sending/Dispatch.ts";
 import DispatcherFunction from "./apps/backend/src/sending/Dispatcher.ts";
 import FeedbackFunction, { feedbackFailures } from "./apps/backend/src/feedback/Feedback.ts";
@@ -22,6 +24,8 @@ export default Stack(
     const api = yield* ApiFunction;
 
     const unsubscribe = yield* UnsubscribeFunction;
+
+    const preview = yield* PreviewFunction;
 
     const feedback = yield* FeedbackFunction;
     yield* DispatcherFunction;
@@ -98,13 +102,14 @@ export default Stack(
     return {
       apiUrl: api.functionUrl,
       unsubscribeUrl: unsubscribe.functionUrl,
+      previewUrl: preview.functionUrl,
       feedbackFunctionArn: feedback.functionArn,
       feedbackFailureQueueUrl: failures.queueUrl,
       alertsTopicArn: topic.topicArn,
     };
   }).pipe(
-    // The unsubscribe function is declared as a bare tag so Api.ts can reference
-    // its URL; without its .make Layer, planning fails with missingImplementation.
-    Effect.provide(UnsubscribePage),
+    // The public functions are declared as bare tags so Api.ts can reference their
+    // URLs; without their .make Layers, planning fails with missingImplementation.
+    Effect.provide(Layer.mergeAll(UnsubscribePage, PreviewPage)),
   ),
 );

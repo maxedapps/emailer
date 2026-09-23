@@ -5,7 +5,7 @@ import { CliError, Command, Flag } from "effect/unstable/cli";
 import { report, withClient } from "../Client.ts";
 import { entityPageFlags, idArgument, pageQuery } from "../Flags.ts";
 import { renderMarkdown } from "../Markdown.ts";
-import { confirm } from "../Terminal.ts";
+import { confirm, openInBrowser } from "../Terminal.ts";
 
 const refuse = (userMessage: string) => new CliError.UserError({ cause: userMessage, userMessage });
 
@@ -328,6 +328,38 @@ const campaignsTest = Command.make(
   ]),
 );
 
+const campaignsPreview = Command.make(
+  "preview",
+  {
+    id: idArgument("id"),
+    open: Flag.boolean("open").pipe(
+      Flag.withDescription("Also open the link in this machine's browser"),
+      Flag.withDefault(false),
+    ),
+  },
+  Effect.fn(function* (input) {
+    const link = yield* withClient((client) =>
+      client.campaigns.preview({ params: { id: input.id } }),
+    );
+
+    yield* report(link);
+
+    if (input.open) {
+      yield* openInBrowser(link.url);
+    }
+  }),
+).pipe(
+  Command.withDescription(
+    "Create a 24-hour public link to the campaign as recipients will see it; it follows later edits",
+  ),
+  Command.withExamples([
+    {
+      command: "emailer campaigns preview 0195f0a0-1111-4222-8333-4444444ca409 --open",
+      description: "Print a preview link and open it in the local browser",
+    },
+  ]),
+);
+
 const campaignsGet = Command.make(
   "get",
   { id: idArgument("id") },
@@ -469,6 +501,7 @@ export const campaigns = Command.make("campaigns").pipe(
     campaignsUpdate,
     campaignsDelete,
     campaignsTest,
+    campaignsPreview,
     campaignsGet,
     campaignsSend,
     campaignsResume,

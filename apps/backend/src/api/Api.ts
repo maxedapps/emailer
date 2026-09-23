@@ -16,6 +16,7 @@ import * as Contacts from "../audience/Contacts.ts";
 import * as Lists from "../audience/Lists.ts";
 import { CampaignScheduleLive } from "../campaigns/CampaignSchedule.ts";
 import * as Campaigns from "../campaigns/Campaigns.ts";
+import { PreviewFunction, previewLink, previewSecret } from "../campaigns/Previews.ts";
 import { sendTest } from "../campaigns/TestSends.ts";
 import { UnsubscribeFunction, unsubscribeSecret } from "../consent/Unsubscribe.ts";
 import { publicly } from "../Diagnostics.ts";
@@ -74,6 +75,12 @@ const campaignsHandlers = HttpApiBuilder.group(EmailerApi, "campaigns", (handler
     update: (request) => publicly(Campaigns.update(request.params.id, request.payload)),
     remove: (request) => publicly(Campaigns.remove(request.params.id)),
     test: (request) => publicly(sendTest(request.params.id, request.payload)),
+    preview: (request) =>
+      publicly(
+        Campaigns.get(request.params.id).pipe(
+          Effect.andThen(previewLink(request.params.id).pipe(Effect.orDie)),
+        ),
+      ),
     send: (request) => publicly(Campaigns.send(request.params.id)),
     resume: (request) => publicly(Campaigns.resume(request.params.id)),
     schedule: (request) => publicly(Campaigns.schedule(request.params.id, request.payload.sendAt)),
@@ -111,12 +118,14 @@ const oversizedBody = Effect.gen(function* () {
 const apiProps = Effect.gen(function* () {
   const { logGroupName, ...basics } = yield* lambdaBasics("Api", "api");
 
-  // The bare tag, not the inline class form: the inline form always builds when
-  // yielded, which would run the unsubscribe function's props and init inside
-  // this Lambda at every cold start. The value reference records the dependency
-  // edge, so declaration order in the Stack generator is irrelevant.
+  // Bare tags, not the inline class form: the inline form always builds when
+  // yielded, which would run the public functions' props and init inside this
+  // Lambda at every cold start. The value references record the dependency
+  // edges, so declaration order in the Stack generator is irrelevant.
   const unsubscribe = yield* UnsubscribeFunction;
-  const secret = yield* unsubscribeSecret;
+  const unsubscribeKey = yield* unsubscribeSecret;
+  const preview = yield* PreviewFunction;
+  const previewKey = yield* previewSecret;
 
   return {
     ...basics,
@@ -127,7 +136,9 @@ const apiProps = Effect.gen(function* () {
     env: {
       EMAILER_LOG_GROUP: logGroupName,
       EMAILER_UNSUBSCRIBE_URL: unsubscribe.functionUrl,
-      EMAILER_UNSUBSCRIBE_SECRET: secret.text,
+      EMAILER_UNSUBSCRIBE_SECRET: unsubscribeKey.text,
+      EMAILER_PREVIEW_URL: preview.functionUrl,
+      EMAILER_PREVIEW_SECRET: previewKey.text,
     },
   } as const;
 });

@@ -4,7 +4,18 @@ import { makeEmailerClient } from "@emailer/api/Client";
 import type { EmailerClient } from "@emailer/api/Client";
 import * as AWS from "alchemy/AWS";
 import * as Schemas from "@emailer/api/Schemas";
-import { DateTime, Effect, Layer, Option, Redacted, Result, Schema, Scope } from "effect";
+import {
+  Clock,
+  ConfigProvider,
+  DateTime,
+  Effect,
+  Layer,
+  Option,
+  Redacted,
+  Result,
+  Schema,
+  Scope,
+} from "effect";
 import { FetchHttpClient, HttpEffect } from "effect/unstable/http";
 import { RateLimiter } from "effect/unstable/persistence";
 import { describe, expect, it } from "vitest";
@@ -12,6 +23,7 @@ import { describe, expect, it } from "vitest";
 import { AccountSuppression } from "../audience/Addresses.ts";
 import { makeApiHandler } from "./Api.ts";
 import { CampaignSchedule } from "../campaigns/CampaignSchedule.ts";
+import { verifyPreviewToken } from "../campaigns/Previews.ts";
 import { CampaignWake } from "../sending/Dispatch.ts";
 import { Mailer } from "../sending/Mailer.ts";
 import { SendGuard } from "../sending/SendGuard.ts";
@@ -2357,6 +2369,67 @@ describe("test sends", () => {
       }).pipe(Effect.provide(layer)),
     );
   });
+});
+
+describe("preview links", () => {
+  const previewKey = "5d41402abc4b2a76b9719d911017c5925d41402abc4b2a76b9719d911017c592";
+
+  const clientLayer = (store: Store) => {
+    const handler = HttpEffect.toWebHandler(
+      builtHandler(store).pipe(
+        Effect.provideService(
+          ConfigProvider.ConfigProvider,
+          ConfigProvider.fromEnvRecord({
+            EMAILER_PREVIEW_URL: "https://preview.example/",
+            EMAILER_PREVIEW_SECRET: previewKey,
+          }),
+        ),
+      ),
+    );
+
+    const transport: typeof globalThis.fetch = (input, init) => handler(new Request(input, init));
+
+    return Layer.provide(FetchHttpClient.layer, Layer.succeed(FetchHttpClient.Fetch, transport));
+  };
+
+  it("mints a link under the preview function's URL that names the campaign", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const client = yield* makeEmailerClient(baseUrl, Redacted.make(token));
+        const list = yield* client.lists.create({ payload: { name: "Readers" } });
+
+        const campaign = yield* client.campaigns.create({
+          payload: { listId: list.id, subject: "Release notes", text: "Hello" },
+        });
+
+        const link = yield* client.campaigns.preview({ params: { id: campaign.id } });
+        const previewToken = link.url.replace("https://preview.example/previews/", "");
+
+        expect(link.url.startsWith("https://preview.example/previews/v1.")).toBe(true);
+        expect(
+          verifyPreviewToken(
+            Redacted.make(previewKey),
+            previewToken,
+            Math.floor((yield* Clock.currentTimeMillis) / 1000),
+          ),
+        ).toStrictEqual(Option.some(campaign.id));
+      }).pipe(Effect.provide(clientLayer(inMemory()))),
+    ));
+
+  it("answers 404 for a campaign that does not exist", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const client = yield* makeEmailerClient(baseUrl, Redacted.make(token));
+
+        const attempt = yield* Effect.result(
+          client.campaigns.preview({ params: { id: "0195f0a0-1111-4222-8333-4444444ca409" } }),
+        );
+
+        expect(Result.isFailure(attempt) ? attempt.failure : undefined).toStrictEqual(
+          new Schemas.NotFound({ entity: "campaign" }),
+        );
+      }).pipe(Effect.provide(clientLayer(inMemory()))),
+    ));
 });
 
 describe("campaign listing", () => {

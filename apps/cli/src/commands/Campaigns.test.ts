@@ -839,4 +839,27 @@ describe("campaign management from the command line", () => {
       ),
     60_000,
   );
+
+  it(
+    "prints a preview link as JSON",
+    () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const service = inMemoryService(token);
+
+          service.campaigns.set(campaignId, storedDraft);
+
+          const result = yield* withService(service, (baseUrl) =>
+            runCli(baseUrl, token, ["campaigns", "preview", campaignId]),
+          );
+
+          expect(result.exitCode).toBe(0);
+          expect(yield* parseJson(result.stdout)).toStrictEqual({
+            url: `https://preview.example/previews/${campaignId}`,
+            expiresAt: "2026-09-12T10:00:00.000Z",
+          });
+        }).pipe(Effect.provide(NodeServices.layer)),
+      ),
+    60_000,
+  );
 });

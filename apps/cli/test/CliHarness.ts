@@ -345,6 +345,15 @@ export const inMemoryService = (
 
           campaigns.delete(found.id);
         }),
+      preview: (request) =>
+        Effect.suspend(() =>
+          campaigns.has(request.params.id)
+            ? Effect.succeed({
+                url: `https://preview.example/previews/${request.params.id}`,
+                expiresAt: "2026-09-12T10:00:00.000Z",
+              })
+            : Effect.fail(new Schemas.NotFound({ entity: "campaign" })),
+        ),
       test: (request) =>
         Effect.gen(function* () {
           if (!campaigns.has(request.params.id)) {

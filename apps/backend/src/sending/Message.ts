@@ -8,7 +8,7 @@ import { Config, Data, Effect, Schema } from "effect";
 export interface MessageContent {
   readonly subject: string;
   readonly text: string;
-  readonly html: string | undefined;
+  readonly html?: string | undefined;
 }
 
 export interface MessageHeader {

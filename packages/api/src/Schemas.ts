@@ -500,6 +500,11 @@ export const TestSendResult = Schema.Struct({ recipients: Schema.Array(TestSendO
 
 export type TestSendResult = typeof TestSendResult.Type;
 
+/** A short-lived public link to a campaign's rendered preview. */
+export const PreviewLink = Schema.Struct({ url: Schema.String, expiresAt: Timestamp });
+
+export type PreviewLink = typeof PreviewLink.Type;
+
 export const EntityKind = Schema.Literals(["contact", "list", "campaign"]);
 
 export type EntityKind = typeof EntityKind.Type;
@@ -531,7 +536,7 @@ export class SendAtNotInFuture extends Schema.TaggedError<SendAtNotInFuture>()(
 
 /**
  * The campaign is in a state the operation does not apply to: cancelling one that is sending, or
- * editing, deleting or previewing one that is no longer a draft. `state` is what it was found in.
+ * editing or deleting one that is no longer a draft. `state` is what it was found in.
  */
 export class CampaignStateConflict extends Schema.TaggedError<CampaignStateConflict>()(
   "CampaignStateConflict",
