@@ -1,56 +1,12 @@
 import { ConfigProvider, Effect, Inspectable, Redacted, Result } from "effect";
 import { describe, expect, it } from "vitest";
 
-import { apiToken, MalformedApiToken, tokensMatch } from "./Auth.ts";
+import { apiToken, MalformedApiToken } from "./Auth.ts";
 
 const validToken = "3o4Xr7nJ1pQvKzB2sYtLwMhGfDcEaN9uRiVoP0qTzXY";
 
 const withEnvironment = (environment: Readonly<Record<string, string>>) =>
   Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromEnvRecord(environment));
-
-describe("tokensMatch", () => {
-  it("accepts the exact token", () => {
-    expect(tokensMatch(validToken, validToken)).toBe(true);
-  });
-
-  it("is case sensitive", () => {
-    expect(tokensMatch(validToken, validToken.toLowerCase())).toBe(false);
-  });
-
-  it("rejects a token that differs only in its last byte", () => {
-    const almost = `${validToken.slice(0, -1)}Z`;
-
-    expect(almost).toHaveLength(validToken.length);
-    expect(tokensMatch(validToken, almost)).toBe(false);
-  });
-
-  it("rejects a prefix of the token", () => {
-    expect(tokensMatch(validToken, validToken.slice(0, 20))).toBe(false);
-  });
-
-  it("rejects the token with anything appended", () => {
-    expect(tokensMatch(validToken, `${validToken}x`)).toBe(false);
-  });
-
-  it("rejects an empty credential", () => {
-    expect(tokensMatch(validToken, "")).toBe(false);
-  });
-
-  it("rejects a comma-joined pair of duplicate credentials", () => {
-    expect(tokensMatch(validToken, `${validToken}, ${validToken}`)).toBe(false);
-  });
-
-  // The platform primitive throws on unequal lengths rather than answering false, so the guard
-  // in front of it is load-bearing: without it every short credential would be a 500.
-  it.each([
-    ["", "empty"],
-    ["a", "one byte"],
-    [`${validToken}xx`, "longer"],
-  ])("answers false rather than throwing for a %s credential", (supplied) => {
-    expect(() => tokensMatch(validToken, supplied)).not.toThrow();
-    expect(tokensMatch(validToken, supplied)).toBe(false);
-  });
-});
 
 describe("apiToken", () => {
   it("resolves a well-formed token, still redacted", () =>

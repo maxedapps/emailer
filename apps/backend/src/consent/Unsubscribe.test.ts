@@ -53,7 +53,21 @@ const forgeries: ReadonlyArray<readonly [string, (minted: string, alien: string)
   ["a payload outside the base64url alphabet", (minted) => minted.replace(/\./, ".+")],
 ];
 
+// Links already sit in delivered mail, so the format is frozen: this literal must never change.
+const goldenToken =
+  "v1.cmVjaXBpZW50QGV4YW1wbGUuY29t.051454aaab35bc94e7d5bfbe7438617a78c802ee64b584ff42af318ef228a44b";
+
 describe("unsubscribe tokens", () => {
+  it("mints and verifies the frozen token format byte for byte", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const signingKey = yield* signingKeyFor(secret);
+
+        expect(mintToken(signingKey, email)).toBe(goldenToken);
+        expect(verifyToken(signingKey, goldenToken)).toStrictEqual(Option.some(mailbox));
+      }),
+    ));
+
   it("matches an independently computed HMAC over the versioned payload", () =>
     Effect.runPromise(
       Effect.gen(function* () {

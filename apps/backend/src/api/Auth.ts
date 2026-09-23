@@ -1,30 +1,13 @@
 import { Authorization, Unauthorized } from "@emailer/api/Api";
 import { Config, Data, Effect, Layer, Redacted } from "effect";
-// Effect exposes no constant-time comparison, so this is the platform primitive it would wrap.
-// oxlint-disable-next-line effecttsgo/node-builtin-import
-import { timingSafeEqual } from "node:crypto";
+
+import { tokensMatch } from "../SignedToken.ts";
 
 export const tokenPattern = /^[A-Za-z0-9_-]{43}$/;
 
 export class MalformedApiToken extends Data.TaggedError("MalformedApiToken")<{
   readonly reason: "absent" | "wrong-format";
 }> {}
-
-const encoder = new TextEncoder();
-
-/**
- * A constant-time comparison of two secrets, using the platform's own primitive rather than a
- * hand-written byte loop. `timingSafeEqual` throws on unequal lengths — length is not secret here,
- * only content is — so that case is answered first and never reaches it.
- */
-export const tokensMatch = (expected: string, supplied: string): boolean => {
-  const expectedBytes = encoder.encode(expected);
-  const suppliedBytes = encoder.encode(supplied);
-
-  return (
-    expectedBytes.length === suppliedBytes.length && timingSafeEqual(expectedBytes, suppliedBytes)
-  );
-};
 
 /**
  * The configured credential, still redacted. It is unwrapped in exactly two places — the format
