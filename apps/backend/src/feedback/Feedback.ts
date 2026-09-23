@@ -78,8 +78,10 @@ const record = (event: EmailEvent) =>
       }
     }
 
+    // Every campaign send is tagged with its campaign; a test send deliberately is not, so its
+    // bounces and complaints suppress the address without reaching any campaign's counters.
     if (campaignId === undefined) {
-      return yield* Effect.logWarning("feedback event without a campaign tag", {
+      return yield* Effect.logInfo("feedback without a campaign tag (a test send)", {
         messageId,
         kind: classified.kind,
         suppressed: classified.suppress,

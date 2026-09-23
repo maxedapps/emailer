@@ -6,17 +6,22 @@ import * as AWS from "alchemy/AWS";
 import * as Schemas from "@emailer/api/Schemas";
 import { DateTime, Effect, Layer, Option, Redacted, Result, Schema, Scope } from "effect";
 import { FetchHttpClient, HttpEffect } from "effect/unstable/http";
+import { RateLimiter } from "effect/unstable/persistence";
 import { describe, expect, it } from "vitest";
 
 import { AccountSuppression } from "../audience/Addresses.ts";
 import { makeApiHandler } from "./Api.ts";
 import { CampaignSchedule } from "../campaigns/CampaignSchedule.ts";
 import { CampaignWake } from "../sending/Dispatch.ts";
+import { Mailer } from "../sending/Mailer.ts";
+import { SendGuard } from "../sending/SendGuard.ts";
 import { AudienceStore } from "../storage/Audience.ts";
 import { CampaignStore } from "../storage/Campaigns.ts";
 import { StorageFailure } from "../storage/Errors.ts";
 import { unusedAudience } from "../storage/Testing.ts";
 
+import type { SendPurpose } from "../sending/Mailer.ts";
+import type { SendAllowance } from "../sending/SendGuard.ts";
 import type { AddressStatus } from "../storage/Addresses.ts";
 import type { StoredContactList } from "../storage/Lists.ts";
 
@@ -32,8 +37,21 @@ const knownId = "0195f0a0-1111-4222-8333-44444444c001";
 
 interface Store {
   readonly layer: Layer.Layer<
-    AudienceStore | CampaignStore | CampaignWake | CampaignSchedule | AccountSuppression
+    | AudienceStore
+    | CampaignStore
+    | CampaignWake
+    | CampaignSchedule
+    | AccountSuppression
+    | Mailer
+    | SendGuard
+    | RateLimiter.RateLimiter
   >;
+  readonly mailed: Array<{
+    readonly recipient: string;
+    readonly subject: string;
+    readonly purpose: SendPurpose;
+  }>;
+  readonly holdSending: (allowance: SendAllowance) => void;
   readonly reads: Array<string>;
   readonly writes: Array<string>;
   readonly sequence: Array<string>;
@@ -104,6 +122,27 @@ const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store 
 
   let pendingWrite: (() => void) | undefined;
   let controlFailure: StorageFailure | undefined;
+
+  const mailed: Array<{
+    readonly recipient: string;
+    readonly subject: string;
+    readonly purpose: SendPurpose;
+  }> = [];
+
+  let allowance: SendAllowance = { limit: 14, dailyExhausted: false, halted: Option.none() };
+
+  const sending = Layer.mergeAll(
+    Layer.succeed(Mailer)({
+      send: (recipient, content, purpose) =>
+        Effect.sync(() => {
+          mailed.push({ recipient, subject: content.subject, purpose });
+
+          return { outcome: "accepted" as const, messageId: `message-${mailed.length}` };
+        }),
+    }),
+    Layer.succeed(SendGuard)({ current: Effect.sync(() => allowance) }),
+    RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory)),
+  );
 
   const audience = Layer.succeed(AudienceStore)({
     ...unusedAudience,
@@ -627,7 +666,11 @@ const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store 
   };
 
   return {
-    layer: Layer.mergeAll(audience, campaignStore, wake, schedule, accountSuppression),
+    layer: Layer.mergeAll(audience, campaignStore, wake, schedule, accountSuppression, sending),
+    mailed,
+    holdSending: (held) => {
+      allowance = held;
+    },
     reads,
     writes,
     sequence,
@@ -2193,6 +2236,124 @@ describe("draft editing", () => {
         expect(Result.isFailure(removal) ? removal.failure : undefined).toStrictEqual(conflict);
 
         expect(yield* client.campaigns.get({ params: { id: campaign.id } })).toStrictEqual(queued);
+      }).pipe(Effect.provide(layer)),
+    );
+  });
+});
+
+describe("test sends", () => {
+  const clientLayer = (store: Store) => {
+    const handler = webHandler(store);
+    const transport: typeof globalThis.fetch = (input, init) => handler(new Request(input, init));
+
+    return {
+      handler,
+      layer: Layer.provide(FetchHttpClient.layer, Layer.succeed(FetchHttpClient.Fetch, transport)),
+    };
+  };
+
+  const draftFor = (client: EmailerClient) =>
+    Effect.gen(function* () {
+      const list = yield* client.lists.create({ payload: { name: "Readers" } });
+
+      return yield* client.campaigns.create({
+        payload: { listId: list.id, subject: "Release notes", text: "Hello" },
+      });
+    });
+
+  it("sends an untagged [Test] copy to each address in order and reports every outcome", () => {
+    const store = inMemory();
+    const { layer } = clientLayer(store);
+
+    return Effect.runPromise(
+      Effect.gen(function* () {
+        const client = yield* makeEmailerClient(baseUrl, Redacted.make(token));
+        const campaign = yield* draftFor(client);
+
+        const result = yield* client.campaigns.test({
+          params: { id: campaign.id },
+          payload: { to: ["first@example.com", "Second@Example.com"] },
+        });
+
+        expect(result).toStrictEqual({
+          recipients: [
+            { email: "first@example.com", outcome: "accepted", messageId: "message-1" },
+            { email: "Second@example.com", outcome: "accepted", messageId: "message-2" },
+          ],
+        });
+        expect(store.mailed).toStrictEqual([
+          {
+            recipient: "first@example.com",
+            subject: "[Test] Release notes",
+            purpose: { kind: "test" },
+          },
+          {
+            recipient: "Second@example.com",
+            subject: "[Test] Release notes",
+            purpose: { kind: "test" },
+          },
+        ]);
+        expect(store.writes).not.toContain("claimRecipient");
+      }).pipe(Effect.provide(layer)),
+    );
+  });
+
+  it.each([
+    [
+      "more than twenty addresses",
+      { to: Array.from({ length: 21 }, (_, n) => `r${n}@example.com`) },
+    ],
+    ["the same mailbox twice", { to: ["a@example.com", "A@example.com"] }],
+    ["no address", { to: [] }],
+  ])("refuses %s with 400 before sending", (_label, payload) => {
+    const store = inMemory();
+    const { handler } = clientLayer(store);
+
+    return Effect.runPromise(
+      Effect.gen(function* () {
+        const body = yield* Schema.encodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))(
+          payload,
+        );
+
+        const response = yield* Effect.promise(() =>
+          handler(
+            jsonRequest(
+              "/campaigns/0195f0a0-1111-4222-8333-4444444ca409/test",
+              "POST",
+              body,
+              authorized(),
+            ),
+          ),
+        );
+
+        expect(response.status).toBe(400);
+        expect(store.mailed).toHaveLength(0);
+      }),
+    );
+  });
+
+  it("answers 503 SendingPaused while the account-wide guard halts sending", () => {
+    const store = inMemory();
+    const { layer } = clientLayer(store);
+
+    return Effect.runPromise(
+      Effect.gen(function* () {
+        const client = yield* makeEmailerClient(baseUrl, Redacted.make(token));
+        const campaign = yield* draftFor(client);
+
+        store.holdSending({ limit: 14, dailyExhausted: false, halted: Option.some("alarm") });
+
+        const attempt = yield* Effect.result(
+          client.campaigns.test({
+            params: { id: campaign.id },
+            payload: { to: ["a@example.com"] },
+          }),
+        );
+
+        expect(Result.isFailure(attempt) ? attempt.failure : undefined).toStrictEqual(
+          new Schemas.SendingPaused({ reason: "reputation" }),
+        );
+        expect(store.mailed).toHaveLength(0);
       }).pipe(Effect.provide(layer)),
     );
   });

@@ -16,10 +16,13 @@ import * as Contacts from "../audience/Contacts.ts";
 import * as Lists from "../audience/Lists.ts";
 import { CampaignScheduleLive } from "../campaigns/CampaignSchedule.ts";
 import * as Campaigns from "../campaigns/Campaigns.ts";
+import { sendTest } from "../campaigns/TestSends.ts";
 import { UnsubscribeFunction, unsubscribeSecret } from "../consent/Unsubscribe.ts";
 import { publicly } from "../Diagnostics.ts";
 import { lambdaBasics } from "../Lambda.ts";
 import { CampaignWakeLive } from "../sending/Dispatch.ts";
+import { MailerLive } from "../sending/Mailer.ts";
+import { SendGuardLive, SendPacingLive } from "../sending/SendGuard.ts";
 import { AudienceStoreLive } from "../storage/Audience.ts";
 import { CampaignStoreLive } from "../storage/Campaigns.ts";
 import { apiToken, authorizationUsing } from "./Auth.ts";
@@ -70,6 +73,7 @@ const campaignsHandlers = HttpApiBuilder.group(EmailerApi, "campaigns", (handler
     get: (request) => publicly(Campaigns.get(request.params.id)),
     update: (request) => publicly(Campaigns.update(request.params.id, request.payload)),
     remove: (request) => publicly(Campaigns.remove(request.params.id)),
+    test: (request) => publicly(sendTest(request.params.id, request.payload)),
     send: (request) => publicly(Campaigns.send(request.params.id)),
     resume: (request) => publicly(Campaigns.resume(request.params.id)),
     schedule: (request) => publicly(Campaigns.schedule(request.params.id, request.payload.sendAt)),
@@ -169,6 +173,9 @@ export const ApiLive = Layer.mergeAll(
   Addresses.AccountSuppressionLive,
   CampaignWakeLive,
   CampaignScheduleLive,
+  MailerLive,
+  SendGuardLive,
+  SendPacingLive,
 ).pipe(Layer.provideMerge(NodeCrypto.layer));
 
 export default class ApiFunction extends AWS.Lambda.Function<ApiFunction>()(

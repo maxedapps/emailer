@@ -696,4 +696,147 @@ describe("campaign management from the command line", () => {
       ),
     60_000,
   );
+
+  const readers = ["one@example.com", "two@example.com", "three@example.com"];
+
+  const testRun = (
+    args: ReadonlyArray<string>,
+    stdin = "",
+    seed: ReadonlyArray<string> = readers,
+  ) =>
+    Effect.gen(function* () {
+      const service = inMemoryService(token);
+
+      service.campaigns.set(campaignId, storedDraft);
+      service.seedList(seed);
+
+      const result = yield* withService(service, (baseUrl) =>
+        runCli(baseUrl, token, ["campaigns", "test", campaignId, ...args], {}, stdin),
+      );
+
+      return { service, result };
+    });
+
+  it(
+    "sends a test to every --to address and prints each outcome",
+    () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const { service, result } = yield* testRun([
+            "--to",
+            "a@example.com",
+            "--to",
+            "b@example.com",
+          ]);
+
+          expect(result.exitCode).toBe(0);
+          expect(service.testSends).toStrictEqual([{ to: ["a@example.com", "b@example.com"] }]);
+          expect(yield* parseJson(result.stdout)).toStrictEqual({
+            recipients: [
+              { email: "a@example.com", outcome: "accepted", messageId: "message-1" },
+              { email: "b@example.com", outcome: "accepted", messageId: "message-2" },
+            ],
+          });
+        }).pipe(Effect.provide(NodeServices.layer)),
+      ),
+    60_000,
+  );
+
+  it.each([[["--to", "a@example.com", "--list", listId]], [[]]])(
+    "refuses %j before any request",
+    (args) =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const { service, result } = yield* testRun(args);
+
+          expect(result.exitCode).not.toBe(0);
+          expect(result.stdout).toBe("");
+          expect(result.stderr).toContain("Pass --to (repeatable) or --list");
+          expect(service.authorizations).toHaveLength(0);
+        }).pipe(Effect.provide(NodeServices.layer)),
+      ),
+    60_000,
+  );
+
+  it(
+    "asks on stderr before sending to a list, and sends once the answer is yes",
+    () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const { service, result } = yield* testRun(["--list", listId], "y");
+
+          expect(result.exitCode).toBe(0);
+          expect(result.stderr).toContain(
+            'Send a test of "Release notes" to 3 members of "Readers"?',
+          );
+          expect(result.stdout).not.toContain("Send a test");
+          expect(service.testSends).toStrictEqual([{ listId }]);
+          expect(yield* parseJson(result.stdout)).toHaveProperty("recipients.2.email", readers[2]);
+        }).pipe(Effect.provide(NodeServices.layer)),
+      ),
+    60_000,
+  );
+
+  it(
+    "sends nothing and prints nothing when the answer is no",
+    () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const { service, result } = yield* testRun(["--list", listId], "n");
+
+          expect(result.exitCode).toBe(0);
+          expect(result.stdout).toBe("");
+          expect(service.testSends).toHaveLength(0);
+        }).pipe(Effect.provide(NodeServices.layer)),
+      ),
+    60_000,
+  );
+
+  it(
+    "stops with a --yes hint when stdin closes without an answer",
+    () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const { service, result } = yield* testRun(["--list", listId]);
+
+          expect(result.exitCode).toBe(1);
+          expect(result.stdout).toBe("");
+          expect(result.stderr).toContain("pass --yes");
+          expect(service.testSends).toHaveLength(0);
+        }).pipe(Effect.provide(NodeServices.layer)),
+      ),
+    60_000,
+  );
+
+  it(
+    "sends to a list without asking under --yes",
+    () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const { service, result } = yield* testRun(["--list", listId, "--yes"]);
+
+          expect(result.exitCode).toBe(0);
+          expect(result.stderr).not.toContain("Send a test");
+          expect(service.testSends).toStrictEqual([{ listId }]);
+        }).pipe(Effect.provide(NodeServices.layer)),
+      ),
+    60_000,
+  );
+
+  it(
+    "refuses a list of more than twenty members before asking or sending",
+    () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const crowd = Array.from({ length: 21 }, (_, n) => `r${n}@example.com`);
+          const { service, result } = yield* testRun(["--list", listId], "y", crowd);
+
+          expect(result.exitCode).not.toBe(0);
+          expect(result.stderr).toContain('"Readers" has more than 20 members');
+          expect(result.stderr).not.toContain("Send a test");
+          expect(service.testSends).toHaveLength(0);
+        }).pipe(Effect.provide(NodeServices.layer)),
+      ),
+    60_000,
+  );
 });

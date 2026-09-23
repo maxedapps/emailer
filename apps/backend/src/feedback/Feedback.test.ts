@@ -440,8 +440,10 @@ describe("idempotence and the campaign tag", () => {
 
         expect(world.suppressions.has("hard@example.com")).toBe(true);
         expect(world.writes).toHaveLength(0);
-        expect(logsNamed(world, "feedback event without a campaign tag")).toHaveLength(1);
-        expect(logsNamed(world, "feedback event without a campaign tag")[0]?.level).toBe("Warn");
+        expect(logsNamed(world, "feedback without a campaign tag (a test send)")).toHaveLength(1);
+        expect(logsNamed(world, "feedback without a campaign tag (a test send)")[0]?.level).toBe(
+          "Info",
+        );
       }),
     ));
 
@@ -552,7 +554,7 @@ describe("delivery delays", () => {
 
         expect(world.suppressions.size).toBe(0);
         expect(world.writes).toHaveLength(0);
-        expect(logsNamed(world, "feedback event without a campaign tag")).toHaveLength(0);
+        expect(logsNamed(world, "feedback without a campaign tag (a test send)")).toHaveLength(0);
         expect(logsNamed(world, "delivery delayed")[0]?.message).toEqual([
           "delivery delayed",
           expect.objectContaining({

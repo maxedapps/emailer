@@ -198,6 +198,19 @@ export class CampaignsGroup extends HttpApiGroup.make("campaigns")
         Schemas.StorageUnavailable,
       ],
     }),
+    HttpApiEndpoint.post("test", "/:id/test", {
+      params: { id: Schemas.EntityId },
+      payload: Schemas.TestSendPayload,
+      success: Schemas.TestSendResult,
+      error: [
+        HttpApiError.BadRequestNoContent,
+        Schemas.NotFound,
+        Schemas.TestAudienceTooLarge,
+        Schemas.SendingPaused,
+        Schemas.PayloadTooLarge,
+        Schemas.StorageUnavailable,
+      ],
+    }),
     HttpApiEndpoint.post("send", "/:id/send", {
       params: { id: Schemas.EntityId },
       success: Schemas.Campaign,

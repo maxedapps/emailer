@@ -20,6 +20,12 @@ export const maxAttributeValueLength = 512;
 
 export const maxImportEntries = 20;
 
+/**
+ * The most recipients one test send reaches. It goes out synchronously inside the API's 60-second
+ * budget, and at SES's slowest pace of one message a second twenty still fit.
+ */
+export const maxTestRecipients = 20;
+
 export const minPageSize = 1;
 
 export const maxPageSize = 100;
@@ -447,6 +453,53 @@ export const ImportContactsResult = Schema.Struct({
 
 export type ImportContactsResult = typeof ImportContactsResult.Type;
 
+const TestRecipients = Schema.Array(EmailAddress).check(
+  Schema.isNonEmpty(),
+  Schema.isMaxLength(maxTestRecipients),
+);
+
+/** Explicit addresses, each at most once, or one list whose every member is a recipient. */
+export const TestSendPayload = Schema.Union([
+  Schema.Struct({
+    to: TestRecipients.pipe(
+      Schema.refine(
+        (to: typeof TestRecipients.Type): to is typeof TestRecipients.Type =>
+          new Set(to.map(mailboxKey)).size === to.length,
+        { message: "Expected each address to appear at most once" },
+      ),
+    ),
+  }),
+  Schema.Struct({ listId: EntityId }),
+]);
+
+export type TestSendPayload = typeof TestSendPayload.Type;
+
+export const TestSendOutcome = Schema.Union([
+  Schema.Struct({
+    email: NormalizedEmailAddress,
+    outcome: Schema.Literal("accepted"),
+    messageId: Schema.String,
+  }),
+  Schema.Struct({
+    email: NormalizedEmailAddress,
+    outcome: Schema.Literal("skipped"),
+    reason: Schema.Literals(["unsubscribed", "suppressed", "bouncing"]),
+  }),
+  Schema.Struct({
+    email: NormalizedEmailAddress,
+    outcome: Schema.Literal("rejected"),
+    rejectionCode: RejectionCode,
+  }),
+  Schema.Struct({ email: NormalizedEmailAddress, outcome: Schema.Literal("uncertain") }),
+]);
+
+export type TestSendOutcome = typeof TestSendOutcome.Type;
+
+/** One entry per recipient, in the order they were given or listed. */
+export const TestSendResult = Schema.Struct({ recipients: Schema.Array(TestSendOutcome) });
+
+export type TestSendResult = typeof TestSendResult.Type;
+
 export const EntityKind = Schema.Literals(["contact", "list", "campaign"]);
 
 export type EntityKind = typeof EntityKind.Type;
@@ -486,6 +539,20 @@ export class CampaignStateConflict extends Schema.TaggedError<CampaignStateConfl
     state: Schema.Literals(["draft", "scheduled", "queued", "sending", "paused", "completed"]),
   },
   { httpApiStatus: 409 },
+) {}
+
+/** The test list has more members than a test send may reach. */
+export class TestAudienceTooLarge extends Schema.TaggedError<TestAudienceTooLarge>()(
+  "TestAudienceTooLarge",
+  { limit: Schema.Int },
+  { httpApiStatus: 409 },
+) {}
+
+/** The account-wide guard refuses every send right now: a reputation halt or a spent daily budget. */
+export class SendingPaused extends Schema.TaggedError<SendingPaused>()(
+  "SendingPaused",
+  { reason: Schema.Literals(["reputation", "daily-quota"]) },
+  { httpApiStatus: 503 },
 ) {}
 
 export class PayloadTooLarge extends Schema.TaggedError<PayloadTooLarge>()(

@@ -32,7 +32,10 @@ interface Service {
   readonly updates: Array<Schemas.ContactAttributes>;
   readonly campaigns: Map<string, Schemas.Campaign>;
   readonly campaignUpdates: Array<Schemas.UpdateCampaignPayload>;
+  readonly testSends: Array<Schemas.TestSendPayload>;
   readonly startedAt: Map<string, string>;
+  /** A list named "Readers" at `listId` whose members hold these addresses. */
+  readonly seedList: (emails: ReadonlyArray<string>) => void;
 }
 
 const queuedSubmission: Schemas.CampaignSubmission = {
@@ -60,6 +63,7 @@ export const inMemoryService = (
   const members = new Map<string, Array<string>>();
   const campaigns = new Map<string, Schemas.Campaign>();
   const campaignUpdates: Array<Schemas.UpdateCampaignPayload> = [];
+  const testSends: Array<Schemas.TestSendPayload> = [];
   const startedAt = new Map<string, string>();
 
   const authorization = Layer.succeed(Authorization)(
@@ -206,7 +210,16 @@ export const inMemoryService = (
             }
           }
 
-          return Effect.succeed({ items: joined });
+          const limit = request.query.limit ?? Schemas.defaultPageSize;
+          const page = joined.slice(0, limit);
+          const last = page.at(-1);
+
+          // Like DynamoDB behind the real service, a full page reports a cursor.
+          return Effect.succeed(
+            page.length === limit && last !== undefined
+              ? { items: page, nextCursor: last.id }
+              : { items: page },
+          );
         }),
       removeContact: (request) =>
         Effect.suspend(() => {
@@ -331,6 +344,31 @@ export const inMemoryService = (
           }
 
           campaigns.delete(found.id);
+        }),
+      test: (request) =>
+        Effect.gen(function* () {
+          if (!campaigns.has(request.params.id)) {
+            return yield* new Schemas.NotFound({ entity: "campaign" });
+          }
+
+          testSends.push(request.payload);
+
+          const recipients =
+            "to" in request.payload
+              ? request.payload.to
+              : (members.get(request.payload.listId) ?? []).flatMap((id) => {
+                  const contact = contacts.get(id);
+
+                  return contact === undefined ? [] : [contact.email];
+                });
+
+          return {
+            recipients: recipients.map((email, index) => ({
+              email,
+              outcome: "accepted" as const,
+              messageId: `message-${index + 1}`,
+            })),
+          };
         }),
       send: (request) =>
         Effect.gen(function* () {
@@ -481,7 +519,30 @@ export const inMemoryService = (
     Layer.provide(HttpServer.layerServices),
   );
 
-  return { routes, authorizations, updates, campaigns, campaignUpdates, startedAt };
+  const seedList = (emails: ReadonlyArray<string>) => {
+    lists.set(listId, { id: listId, name: "Readers", createdAt });
+
+    const ids = emails.map((email, index) => {
+      const id = `0195f0a0-1111-4222-8333-4444444c${String(index).padStart(4, "0")}`;
+
+      contacts.set(id, { id, email, createdAt });
+
+      return id;
+    });
+
+    members.set(listId, ids);
+  };
+
+  return {
+    routes,
+    authorizations,
+    updates,
+    campaigns,
+    campaignUpdates,
+    testSends,
+    startedAt,
+    seedList,
+  };
 };
 
 interface CliResult {

@@ -5,6 +5,7 @@ import { CliError, Command, Flag } from "effect/unstable/cli";
 import { report, withClient } from "../Client.ts";
 import { entityPageFlags, idArgument, pageQuery } from "../Flags.ts";
 import { renderMarkdown } from "../Markdown.ts";
+import { confirm } from "../Terminal.ts";
 
 const refuse = (userMessage: string) => new CliError.UserError({ cause: userMessage, userMessage });
 
@@ -243,6 +244,90 @@ const campaignsDelete = Command.make(
   }),
 ).pipe(Command.withDescription("Delete a draft campaign"));
 
+const campaignsTest = Command.make(
+  "test",
+  {
+    id: idArgument("id"),
+    to: Flag.string("to").pipe(
+      Flag.withDescription(
+        `An address to send the test to; repeat for up to ${Schemas.maxTestRecipients}`,
+      ),
+      Flag.withSchema(Schemas.EmailAddress),
+      Flag.between(0, Schemas.maxTestRecipients),
+    ),
+    list: Flag.string("list").pipe(
+      Flag.withDescription("Send the test to every member of this list, after confirming how many"),
+      Flag.withSchema(Schemas.EntityId),
+      Flag.optional,
+    ),
+    yes: Flag.boolean("yes").pipe(
+      Flag.withDescription("Send to --list without asking first"),
+      Flag.withDefault(false),
+    ),
+  },
+  Effect.fn(function* (input) {
+    if (input.to.length > 0 === Option.isSome(input.list)) {
+      return yield* refuse("Pass --to (repeatable) or --list, one of the two");
+    }
+
+    if (Option.isSome(input.list) && !input.yes) {
+      const listId = input.list.value;
+
+      // Its own request, so the time the operator takes to answer is not charged to the send's.
+      const audience = yield* withClient((client) =>
+        Effect.all({
+          campaign: client.campaigns.get({ params: { id: input.id } }),
+          list: client.lists.get({ params: { id: listId } }),
+          members: client.lists.listMembers({
+            params: { listId },
+            query: { limit: Schemas.maxTestRecipients + 1 },
+          }),
+        }),
+      );
+
+      if (audience.members.nextCursor !== undefined) {
+        return yield* refuse(
+          `"${audience.list.name}" has more than ${Schemas.maxTestRecipients} members; a test reaches at most that many`,
+        );
+      }
+
+      const confirmed = yield* confirm(
+        `Send a test of "${audience.campaign.subject}" to ${audience.members.items.length} members of "${audience.list.name}"?`,
+      );
+
+      if (!confirmed) {
+        return;
+      }
+    }
+
+    const params = { id: input.id };
+
+    yield* report(
+      yield* withClient((client) =>
+        Option.isSome(input.list)
+          ? client.campaigns.test({ params, payload: { listId: input.list.value } })
+          : client.campaigns.test({ params, payload: { to: input.to } }),
+      ),
+    );
+  }),
+).pipe(
+  Command.withDescription(
+    "Send a [Test] copy of a campaign now and report each recipient's outcome",
+  ),
+  Command.withExamples([
+    {
+      command:
+        "emailer campaigns test 0195f0a0-1111-4222-8333-4444444ca409 --to me@example.com --to colleague@example.com",
+      description: "Send a test to two addresses",
+    },
+    {
+      command:
+        "emailer campaigns test 0195f0a0-1111-4222-8333-4444444ca409 --list 0195f0a0-1111-4222-8333-44444444109e",
+      description: "Send a test to a small list, after confirming how many members it reaches",
+    },
+  ]),
+);
+
 const campaignsGet = Command.make(
   "get",
   { id: idArgument("id") },
@@ -383,6 +468,7 @@ export const campaigns = Command.make("campaigns").pipe(
     campaignsCreate,
     campaignsUpdate,
     campaignsDelete,
+    campaignsTest,
     campaignsGet,
     campaignsSend,
     campaignsResume,
