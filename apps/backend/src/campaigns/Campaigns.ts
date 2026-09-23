@@ -1,31 +1,14 @@
 import * as Schemas from "@emailer/api/Schemas";
-import { Clock, Context, Effect, Option } from "effect";
+import { Clock, Effect, Option } from "effect";
 
 import { newIdentifier, nowIso } from "../Identifiers.ts";
+import { CampaignWake } from "../sending/Dispatch.ts";
+import { CampaignSchedule } from "./CampaignSchedule.ts";
 import { AudienceStore } from "../storage/Audience.ts";
 import { CampaignStore } from "../storage/Campaigns.ts";
-import { corrupt, StorageFailure } from "../storage/Errors.ts";
+import { corrupt } from "../storage/Errors.ts";
 
 import type { CampaignControl } from "../storage/Campaigns.ts";
-
-export class CampaignWake extends Context.Service<
-  CampaignWake,
-  {
-    readonly enqueue: (campaignId: string, runToken: string) => Effect.Effect<void, StorageFailure>;
-  }
->()("emailer/backend/CampaignWake") {}
-
-export class CampaignSchedule extends Context.Service<
-  CampaignSchedule,
-  {
-    readonly create: (
-      campaignId: string,
-      runToken: string,
-      sendAt: string,
-    ) => Effect.Effect<void, StorageFailure>;
-    readonly remove: (runToken: string) => Effect.Effect<void, StorageFailure>;
-  }
->()("emailer/backend/CampaignSchedule") {}
 
 export const get = Effect.fn("Campaigns.get")(function* (campaignId: string) {
   const campaigns = yield* CampaignStore;

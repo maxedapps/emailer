@@ -10,7 +10,8 @@ import { describe, expect, it } from "vitest";
 
 import { AccountSuppression } from "../audience/Addresses.ts";
 import { makeApiHandler } from "./Api.ts";
-import { CampaignSchedule, CampaignWake } from "../campaigns/Campaigns.ts";
+import { CampaignSchedule } from "../campaigns/CampaignSchedule.ts";
+import { CampaignWake } from "../sending/Dispatch.ts";
 import { AudienceStore } from "../storage/Audience.ts";
 import { CampaignStore } from "../storage/Campaigns.ts";
 import { StorageFailure } from "../storage/Errors.ts";

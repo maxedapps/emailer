@@ -1,17 +1,15 @@
 import { NodeCrypto } from "@effect/platform-node";
-import { Stack } from "alchemy";
 import * as AWS from "alchemy/AWS";
 import { Config, Duration, Effect, Layer, Stream } from "effect";
 
 import { reportedAndFatal } from "../Diagnostics.ts";
 import { classify, decodeEmailEvent } from "./FeedbackClassification.ts";
 import { nowIso } from "../Identifiers.ts";
+import { lambdaBasics } from "../Lambda.ts";
 import { configurationSet } from "../sending/Mailer.ts";
 import { FeedbackStore, FeedbackStoreLive } from "../storage/Feedback.ts";
 
 import type { ClassifiedFeedback, EmailEvent } from "./FeedbackClassification.ts";
-
-const logRetention = Duration.days(7);
 
 const invocationTimeout = Duration.seconds(30);
 
@@ -157,22 +155,14 @@ export const handleEvent = Effect.fn("Feedback.handleEvent")((
 });
 
 const feedbackProps = Effect.gen(function* () {
-  const { stage } = yield* Stack;
-  const functionName = `emailer-${stage}-feedback`;
-
-  const logGroup = yield* AWS.Logs.LogGroup("FeedbackLogs", {
-    logGroupName: `/aws/lambda/${functionName}`,
-    retention: logRetention,
-  });
+  const { logGroupName, ...basics } = yield* lambdaBasics("Feedback", "feedback");
 
   const mail = yield* configurationSet;
   const failures = yield* feedbackFailures;
 
   return {
-    functionName,
+    ...basics,
     main: import.meta.url,
-    runtime: "nodejs24.x",
-    architecture: "arm64",
     memorySize: 256,
     timeout: invocationTimeout,
     functionUrl: false,
@@ -181,25 +171,26 @@ const feedbackProps = Effect.gen(function* () {
     // delivered was never Lambda's to retain.
     eventInvokeConfig: { destinationConfig: { OnFailure: { Destination: failures.queueArn } } },
     env: {
-      EMAILER_LOG_GROUP: logGroup.logGroupName,
+      EMAILER_LOG_GROUP: logGroupName,
       EMAILER_CONFIGURATION_SET: mail.configurationSetName,
     },
   } as const;
 });
 
+/** Every service an event uses, bound once per instance. */
+export const FeedbackLive = FeedbackStoreLive.pipe(Layer.provideMerge(NodeCrypto.layer));
+
 export default class FeedbackFunction extends AWS.Lambda.Function<FeedbackFunction>()(
   "Feedback",
   feedbackProps,
   Effect.gen(function* () {
-    const storage = yield* FeedbackStore;
+    const services = yield* Layer.build(FeedbackLive);
 
     // Constructed, never called. `OnFailure` names the queue but grants nothing, so without this
     // binding Lambda would be unable to deliver the failure record and the retention would be a
     // configuration that quietly does not work. Delivery is Lambda's to perform; duplicating it
     // here would write the event twice.
     yield* AWS.SQS.SendMessage(yield* feedbackFailures);
-
-    const capabilities = Layer.succeed(FeedbackStore)(storage);
 
     yield* AWS.SES.consumeEmailEvents(
       { kinds: ["bounce", "complaint", "delivery-delay"] },
@@ -210,15 +201,9 @@ export default class FeedbackFunction extends AWS.Lambda.Function<FeedbackFuncti
           yield* Stream.runForEach(events, (event) =>
             handleEvent(expected, event.detail, event.id),
           );
-        }).pipe(Effect.provide(capabilities), reportedAndFatal),
+        }).pipe(Effect.provideContext(services), reportedAndFatal),
     );
 
     return {};
-  }).pipe(
-    Effect.provide(
-      Layer.mergeAll(FeedbackStoreLive, AWS.Lambda.EventSource, AWS.SQS.SendMessageHttp).pipe(
-        Layer.provide(NodeCrypto.layer),
-      ),
-    ),
-  ),
+  }).pipe(Effect.provide(Layer.mergeAll(AWS.Lambda.EventSource, AWS.SQS.SendMessageHttp))),
 ) {}

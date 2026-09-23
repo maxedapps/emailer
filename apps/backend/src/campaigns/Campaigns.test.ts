@@ -3,7 +3,9 @@ import * as Schemas from "@emailer/api/Schemas";
 import { Deferred, Effect, Fiber, Layer, Option, Result } from "effect";
 import { describe, expect, it } from "vitest";
 
+import { CampaignSchedule } from "./CampaignSchedule.ts";
 import * as Campaigns from "./Campaigns.ts";
+import { CampaignWake } from "../sending/Dispatch.ts";
 import { publicly } from "../Diagnostics.ts";
 import { AudienceStore } from "../storage/Audience.ts";
 import { CampaignStore } from "../storage/Campaigns.ts";
@@ -314,14 +316,14 @@ const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> 
   );
 
 interface WakeDouble {
-  readonly layer: Layer.Layer<Campaigns.CampaignWake>;
+  readonly layer: Layer.Layer<CampaignWake>;
   readonly messages: Array<{ readonly campaignId: string; readonly runToken: string }>;
 }
 
 const wakeDouble = (world: World, failure?: StorageFailure): WakeDouble => {
   const messages: Array<{ readonly campaignId: string; readonly runToken: string }> = [];
 
-  const layer = Layer.succeed(Campaigns.CampaignWake)({
+  const layer = Layer.succeed(CampaignWake)({
     enqueue: (campaignId, runToken) =>
       Effect.gen(function* () {
         if (failure !== undefined) {
@@ -337,7 +339,7 @@ const wakeDouble = (world: World, failure?: StorageFailure): WakeDouble => {
 };
 
 interface ScheduleDouble {
-  readonly layer: Layer.Layer<Campaigns.CampaignSchedule>;
+  readonly layer: Layer.Layer<CampaignSchedule>;
   readonly created: Array<{
     readonly campaignId: string;
     readonly runToken: string;
@@ -355,7 +357,7 @@ const scheduleDouble = (world: World, failure?: StorageFailure): ScheduleDouble 
 
   const removed: Array<string> = [];
 
-  const layer = Layer.succeed(Campaigns.CampaignSchedule)({
+  const layer = Layer.succeed(CampaignSchedule)({
     create: (campaignId, runToken, sendAt) =>
       Effect.gen(function* () {
         if (world.beforeScheduleCreate !== undefined) {
@@ -404,9 +406,7 @@ interface Fixture {
   readonly world: World;
   readonly wake: WakeDouble;
   readonly schedules: ScheduleDouble;
-  readonly layer: Layer.Layer<
-    Campaigns.CampaignWake | Campaigns.CampaignSchedule | AudienceStore | CampaignStore
-  >;
+  readonly layer: Layer.Layer<CampaignWake | CampaignSchedule | AudienceStore | CampaignStore>;
 }
 
 const fixture = (scenario: Scenario = {}): Fixture => {

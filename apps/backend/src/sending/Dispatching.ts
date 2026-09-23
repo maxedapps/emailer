@@ -1,8 +1,8 @@
 import type * as Schemas from "@emailer/api/Schemas";
 import { Clock, Data, Duration, Effect, Option, Result } from "effect";
 
-import { CampaignWake } from "../campaigns/Campaigns.ts";
 import { newIdentifier, nowIso } from "../Identifiers.ts";
+import { CampaignWake } from "./Dispatch.ts";
 import { Mailer, submissionTimeout } from "./Mailer.ts";
 import { consumeSlot, SendGuard } from "./SendGuard.ts";
 import { AudienceStore } from "../storage/Audience.ts";

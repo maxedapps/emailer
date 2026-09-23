@@ -5,8 +5,8 @@ import { TestClock } from "effect/testing";
 import { RateLimiter } from "effect/unstable/persistence";
 import { describe, expect, it } from "vitest";
 
-import { CampaignWake } from "../campaigns/Campaigns.ts";
 import { memberPageSize, runSlice, SliceOverrun } from "./Dispatching.ts";
+import { CampaignWake } from "./Dispatch.ts";
 import { Mailer, SubmissionUncertain } from "./Mailer.ts";
 import { SendGuard } from "./SendGuard.ts";
 import { AudienceStore } from "../storage/Audience.ts";

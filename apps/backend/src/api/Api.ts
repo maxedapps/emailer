@@ -1,7 +1,6 @@
 import { NodeCrypto } from "@effect/platform-node";
 import { EmailerApi } from "@emailer/api/Api";
 import * as Schemas from "@emailer/api/Schemas";
-import { Stack } from "alchemy";
 import * as AWS from "alchemy/AWS";
 import { Duration, Effect, Layer, Option, Redacted } from "effect";
 import {
@@ -13,24 +12,17 @@ import {
 import { HttpApiBuilder } from "effect/unstable/httpapi";
 
 import * as Addresses from "../audience/Addresses.ts";
-import { apiToken, authorizationUsing } from "./Auth.ts";
-import { publicly } from "../Diagnostics.ts";
-import { campaignSchedule } from "../campaigns/CampaignSchedule.ts";
-import * as Campaigns from "../campaigns/Campaigns.ts";
 import * as Contacts from "../audience/Contacts.ts";
-import {
-  dispatchQueue,
-  encodeDispatchMessage,
-  scheduleGroup,
-  schedulerRole,
-} from "../sending/Dispatch.ts";
 import * as Lists from "../audience/Lists.ts";
-import { AudienceStore, AudienceStoreLive } from "../storage/Audience.ts";
-import { CampaignStore, CampaignStoreLive } from "../storage/Campaigns.ts";
-import { unavailable } from "../storage/Errors.ts";
+import { CampaignScheduleLive } from "../campaigns/CampaignSchedule.ts";
+import * as Campaigns from "../campaigns/Campaigns.ts";
 import { UnsubscribeFunction, unsubscribeSecret } from "../consent/Unsubscribe.ts";
-
-const logRetention = Duration.days(7);
+import { publicly } from "../Diagnostics.ts";
+import { lambdaBasics } from "../Lambda.ts";
+import { CampaignWakeLive } from "../sending/Dispatch.ts";
+import { AudienceStoreLive } from "../storage/Audience.ts";
+import { CampaignStoreLive } from "../storage/Campaigns.ts";
+import { apiToken, authorizationUsing } from "./Auth.ts";
 
 /**
  * Cold starts and pagination keep this a bound to validate against, not a completion guarantee
@@ -111,13 +103,7 @@ const oversizedBody = Effect.gen(function* () {
 });
 
 const apiProps = Effect.gen(function* () {
-  const { stage } = yield* Stack;
-  const functionName = `emailer-${stage}-api`;
-
-  const logGroup = yield* AWS.Logs.LogGroup("ApiLogs", {
-    logGroupName: `/aws/lambda/${functionName}`,
-    retention: logRetention,
-  });
+  const { logGroupName, ...basics } = yield* lambdaBasics("Api", "api");
 
   // The bare tag, not the inline class form: the inline form always builds when
   // yielded, which would run the unsubscribe function's props and init inside
@@ -127,15 +113,13 @@ const apiProps = Effect.gen(function* () {
   const secret = yield* unsubscribeSecret;
 
   return {
-    functionName,
+    ...basics,
     main: import.meta.url,
-    runtime: "nodejs24.x",
-    architecture: "arm64",
     memorySize: 512,
     timeout: invocationTimeout,
     functionUrl: { authType: "NONE" },
     env: {
-      EMAILER_LOG_GROUP: logGroup.logGroupName,
+      EMAILER_LOG_GROUP: logGroupName,
       EMAILER_UNSUBSCRIBE_URL: unsubscribe.functionUrl,
       EMAILER_UNSUBSCRIBE_SECRET: secret.text,
     },
@@ -143,13 +127,11 @@ const apiProps = Effect.gen(function* () {
 });
 
 /**
- * Builds the application once and returns the per-invocation handler.
- *
- * The router used to be assembled inside the request effect, so every invocation rebuilt the
- * whole API — handlers, middleware and all — before answering. Construction is instance work and
- * the handler is request work; separating them is also what makes the request scope visible,
- * since only the returned effect runs inside it. Nothing request-specific is captured here: the
- * credential check reads the incoming request, and finalizers belong to the invocation's own scope.
+ * Builds the application once and returns the per-invocation handler. Construction is instance
+ * work and the handler is request work; keeping them apart is also what makes the request scope
+ * visible, since only the returned effect runs inside it. Nothing request-specific is captured
+ * here: the credential check reads the incoming request, and finalizers belong to the invocation's
+ * own scope.
  */
 export const makeApiHandler = (token: Redacted.Redacted<string>) =>
   Effect.map(
@@ -178,66 +160,25 @@ export const makeApiHandler = (token: Redacted.Redacted<string>) =>
       }),
   );
 
+/** Every service the handlers use, bound once per instance. */
+export const ApiLive = Layer.mergeAll(
+  AudienceStoreLive,
+  CampaignStoreLive,
+  Addresses.AccountSuppressionLive,
+  CampaignWakeLive,
+  CampaignScheduleLive,
+).pipe(Layer.provideMerge(NodeCrypto.layer));
+
 export default class ApiFunction extends AWS.Lambda.Function<ApiFunction>()(
   "Api",
   apiProps,
   Effect.gen(function* () {
-    const audience = yield* AudienceStore;
-    const campaigns = yield* CampaignStore;
     const token = yield* Effect.orDie(apiToken);
-    const getSuppressedDestination = yield* AWS.SES.GetSuppressedDestination();
-    const deleteSuppressedDestination = yield* AWS.SES.DeleteSuppressedDestination();
-
-    // Yielding the source queue registers it; T4 only registered the dead-letter queue.
-    const queue = yield* dispatchQueue;
-    const sendMessage = yield* AWS.SQS.SendMessage(queue);
-    const queueArn = yield* queue.queueArn;
-
-    const role = yield* schedulerRole;
-    const group = yield* scheduleGroup;
-    const createSchedule = yield* AWS.Scheduler.CreateSchedule(role, group);
-    const deleteSchedule = yield* AWS.Scheduler.DeleteSchedule(group);
-
-    // Built once and handed to each invocation as a context rather than a Layer: the services are
-    // instance-lifetime, so rebuilding them per request would be work the request did not need.
-    const capabilities = yield* Layer.build(
-      Layer.mergeAll(
-        Layer.succeed(AudienceStore)(audience),
-        Layer.succeed(CampaignStore)(campaigns),
-        Layer.succeed(Addresses.AccountSuppression)({
-          getSuppressedDestination,
-          deleteSuppressedDestination,
-        }),
-        Layer.succeed(Campaigns.CampaignWake)({
-          enqueue: (campaignId, runToken) =>
-            encodeDispatchMessage({ campaignId, runToken }).pipe(
-              Effect.orDie,
-              Effect.flatMap((MessageBody) => sendMessage({ MessageBody })),
-              Effect.mapError(unavailable("dispatch")),
-              Effect.asVoid,
-            ),
-        }),
-        Layer.succeed(Campaigns.CampaignSchedule)(
-          campaignSchedule(createSchedule, deleteSchedule, queueArn),
-        ),
-        NodeCrypto.layer,
-      ),
-    );
-
+    // Built here rather than per request: the services are instance-lifetime, and the built
+    // context carries no request scope into the handler.
+    const services = yield* Layer.build(ApiLive);
     const handle = yield* makeApiHandler(token);
 
-    return { fetch: Effect.provideContext(handle, capabilities) };
-  }).pipe(
-    Effect.provide(
-      Layer.mergeAll(
-        AudienceStoreLive,
-        CampaignStoreLive,
-        AWS.SQS.SendMessageHttp,
-        AWS.Scheduler.CreateScheduleHttp,
-        AWS.Scheduler.DeleteScheduleHttp,
-        AWS.SES.GetSuppressedDestinationHttp,
-        AWS.SES.DeleteSuppressedDestinationHttp,
-      ).pipe(Layer.provide(NodeCrypto.layer)),
-    ),
-  ),
+    return { fetch: Effect.provideContext(handle, services) };
+  }),
 ) {}

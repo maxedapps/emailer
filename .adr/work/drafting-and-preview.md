@@ -278,7 +278,12 @@ Tests sit beside their modules. Three things differ from the layout the user saw
   - `makeApiHandler(token)` keeps its signature, and its test's `builtHandler` mirrors the constructor.
 - **Starts at:** `api/Api.ts:108-138, 176-237`, `sending/Dispatcher.ts:25-116`, `feedback/Feedback.ts:163-224`, `consent/UnsubscribePage.ts:128-169`
 - **Depends on:** T3, T4
-- **Status:** Pending
+- **Status:** Done.
+  - `pnpm check` passed: 37 files, 759 tests.
+  - The prod plan showed `4 to update` with a resource and binding set identical to T1's, so there is no IAM delta.
+  - A fresh `--stage test` deploy ran the whole integration suite green: 4 files, 35 tests.
+  - **Found on the way:** one pre-existing case failed twice. Lambda reports a disabled SQS mapping as `Disabled` before its pollers stop. A probe enqueued straight to SQS one second after `Disabled` was still consumed; one enqueued two minutes later was not. `disableDispatcherMapping` now waits for a canary stale wake to sit unreceived for longer than a long poll.
+  - **Deviation:** the stage stays up until T12's gate, which redeploys over it. That rehearses prod's in-place upgrade. It is destroyed at the end of T12.
 - **Tests:**
   - The existing unit suites provide doubles for the same tags.
   - The constructor wiring has no unit coverage, so it is proven live below.

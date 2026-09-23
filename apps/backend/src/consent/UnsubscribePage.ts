@@ -1,10 +1,9 @@
-import { Stack } from "alchemy";
-import * as AWS from "alchemy/AWS";
 import { Duration, Effect, Layer, Option } from "effect";
 import { HttpRouter, HttpServerResponse } from "effect/unstable/http";
 
 import { reportedAndFatal } from "../Diagnostics.ts";
 import { nowIso } from "../Identifiers.ts";
+import { lambdaBasics } from "../Lambda.ts";
 import { UnsubscribeStore, UnsubscribeStoreLive } from "../storage/Unsubscribe.ts";
 import {
   UnsubscribeFunction,
@@ -13,8 +12,6 @@ import {
   unsubscribeSigningKey,
   verifyToken,
 } from "./Unsubscribe.ts";
-
-const logRetention = Duration.days(7);
 
 const invocationTimeout = Duration.seconds(30);
 
@@ -125,21 +122,13 @@ export const makeUnsubscribeHandler = HttpRouter.toHttpEffect(
 ).pipe(Effect.provide(routerConfig));
 
 const unsubscribeProps = Effect.gen(function* () {
-  const { stage } = yield* Stack;
-  const functionName = `emailer-${stage}-unsubscribe`;
-
-  const logGroup = yield* AWS.Logs.LogGroup("UnsubscribeLogs", {
-    logGroupName: `/aws/lambda/${functionName}`,
-    retention: logRetention,
-  });
+  const { logGroupName, ...basics } = yield* lambdaBasics("Unsubscribe", "unsubscribe");
 
   const secret = yield* unsubscribeSecret;
 
   return {
-    functionName,
+    ...basics,
     main: import.meta.url,
-    runtime: "nodejs24.x",
-    architecture: "arm64",
     memorySize: 256,
     timeout: invocationTimeout,
     // Deliberately public: a mail provider posting a one-click opt-out presents
@@ -151,7 +140,7 @@ const unsubscribeProps = Effect.gen(function* () {
     reservedConcurrentExecutions: 10,
     functionUrl: { authType: "NONE" },
     env: {
-      EMAILER_LOG_GROUP: logGroup.logGroupName,
+      EMAILER_LOG_GROUP: logGroupName,
       EMAILER_UNSUBSCRIBE_SECRET: secret.text,
     },
   } as const;
@@ -160,10 +149,8 @@ const unsubscribeProps = Effect.gen(function* () {
 export default UnsubscribeFunction.make(
   unsubscribeProps,
   Effect.gen(function* () {
-    const storage = yield* UnsubscribeStore;
+    const services = yield* Layer.build(UnsubscribeStoreLive);
 
-    return {
-      fetch: Effect.provideService(yield* makeUnsubscribeHandler, UnsubscribeStore, storage),
-    };
-  }).pipe(Effect.provide(UnsubscribeStoreLive)),
+    return { fetch: Effect.provideContext(yield* makeUnsubscribeHandler, services) };
+  }),
 );

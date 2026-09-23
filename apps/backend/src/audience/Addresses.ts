@@ -1,6 +1,7 @@
 import type * as sesv2 from "@distilled.cloud/aws/sesv2";
 import * as Schemas from "@emailer/api/Schemas";
-import { Context, Effect, Option } from "effect";
+import * as AWS from "alchemy/AWS";
+import { Context, Effect, Layer, Option } from "effect";
 
 import { AudienceStore } from "../storage/Audience.ts";
 import { unavailable } from "../storage/Errors.ts";
@@ -8,8 +9,8 @@ import { unavailable } from "../storage/Errors.ts";
 import type { StorageFailure } from "../storage/Errors.ts";
 
 /**
- * Account-list lookup and delete. These are SES callables, not a fifth storage
- * capability: the API Lambda constructs this from the Alchemy bindings.
+ * Account-list lookup and delete. These are SES callables, not a storage capability; the Live
+ * layer binds them.
  */
 export class AccountSuppression extends Context.Service<
   AccountSuppression,
@@ -25,6 +26,19 @@ export class AccountSuppression extends Context.Service<
     >;
   }
 >()("emailer/backend/AccountSuppression") {}
+
+export const AccountSuppressionLive = Layer.effect(AccountSuppression)(
+  Effect.gen(function* () {
+    return AccountSuppression.of({
+      getSuppressedDestination: yield* AWS.SES.GetSuppressedDestination(),
+      deleteSuppressedDestination: yield* AWS.SES.DeleteSuppressedDestination(),
+    });
+  }),
+).pipe(
+  Layer.provide(
+    Layer.mergeAll(AWS.SES.GetSuppressedDestinationHttp, AWS.SES.DeleteSuppressedDestinationHttp),
+  ),
+);
 
 const accountReason = (reason: sesv2.SuppressionListReason): "bounce" | "complaint" | undefined => {
   switch (reason) {
