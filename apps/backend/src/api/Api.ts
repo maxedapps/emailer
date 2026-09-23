@@ -12,18 +12,23 @@ import {
 } from "effect/unstable/http";
 import { HttpApiBuilder } from "effect/unstable/httpapi";
 
-import * as Addresses from "./Addresses.ts";
+import * as Addresses from "../audience/Addresses.ts";
 import { apiToken, authorizationUsing } from "./Auth.ts";
-import { publicly } from "./Diagnostics.ts";
-import { campaignSchedule } from "./CampaignSchedule.ts";
-import * as Campaigns from "./Campaigns.ts";
-import * as Contacts from "./Contacts.ts";
-import { dispatchQueue, encodeDispatchMessage, scheduleGroup, schedulerRole } from "./Dispatch.ts";
-import * as Lists from "./Lists.ts";
-import { AudienceStore, AudienceStoreLive } from "./Storage/Audience.ts";
-import { CampaignStore, CampaignStoreLive } from "./Storage/Campaigns.ts";
-import { unavailable } from "./Storage/Errors.ts";
-import { UnsubscribeFunction, unsubscribeSecret } from "./Unsubscribe.ts";
+import { publicly } from "../Diagnostics.ts";
+import { campaignSchedule } from "../campaigns/CampaignSchedule.ts";
+import * as Campaigns from "../campaigns/Campaigns.ts";
+import * as Contacts from "../audience/Contacts.ts";
+import {
+  dispatchQueue,
+  encodeDispatchMessage,
+  scheduleGroup,
+  schedulerRole,
+} from "../sending/Dispatch.ts";
+import * as Lists from "../audience/Lists.ts";
+import { AudienceStore, AudienceStoreLive } from "../storage/Audience.ts";
+import { CampaignStore, CampaignStoreLive } from "../storage/Campaigns.ts";
+import { unavailable } from "../storage/Errors.ts";
+import { UnsubscribeFunction, unsubscribeSecret } from "../consent/Unsubscribe.ts";
 
 const logRetention = Duration.days(7);
 

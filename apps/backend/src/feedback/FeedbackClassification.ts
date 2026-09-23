@@ -1,6 +1,6 @@
 import { Schema } from "effect";
 
-import type { FeedbackKind, FeedbackOutcome, FeedbackWrite } from "./Storage/Feedback.ts";
+import type { FeedbackKind, FeedbackOutcome, FeedbackWrite } from "../storage/Feedback.ts";
 
 /**
  * What an SES feedback event means for this system, decided once. Everything downstream — the

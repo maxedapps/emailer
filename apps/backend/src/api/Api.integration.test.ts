@@ -16,8 +16,8 @@ import {
 } from "effect";
 import { describe, expect, it } from "vitest";
 
-import { newIdentifier, nowIso } from "./Identifiers.ts";
-import { StorageFailure } from "./Storage/Errors.ts";
+import { newIdentifier, nowIso } from "../Identifiers.ts";
+import { StorageFailure } from "../storage/Errors.ts";
 
 import {
   accountSendQuota,
@@ -43,7 +43,7 @@ import {
   submitToSimulatorList,
   uniqueAddress,
   unsuppress,
-} from "../test/IntegrationSupport.ts";
+} from "../../test/IntegrationSupport.ts";
 
 const sendTestTimeout = 480_000;
 

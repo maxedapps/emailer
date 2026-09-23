@@ -1,8 +1,8 @@
 import * as Schemas from "@emailer/api/Schemas";
 import { Effect, Option } from "effect";
 
-import { newIdentifier, nowIso } from "./Identifiers.ts";
-import { AudienceStore } from "./Storage/Audience.ts";
+import { newIdentifier, nowIso } from "../Identifiers.ts";
+import { AudienceStore } from "../storage/Audience.ts";
 
 export const create = Effect.fn("Contacts.create")(function* (
   payload: Schemas.CreateContactPayload,

@@ -1,7 +1,7 @@
 import { Effect, Layer, Option } from "effect";
 import { RateLimiter } from "effect/unstable/persistence";
 
-import { RateLimitStoreLive } from "./Storage/RateLimit.ts";
+import { RateLimitStoreLive } from "../storage/RateLimit.ts";
 
 export interface SendQuota {
   readonly MaxSendRate?: number | undefined;

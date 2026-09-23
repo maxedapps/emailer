@@ -2,7 +2,7 @@ import { makeEmailerClient } from "@emailer/api/Client";
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 
-import { newIdentifier } from "./Identifiers.ts";
+import { newIdentifier } from "../Identifiers.ts";
 
 import {
   accountSendQuota,
@@ -16,7 +16,7 @@ import {
   sendRows,
   sendToSimulatorList,
   simulator,
-} from "../test/IntegrationSupport.ts";
+} from "../../test/IntegrationSupport.ts";
 
 const sendTestTimeout = 480_000;
 

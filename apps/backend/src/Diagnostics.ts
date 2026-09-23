@@ -1,7 +1,7 @@
 import * as Schemas from "@emailer/api/Schemas";
 import { Effect, Option, Schema } from "effect";
 
-import { StorageFailure } from "./Storage/Errors.ts";
+import { StorageFailure } from "./storage/Errors.ts";
 
 const Tagged = Schema.Struct({ _tag: Schema.String });
 

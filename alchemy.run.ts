@@ -2,14 +2,14 @@ import { Stack } from "alchemy";
 import * as AWS from "alchemy/AWS";
 import { Config, Effect, Option } from "effect";
 
-import ApiFunction from "./apps/backend/src/Api.ts";
-import { dispatchFailures } from "./apps/backend/src/Dispatch.ts";
-import DispatcherFunction from "./apps/backend/src/Dispatcher.ts";
-import FeedbackFunction, { feedbackFailures } from "./apps/backend/src/Feedback.ts";
-import { feedbackPublishing } from "./apps/backend/src/Mailer.ts";
-import { alertsTopic, reputationAlarms } from "./apps/backend/src/Reputation.ts";
-import { UnsubscribeFunction } from "./apps/backend/src/Unsubscribe.ts";
-import UnsubscribePage from "./apps/backend/src/UnsubscribePage.ts";
+import ApiFunction from "./apps/backend/src/api/Api.ts";
+import { dispatchFailures } from "./apps/backend/src/sending/Dispatch.ts";
+import DispatcherFunction from "./apps/backend/src/sending/Dispatcher.ts";
+import FeedbackFunction, { feedbackFailures } from "./apps/backend/src/feedback/Feedback.ts";
+import { feedbackPublishing } from "./apps/backend/src/sending/Mailer.ts";
+import { alertsTopic, reputationAlarms } from "./apps/backend/src/sending/Reputation.ts";
+import { UnsubscribeFunction } from "./apps/backend/src/consent/Unsubscribe.ts";
+import UnsubscribePage from "./apps/backend/src/consent/UnsubscribePage.ts";
 
 export default Stack(
   "Emailer",

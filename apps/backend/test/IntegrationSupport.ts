@@ -29,16 +29,16 @@ import {
   NumberAttribute,
   str,
   tableLogicalId,
-} from "../src/Storage/Items.ts";
-import { suppressionWrites, unsubscribeWrites } from "../src/Storage/Addresses.ts";
-import { audienceOperations } from "../src/Storage/Audience.ts";
-import { campaignStoreOperations } from "../src/Storage/Campaigns.ts";
-import { feedbackWrites } from "../src/Storage/Feedback.ts";
-import { transactionPrimitives, writePrimitives } from "../src/Storage/Primitives.ts";
-import { unsubscribeSigningKey } from "../src/Unsubscribe.ts";
+} from "../src/storage/Items.ts";
+import { suppressionWrites, unsubscribeWrites } from "../src/storage/Addresses.ts";
+import { audienceOperations } from "../src/storage/Audience.ts";
+import { campaignStoreOperations } from "../src/storage/Campaigns.ts";
+import { feedbackWrites } from "../src/storage/Feedback.ts";
+import { transactionPrimitives, writePrimitives } from "../src/storage/Primitives.ts";
+import { unsubscribeSigningKey } from "../src/consent/Unsubscribe.ts";
 
-import type { AddressStatus } from "../src/Storage/Addresses.ts";
-import type { TableOperations } from "../src/Storage/Items.ts";
+import type { AddressStatus } from "../src/storage/Addresses.ts";
+import type { TableOperations } from "../src/storage/Items.ts";
 
 const simulatorHost = "@simulator.amazonses.com";
 

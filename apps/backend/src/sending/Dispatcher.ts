@@ -4,17 +4,17 @@ import * as AWS from "alchemy/AWS";
 import { Clock, Config, Duration, Effect, Layer, Option, Stream } from "effect";
 import { RateLimiter } from "effect/unstable/persistence";
 
-import { CampaignWake } from "./Campaigns.ts";
-import { reportedAndFatal } from "./Diagnostics.ts";
+import { CampaignWake } from "../campaigns/Campaigns.ts";
+import { reportedAndFatal } from "../Diagnostics.ts";
 import { decodeDispatchMessage, dispatchQueue, encodeDispatchMessage } from "./Dispatch.ts";
 import { DispatchGuard, runSlice } from "./Dispatching.ts";
 import { Mailer, MailerLive } from "./Mailer.ts";
 import { reputationAlarms } from "./Reputation.ts";
 import { sendGuard, SendPacingLive } from "./SendGuard.ts";
-import { AudienceStore, AudienceStoreLive } from "./Storage/Audience.ts";
-import { CampaignStore, CampaignStoreLive } from "./Storage/Campaigns.ts";
-import { unavailable } from "./Storage/Errors.ts";
-import { UnsubscribeFunction, unsubscribeSecret } from "./Unsubscribe.ts";
+import { AudienceStore, AudienceStoreLive } from "../storage/Audience.ts";
+import { CampaignStore, CampaignStoreLive } from "../storage/Campaigns.ts";
+import { unavailable } from "../storage/Errors.ts";
+import { UnsubscribeFunction, unsubscribeSecret } from "../consent/Unsubscribe.ts";
 
 const logRetention = Duration.days(7);
 

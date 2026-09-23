@@ -3,12 +3,12 @@ import { ConfigProvider, Effect, Layer, Redacted, Scope } from "effect";
 import { HttpEffect } from "effect/unstable/http";
 import { describe, expect, it } from "vitest";
 
-import { StorageFailure } from "./Storage/Errors.ts";
-import { UnsubscribeStore } from "./Storage/Unsubscribe.ts";
+import { StorageFailure } from "../storage/Errors.ts";
+import { UnsubscribeStore } from "../storage/Unsubscribe.ts";
 import { maxTokenLength, mintToken } from "./Unsubscribe.ts";
 import { makeUnsubscribeHandler } from "./UnsubscribePage.ts";
 
-import type { AddressUnsubscribe } from "./Storage/Addresses.ts";
+import type { AddressUnsubscribe } from "../storage/Addresses.ts";
 
 const baseUrl = "http://unsubscribe.test";
 

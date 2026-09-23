@@ -2,8 +2,8 @@ import type * as scheduler from "@distilled.cloud/aws/scheduler";
 import type * as AWS from "alchemy/AWS";
 import { Effect } from "effect";
 
-import { encodeDispatchMessage } from "./Dispatch.ts";
-import { unavailable } from "./Storage/Errors.ts";
+import { encodeDispatchMessage } from "../sending/Dispatch.ts";
+import { unavailable } from "../storage/Errors.ts";
 
 export const campaignSchedule = (
   createSchedule: (

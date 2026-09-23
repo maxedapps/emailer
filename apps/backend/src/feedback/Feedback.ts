@@ -3,11 +3,11 @@ import { Stack } from "alchemy";
 import * as AWS from "alchemy/AWS";
 import { Config, Duration, Effect, Layer, Stream } from "effect";
 
-import { reportedAndFatal } from "./Diagnostics.ts";
+import { reportedAndFatal } from "../Diagnostics.ts";
 import { classify, decodeEmailEvent } from "./FeedbackClassification.ts";
-import { nowIso } from "./Identifiers.ts";
-import { configurationSet } from "./Mailer.ts";
-import { FeedbackStore, FeedbackStoreLive } from "./Storage/Feedback.ts";
+import { nowIso } from "../Identifiers.ts";
+import { configurationSet } from "../sending/Mailer.ts";
+import { FeedbackStore, FeedbackStoreLive } from "../storage/Feedback.ts";
 
 import type { ClassifiedFeedback, EmailEvent } from "./FeedbackClassification.ts";
 

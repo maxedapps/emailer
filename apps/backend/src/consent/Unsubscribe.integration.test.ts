@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import { HttpClient, HttpClientRequest } from "effect/unstable/http";
 
-import { newIdentifier } from "./Identifiers.ts";
+import { newIdentifier } from "../Identifiers.ts";
 import { mintToken } from "./Unsubscribe.ts";
 
 import {
@@ -22,7 +22,7 @@ import {
   simulator,
   uniqueAddress,
   unsubscribeSettings,
-} from "../test/IntegrationSupport.ts";
+} from "../../test/IntegrationSupport.ts";
 
 const sendTestTimeout = 480_000;
 

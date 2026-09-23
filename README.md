@@ -235,7 +235,7 @@ A fresh stage with `EMAILER_ALERT_EMAIL` set can mail several `OK:` notification
 **Replay failed feedback** (from the non-secret stack outputs; `--env-file` will not expand `$VAR`):
 
 ```sh
-node --env-file=.env apps/backend/src/ReplayFeedback.ts \
+node --env-file=.env apps/backend/src/feedback/ReplayFeedback.ts \
   --queue-url "$EMAILER_FEEDBACK_FAILURE_QUEUE_URL" \
   --function-arn "$EMAILER_FEEDBACK_FUNCTION_ARN" \
   --max-messages 10

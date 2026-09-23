@@ -4,14 +4,14 @@ import { Deferred, Effect, Fiber, Layer, Option, Result } from "effect";
 import { describe, expect, it } from "vitest";
 
 import * as Campaigns from "./Campaigns.ts";
-import { publicly } from "./Diagnostics.ts";
-import { AudienceStore } from "./Storage/Audience.ts";
-import { CampaignStore } from "./Storage/Campaigns.ts";
-import { StorageFailure } from "./Storage/Errors.ts";
-import { unusedAudience } from "./Storage/Testing.ts";
+import { publicly } from "../Diagnostics.ts";
+import { AudienceStore } from "../storage/Audience.ts";
+import { CampaignStore } from "../storage/Campaigns.ts";
+import { StorageFailure } from "../storage/Errors.ts";
+import { unusedAudience } from "../storage/Testing.ts";
 
-import type { CampaignControl } from "./Storage/Campaigns.ts";
-import type { StoredContactList } from "./Storage/Lists.ts";
+import type { CampaignControl } from "../storage/Campaigns.ts";
+import type { StoredContactList } from "../storage/Lists.ts";
 
 const listId = "0195f0a0-1111-4222-8333-44444444109e";
 

@@ -3,7 +3,7 @@ import { Data, Effect, Logger, Result } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { describeCause, publicly, reportedAndFatal } from "./Diagnostics.ts";
-import { StorageFailure } from "./Storage/Errors.ts";
+import { StorageFailure } from "./storage/Errors.ts";
 
 /** A cause that carries exactly the kind of payload the log must never repeat. */
 class LeakySdkError extends Data.TaggedError("LeakySdkError")<{

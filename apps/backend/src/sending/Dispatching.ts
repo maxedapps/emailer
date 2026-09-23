@@ -2,13 +2,13 @@ import type * as Schemas from "@emailer/api/Schemas";
 import { Clock, Context, Data, Duration, Effect, Option, Result } from "effect";
 import { RateLimiter } from "effect/unstable/persistence";
 
-import { CampaignWake } from "./Campaigns.ts";
-import { newIdentifier, nowIso } from "./Identifiers.ts";
+import { CampaignWake } from "../campaigns/Campaigns.ts";
+import { newIdentifier, nowIso } from "../Identifiers.ts";
 import { Mailer, submissionTimeout } from "./Mailer.ts";
-import { AudienceStore } from "./Storage/Audience.ts";
-import { CampaignStore } from "./Storage/Campaigns.ts";
-import { operationTimeout } from "./Storage/Items.ts";
-import { unsubscribeLink } from "./Unsubscribe.ts";
+import { AudienceStore } from "../storage/Audience.ts";
+import { CampaignStore } from "../storage/Campaigns.ts";
+import { operationTimeout } from "../storage/Items.ts";
+import { unsubscribeLink } from "../consent/Unsubscribe.ts";
 
 import type { DispatchMessage } from "./Dispatch.ts";
 import type { SendGuard } from "./SendGuard.ts";

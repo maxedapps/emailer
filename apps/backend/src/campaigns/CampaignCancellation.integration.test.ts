@@ -3,7 +3,7 @@ import type { EmailerClient } from "@emailer/api/Client";
 import { Clock, DateTime, Effect, Option } from "effect";
 import { describe, expect, it } from "vitest";
 
-import { newIdentifier, nowIso } from "./Identifiers.ts";
+import { newIdentifier, nowIso } from "../Identifiers.ts";
 
 import {
   accountSendQuota,
@@ -22,9 +22,9 @@ import {
   sendToSimulatorList,
   simulator,
   submitToSimulatorList,
-} from "../test/IntegrationSupport.ts";
+} from "../../test/IntegrationSupport.ts";
 
-import type { LiveStorage, TransactionCapture } from "../test/IntegrationSupport.ts";
+import type { LiveStorage, TransactionCapture } from "../../test/IntegrationSupport.ts";
 
 const sendTestTimeout = 480_000;
 

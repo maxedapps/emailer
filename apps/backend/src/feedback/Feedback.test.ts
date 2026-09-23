@@ -4,11 +4,11 @@ import { ConfigProvider, Effect, Layer, Logger, References, Result } from "effec
 import { describe, expect, it } from "vitest";
 
 import { expectedConfigurationSet, handleEvent } from "./Feedback.ts";
-import { StorageFailure } from "./Storage/Errors.ts";
-import { FeedbackStore } from "./Storage/Feedback.ts";
+import { StorageFailure } from "../storage/Errors.ts";
+import { FeedbackStore } from "../storage/Feedback.ts";
 
-import type { AddressSuppression } from "./Storage/Addresses.ts";
-import type { FeedbackRow, FeedbackWrite, FeedbackWriteOutcome } from "./Storage/Feedback.ts";
+import type { AddressSuppression } from "../storage/Addresses.ts";
+import type { FeedbackRow, FeedbackWrite, FeedbackWriteOutcome } from "../storage/Feedback.ts";
 
 const configurationSetName = "emailer-test-mail";
 

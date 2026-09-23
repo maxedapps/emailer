@@ -176,7 +176,7 @@ Tests sit beside their modules. Three things differ from the layout the user saw
   - Update backend path references in `README.md` and `wiki/`. ADR and work-document history stays untouched.
   - No identifier, logical ID, function name or behaviour changes.
 - **Starts at:** `apps/backend/src/*`, `alchemy.run.ts:5-12`, `stacks/sending-identity.ts:19-29`, `package.json:8`
-- **Status:** Pending
+- **Status:** Done. `pnpm check` passed with 31 files and 737 tests, the same as before. The prod plan showed `4 to update` (Api, Dispatcher, Feedback, Unsubscribe) with every other resource `noop`, and the identity stack plan showed `no changes`.
 - **Tests:** the whole unit suite moves with its modules. It protects every behaviour across the move.
 - **Verify:**
   - `pnpm check`: expect a pass, with the same test count as before.

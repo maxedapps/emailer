@@ -8,16 +8,16 @@ import { DateTime, Effect, Layer, Option, Redacted, Result, Schema, Scope } from
 import { FetchHttpClient, HttpEffect } from "effect/unstable/http";
 import { describe, expect, it } from "vitest";
 
-import { AccountSuppression } from "./Addresses.ts";
+import { AccountSuppression } from "../audience/Addresses.ts";
 import { makeApiHandler } from "./Api.ts";
-import { CampaignSchedule, CampaignWake } from "./Campaigns.ts";
-import { AudienceStore } from "./Storage/Audience.ts";
-import { CampaignStore } from "./Storage/Campaigns.ts";
-import { StorageFailure } from "./Storage/Errors.ts";
-import { unusedAudience } from "./Storage/Testing.ts";
+import { CampaignSchedule, CampaignWake } from "../campaigns/Campaigns.ts";
+import { AudienceStore } from "../storage/Audience.ts";
+import { CampaignStore } from "../storage/Campaigns.ts";
+import { StorageFailure } from "../storage/Errors.ts";
+import { unusedAudience } from "../storage/Testing.ts";
 
-import type { AddressStatus } from "./Storage/Addresses.ts";
-import type { StoredContactList } from "./Storage/Lists.ts";
+import type { AddressStatus } from "../storage/Addresses.ts";
+import type { StoredContactList } from "../storage/Lists.ts";
 
 const token = "3o4Xr7nJ1pQvKzB2sYtLwMhGfDcEaN9uRiVoP0qTzXY";
 

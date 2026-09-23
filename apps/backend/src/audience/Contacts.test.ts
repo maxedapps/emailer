@@ -4,10 +4,10 @@ import { Effect, Layer, Result } from "effect";
 import { describe, expect, it } from "vitest";
 
 import * as Contacts from "./Contacts.ts";
-import { AudienceStore } from "./Storage/Audience.ts";
-import { unusedAudience } from "./Storage/Testing.ts";
+import { AudienceStore } from "../storage/Audience.ts";
+import { unusedAudience } from "../storage/Testing.ts";
 
-import type { AudienceOperations } from "./Storage/Audience.ts";
+import type { AudienceOperations } from "../storage/Audience.ts";
 
 const contactId = "0195f0a0-1111-4222-8333-44444444c001";
 

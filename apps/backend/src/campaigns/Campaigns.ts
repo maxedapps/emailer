@@ -1,12 +1,12 @@
 import * as Schemas from "@emailer/api/Schemas";
 import { Clock, Context, Effect, Option } from "effect";
 
-import { newIdentifier, nowIso } from "./Identifiers.ts";
-import { AudienceStore } from "./Storage/Audience.ts";
-import { CampaignStore } from "./Storage/Campaigns.ts";
-import { corrupt, StorageFailure } from "./Storage/Errors.ts";
+import { newIdentifier, nowIso } from "../Identifiers.ts";
+import { AudienceStore } from "../storage/Audience.ts";
+import { CampaignStore } from "../storage/Campaigns.ts";
+import { corrupt, StorageFailure } from "../storage/Errors.ts";
 
-import type { CampaignControl } from "./Storage/Campaigns.ts";
+import type { CampaignControl } from "../storage/Campaigns.ts";
 
 export class CampaignWake extends Context.Service<
   CampaignWake,

@@ -2,10 +2,10 @@ import type * as sesv2 from "@distilled.cloud/aws/sesv2";
 import * as Schemas from "@emailer/api/Schemas";
 import { Context, Effect, Option } from "effect";
 
-import { AudienceStore } from "./Storage/Audience.ts";
-import { unavailable } from "./Storage/Errors.ts";
+import { AudienceStore } from "../storage/Audience.ts";
+import { unavailable } from "../storage/Errors.ts";
 
-import type { StorageFailure } from "./Storage/Errors.ts";
+import type { StorageFailure } from "../storage/Errors.ts";
 
 /**
  * Account-list lookup and delete. These are SES callables, not a fifth storage

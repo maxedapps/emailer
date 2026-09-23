@@ -15,18 +15,18 @@ import { TestClock } from "effect/testing";
 import { RateLimiter } from "effect/unstable/persistence";
 import { describe, expect, it } from "vitest";
 
-import { CampaignWake } from "./Campaigns.ts";
+import { CampaignWake } from "../campaigns/Campaigns.ts";
 import { DispatchGuard, memberPageSize, runSlice, SliceOverrun } from "./Dispatching.ts";
 import { Mailer, SubmissionUncertain } from "./Mailer.ts";
-import { AudienceStore } from "./Storage/Audience.ts";
-import { CampaignStore } from "./Storage/Campaigns.ts";
-import { unusedAudience } from "./Storage/Testing.ts";
+import { AudienceStore } from "../storage/Audience.ts";
+import { CampaignStore } from "../storage/Campaigns.ts";
+import { unusedAudience } from "../storage/Testing.ts";
 
 import type { PauseReason } from "@emailer/api/Schemas";
 import type { OutgoingMessage, SubmissionOutcome } from "./Mailer.ts";
 import type { SendGuard } from "./SendGuard.ts";
-import type { AddressStatus } from "./Storage/Addresses.ts";
-import type { RecipientSettlement, SkipReason } from "./Storage/Campaigns.ts";
+import type { AddressStatus } from "../storage/Addresses.ts";
+import type { RecipientSettlement, SkipReason } from "../storage/Campaigns.ts";
 
 const campaignId = "0195f0a0-1111-4222-8333-4444444ca409";
 

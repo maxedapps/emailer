@@ -4,10 +4,10 @@ import { Effect, Layer, Result } from "effect";
 import { describe, expect, it } from "vitest";
 
 import * as Lists from "./Lists.ts";
-import { AudienceStore } from "./Storage/Audience.ts";
-import { unusedAudience } from "./Storage/Testing.ts";
+import { AudienceStore } from "../storage/Audience.ts";
+import { unusedAudience } from "../storage/Testing.ts";
 
-import type { AddMemberOutcome, RemoveMemberOutcome } from "./Storage/Membership.ts";
+import type { AddMemberOutcome, RemoveMemberOutcome } from "../storage/Membership.ts";
 
 const listId = "0195f0a0-1111-4222-8333-44444444109e";
 

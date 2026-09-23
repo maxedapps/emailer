@@ -7,7 +7,7 @@ import { Buffer } from "node:buffer";
 // oxlint-disable-next-line effecttsgo/node-builtin-import
 import { createHmac } from "node:crypto";
 
-import { tokensMatch } from "./Auth.ts";
+import { tokensMatch } from "../api/Auth.ts";
 
 const separator = ".";
 

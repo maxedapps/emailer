@@ -4,8 +4,8 @@ import { Effect, Result } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { campaignSchedule } from "./CampaignSchedule.ts";
-import { decodeDispatchMessage, encodeDispatchMessage } from "./Dispatch.ts";
-import { StorageFailure } from "./Storage/Errors.ts";
+import { decodeDispatchMessage, encodeDispatchMessage } from "../sending/Dispatch.ts";
+import { StorageFailure } from "../storage/Errors.ts";
 
 const campaignId = "0195f0a0-1111-4222-8333-4444444ca409";
 

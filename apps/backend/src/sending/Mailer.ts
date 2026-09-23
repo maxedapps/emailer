@@ -4,7 +4,7 @@ import * as Schemas from "@emailer/api/Schemas";
 import * as AWS from "alchemy/AWS";
 import { Config, Context, Data, Duration, Effect, Layer, Schema } from "effect";
 
-import { sendingIdentity } from "./SendingIdentity.ts";
+import { sendingIdentity } from "../identity/SendingIdentity.ts";
 
 export const configurationSetLogicalId = "EmailerMail";
 
