@@ -217,7 +217,7 @@ const textRenderer = new Marked({
   },
 });
 
-export interface RenderedBody {
+interface RenderedBody {
   readonly text: string;
   readonly html: string;
 }

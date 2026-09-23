@@ -4,13 +4,11 @@ import { Context, Crypto, Effect, Layer, Schema } from "effect";
 
 import { suppressionWrites, transientKey } from "./Addresses.ts";
 import {
-  attributeOf,
   campaignKey,
   num,
   recordVersion,
   str,
   strSet,
-  StoredVersionAttribute,
   tableLogicalId,
   withOptional,
 } from "./Items.ts";
@@ -37,35 +35,6 @@ const feedbackKey = (
   pk: str(`CAMPAIGN#${campaignId}`),
   sk: str(`FEEDBACK#${kind}#${feedbackId}#${Schemas.mailboxKey(recipient)}`),
 });
-
-/**
- * What a feedback item can hold, which is exactly what the writer can put there.
- *
- * The distinction that matters is who produced each field. `campaignId`, `feedbackId`, `outcome`
- * and `receivedAt` are ours, so they carry our rules. `recipient` and the four provider
- * classifications are whatever the mail system reported — the recipient normalized to a mailbox
- * key, the rest copied through verbatim — so this describes them as strings and nothing more.
- *
- * Applying an address schema to `recipient` would be stricter than the writer, and a record it
- * refused would be unreadable for the life of the campaign: the consumer writes history and never
- * reads it back. A write must not be able to reject the event it is recording.
- */
-const StoredFeedback = Schema.Struct({
-  v: StoredVersionAttribute,
-  campaignId: attributeOf(Schemas.EntityId),
-  kind: attributeOf(FeedbackKind),
-  feedbackId: attributeOf(Schema.NonEmptyString),
-  recipient: attributeOf(Schema.NonEmptyString),
-  messageId: attributeOf(Schema.NonEmptyString),
-  outcome: attributeOf(FeedbackOutcome),
-  bounceType: Schema.optionalKey(attributeOf(Schema.String)),
-  bounceSubType: Schema.optionalKey(attributeOf(Schema.String)),
-  complaintFeedbackType: Schema.optionalKey(attributeOf(Schema.String)),
-  complaintSubType: Schema.optionalKey(attributeOf(Schema.String)),
-  receivedAt: attributeOf(Schemas.Timestamp),
-});
-
-export type StoredFeedbackRecord = typeof StoredFeedback.Type;
 
 /**
  * One event's history row for one recipient, as the consumer classified it. The store copies it;

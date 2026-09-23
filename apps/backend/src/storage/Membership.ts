@@ -33,9 +33,8 @@ import type {
 const cascadePageLimit = 40;
 
 /**
- * Membership rows project one field each. They get schemas too: a row whose `contactId` is the
- * wrong attribute kind used to read as absent, which these loops then reported as corrupt anyway —
- * but a row where it was a number would have read as absent rather than as wrong.
+ * Membership rows project one field each, and are decoded like any item: an attribute of the
+ * wrong kind is reported as corrupt, never read as absent.
  */
 const MemberEntry = Schema.Struct({ contactId: attributeOf(Schemas.EntityId) });
 

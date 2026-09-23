@@ -145,8 +145,6 @@ const contactChange = (
   };
 };
 
-export type CreateContactOutcome = "created" | "email-taken";
-
 export type UpdateContactOutcome =
   | { readonly outcome: "updated"; readonly contact: Schemas.Contact }
   | { readonly outcome: "contact-missing" }

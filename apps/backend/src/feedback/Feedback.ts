@@ -180,7 +180,7 @@ const feedbackProps = Effect.gen(function* () {
 });
 
 /** Every service an event uses, bound once per instance. */
-export const FeedbackLive = FeedbackStoreLive.pipe(Layer.provideMerge(NodeCrypto.layer));
+const FeedbackLive = FeedbackStoreLive.pipe(Layer.provideMerge(NodeCrypto.layer));
 
 export default class FeedbackFunction extends AWS.Lambda.Function<FeedbackFunction>()(
   "Feedback",

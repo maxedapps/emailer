@@ -480,5 +480,3 @@ export const allPrimitives = (operations: TableOperations, tokens: TransactionTo
     ...transactionPrimitives(operations, tokens),
   } as const;
 };
-
-export type AllPrimitives = ReturnType<typeof allPrimitives>;

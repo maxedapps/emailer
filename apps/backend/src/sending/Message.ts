@@ -11,7 +11,7 @@ export interface MessageContent {
   readonly html?: string | undefined;
 }
 
-export interface MessageHeader {
+interface MessageHeader {
   readonly name: string;
   readonly value: string;
 }

@@ -35,7 +35,7 @@ const dispatcherProps = Effect.gen(function* () {
 });
 
 /** Every service a slice uses, bound once per instance. */
-export const DispatcherLive = Layer.mergeAll(
+const DispatcherLive = Layer.mergeAll(
   AudienceStoreLive,
   CampaignStoreLive,
   MailerLive,

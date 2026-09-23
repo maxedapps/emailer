@@ -178,7 +178,7 @@ export const makeApiHandler = (token: Redacted.Redacted<string>) =>
   );
 
 /** Every service the handlers use, bound once per instance. */
-export const ApiLive = Layer.mergeAll(
+const ApiLive = Layer.mergeAll(
   AudienceStoreLive,
   CampaignStoreLive,
   Addresses.AccountSuppressionLive,

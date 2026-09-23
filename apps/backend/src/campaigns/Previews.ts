@@ -14,7 +14,7 @@ export class PreviewFunction extends AWS.Lambda.Function<PreviewFunction>()("Pre
 export const previewSigningKey = Config.redacted("EMAILER_PREVIEW_SECRET");
 
 /** Long enough for a day of editing, short enough that a forwarded link stops working by itself. */
-export const previewLifetime = Duration.hours(24);
+const previewLifetime = Duration.hours(24);
 
 const uuidLength = 36;
 

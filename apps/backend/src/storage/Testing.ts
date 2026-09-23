@@ -168,8 +168,8 @@ const notExercised = (operation: string) =>
  * by accident rather than answering it with a plausible-looking default.
  *
  * There is deliberately no equivalent for CampaignStore or the two writers: suites still state
- * those operations in full — which is the point of splitting them. A feedback test can no longer
- * reach a contact read, because its service does not have one.
+ * those operations in full — which is the point of splitting them. A feedback test cannot reach a
+ * contact read, because its service does not have one.
  */
 export const unusedAudience: AudienceOperations = {
   createContact: () => notExercised("createContact"),

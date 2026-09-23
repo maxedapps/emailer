@@ -31,7 +31,7 @@ export const describeCause = (cause: unknown): string =>
       }),
   });
 
-export const reportStorageFailure = (failure: StorageFailure) =>
+const reportStorageFailure = (failure: StorageFailure) =>
   Effect.logError("storage operation failed", {
     operationId: failure.operationId,
     reason: failure.reason,
@@ -40,8 +40,7 @@ export const reportStorageFailure = (failure: StorageFailure) =>
 
 /**
  * The API boundary for every operation that only touches storage. Internal detail is recorded here
- * and converted here, exactly once, rather than at each of the twenty-odd call sites that used to
- * map the failure themselves and throw its cause away in the process.
+ * and converted here, exactly once, so no call site maps the failure itself or loses its cause.
  */
 export const publicly = <A, E, R>(
   operation: Effect.Effect<A, E, R>,
