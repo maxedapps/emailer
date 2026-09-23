@@ -56,6 +56,15 @@ Replace `mail.example.com` with your `EMAILER_SENDER_IDENTITY` and `us-east-1` w
 
 Do not use the `bounce.` subdomain as a From address. Never destroy stack `EmailerSending`. Exclude `AWS.SES.*` from `alchemy unsafe nuke`.
 
+**If the domain is already an SES identity in this account and Region**, for example one set up by another email service, the deploy stops with `OwnedBySomeoneElse`:
+
+- Keep that identity; recreating it can break DKIM.
+- Publish the MAIL FROM MX, SPF and DMARC records.
+- Deploy this stack once with `--adopt`. Its DKIM records stay as they are.
+- Remove the old MAIL FROM subdomain's records after `MailFromDomainStatus=SUCCESS`.
+- Pass `--adopt` only to this one-resource stack, never with `alchemy.run.ts`, where it applies to every resource.
+- To move a deployed `EmailerSending` onto such a domain, destroy it first. Changing `EMAILER_SENDER_IDENTITY` in place plans a replacement, and that path takes over the existing identity without the ownership check.
+
 ```sh
 pnpm exec alchemy deploy --config stacks/sending-identity.ts --stage shared --env-file .env --profile emailer --yes --no-input
 ```

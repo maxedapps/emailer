@@ -5,6 +5,7 @@
 - Superseded in part: [ADR-0009](0009-account-level-sending-identity.md) replaces the per-stage identity lifecycle, the `example.com` domain choice, and the propagation-race explanation with the `INSYNC`/`dig` obligation built on it. The body stays as the preserved rationale.
 - Obligations discharged in part: [ADR-0010](0010-aligned-mail-from-spf-and-dmarc.md) — SPF, DMARC and custom MAIL FROM (Consequences).
 - Superseded in part: [ADR-0011](0011-open-recipient-set-and-paced-dispatch.md) for the allowlist guard in `Campaigns.send` and the single-recipient rule as the protections behind a domain identity.
+- Superseded in part: [ADR-0017](0017-adopted-root-domain-sending-identity.md) for the rule against adopting an existing identity.
 - Authority: The user chose `example.com` as the sending domain and `operator@example.com` as the test recipient, and accepted this record on 2026-09-11. The identity mechanism was proposed here rather than chosen by the user; the obligations it creates are listed under Consequences. One of them was corrected on 2026-09-11 after research contradicted it, and the rest were discharged by [ADR-0010](0010-aligned-mail-from-spf-and-dmarc.md) on 2026-09-15.
 
 ## Context

@@ -5,6 +5,7 @@
 - Accepted: 2026-09-15
 - Authority: The user asked for SPF and DMARC on `mail.example.com` on 2026-09-15 and chose the operator mailbox `dmarc@reports.example.net` as the DMARC report destination. Accepted by the user on 2026-09-15 after independent review of [the plan](work/deliverability.md); the plan's live gate confirms the implementation.
 - Discharges: the SPF, DMARC and custom MAIL FROM obligations left open by [ADR-0002](0002-domain-sending-identity.md) (Consequences) and carried forward by [ADR-0009](0009-account-level-sending-identity.md)'s Consequences.
+- Superseded in part: [ADR-0017](0017-adopted-root-domain-sending-identity.md) — the record inventory: DMARC moves to the organizational domain and the cross-domain report authorization record is gone.
 
 ## Context
 
