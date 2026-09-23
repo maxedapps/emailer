@@ -271,7 +271,7 @@ The account suppression list survives `alchemy destroy`. A test run can leave `s
 
 The live integration suite runs against an ephemeral stage. Automated sends go only to SES mailbox-simulator addresses. One case temporarily disables the stage's dispatcher event-source mapping, so never point the suite at a real stage.
 
-1. Deploy a throwaway stage with `.env.test`:
+1. Deploy a throwaway stage with `.env.test`, which holds the same deploy keys as `.env` (API token, sender identity, From address, postal address, Region) plus the test keys:
 
    ```sh
    pnpm exec alchemy deploy --config alchemy.run.ts --stage test --env-file .env.test --profile emailer --yes --no-input

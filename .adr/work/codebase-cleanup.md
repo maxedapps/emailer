@@ -1,6 +1,6 @@
 # Codebase cleanup and dependency upgrade
 
-> **Status:** In progress
+> **Status:** Complete. T3.2's API-level annotation waits for the Effect RC that ships effect#8423 (follow-up recorded under T3 and in ADR-0022).
 > **Updated:** 2026-09-23
 > **ADRs:** [0021](../0021-whole-project-unused-code-check.md) (T1), [0005](../0005-contact-identity-and-membership-access-paths.md) (amended by T4), [0007](../0007-immutable-recipient-unsubscribe-links.md) (link before claim, T3), [0008](../0008-storage-capabilities-and-error-boundaries.md), [0011](../0011-open-recipient-set-and-paced-dispatch.md). [0022](../0022-api-contract-rejects-undeclared-fields.md) (T3), [0023](../0023-lists-carry-no-membership-version.md) (T4). ADR numbers 0019–0020 are left for untracked proposals in the main checkout.
 
@@ -179,7 +179,7 @@
 - **Evidence:**
   - **T5.1:** `unusedCampaigns` sits beside `unusedAudience`, sharing one private helper, and replaces three hand-written copies.
   - **T5.2:** five campaign-rule cases in `Api.test.ts` were removed, each mapped to the `Campaigns.test.ts` case that covers the same rule: resume, schedule, scheduled cancel, manual-pause cancel, and replacement-generation 409.
-    - Every auth, decoding, size, scope, error-status and round-trip case stays, including one cancel round trip with the runToken checks.
+    - Every auth, decoding, size, scope and error-status case stays, and so does a round trip per group, including one cancel round trip with the runToken checks. The resume round trip was one of the five removed.
     - The fake shrank by 140 lines; the file went from 2325 to 1911 lines.
     - **Accepted:** the resume route is now reached over HTTP only by the live suite (the alarm-pause case).
   - **T5.3:** `test:integration` is `node --env-file=.env.test node_modules/vitest/vitest.mjs run --project integration`.
@@ -190,19 +190,34 @@
     - import strictness and the "existing contact unchanged" note;
     - the Requirements line pins beta.79 and rc.117.
   - **Check:** `pnpm check` exit 0, 737 unit tests (742 minus the five duplicates).
+  - **Final live gate:**
+    - The first `pnpm test:integration` run (the new script) went 35/36. The opt-out case asserted exactly `queued` after `send`, but the dispatcher can begin before `send` re-reads. That is the same race the API suite already tolerates with its `submitted` states. The constant now lives in `IntegrationSupport` and both suites use it.
+    - Rerun: 36/36 in 530 s.
+    - `test-cleanup` was destroyed (28 resources). The inventory shows no function, table, queue, alarm, schedule group, topic, log group, rule, configuration set, role or mapping left for the stage. Prod's four functions are untouched, and no account-suppression entries were added.
 
 ## Handoff
 
-- **Next action:** Final live gate via `pnpm test:integration`, destroy `test-cleanup`, final full-plan review, merge
+- **Next action:** None. Follow-ups:
+  - prod runs the old code until it is redeployed with `--force` (then check `CodeSha256`);
+  - add the `EmailerApi` `HttpApi.ParseOptions` annotation on the Effect RC containing effect#8423;
+  - upgrade oxlint when `@effect/tsgo` supports a version newer than 1.82.
 - **Reviews:**
   - **Checkpoint A** (fresh reviewer, commits `c72055b..0f35cd5`, git objects only): no regressions. Dispositions:
     - **L1:** the probe inside acquire could leave the mapping disabled. Fixed now: the waits moved after `acquireRelease`.
     - **L2:** ADR-0008 said "Table.ts owns only the resource". Fixed now with an Amended line.
     - **L3:** ADR number collision with the main checkout's untracked 0019/0020 proposals. Fixed now: this branch's ADRs renumbered to 0021+.
+  - **Final plan-backed review** (fresh reviewer, `c72055b..eaad137`): **Clear**, no findings admitted.
+    - Compliance: every item done, except T3.2 (partial, blocked upstream, recorded honestly) and T5.2 (deviation recorded above).
+    - Notes applied: an ADR-0011 amendment for the -1 quota, the README noting that `.env.test` needs the deploy keys, and corrected T5.2 wording.
+    - Notes kept as they are:
+      - the typed `committed` check on unconditional cascade transactions stays, because it keeps the code correct if a condition is ever added;
+      - `Flag.File` plus read stays, because `Flag.FileText` would put the file's content, not its path, in the error.
 - **Deviations:**
+  - **T5.2, resume coverage:** removing the duplicated resume case leaves the resume route and paused-campaign encoding reached over HTTP only by the live suite (`Api.integration.test.ts` alarm pause, and `CampaignCancellation.integration.test.ts`). The handler is a one-line typed call. Accepted as the plan's "trim to what only the HTTP layer can break"; the final review found no material impact.
+  - **Plan numbering:** the 37-item plan maps to 36 subtasks. Item 30 (the strict-contract ADR) is part of T3.2.
   - **T1, index slip:** the worker briefly staged and unstaged the `apps/mcp` deletion. The index was back at HEAD before the commit; nothing was lost.
   - **T0, live test fixes:** two integration-test fixes (the alarm-pause assertion, and the probe-based mapping hold). Both correct test races observed live and change no product code.
 - **Resources:**
   - the worktree and branch above;
-  - the ephemeral stage `Emailer/test-cleanup` (us-east-1), deployed for T0 and kept for T4, then destroyed;
-  - an untracked `.env.test` in the worktree, pointed at that stage.
+  - the ephemeral stage `Emailer/test-cleanup` (us-east-1): deployed for T0, redeployed for T4, destroyed after the final gate, with teardown verified against the AWS inventory;
+  - an untracked `.env.test` in the worktree, pointed at that stage; it is removed with the worktree.

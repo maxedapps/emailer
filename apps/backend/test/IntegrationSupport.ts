@@ -43,6 +43,9 @@ import type { TableOperations } from "../src/Storage/Items.ts";
 
 const simulatorHost = "@simulator.amazonses.com";
 
+/** States a send response can carry: the API re-reads after enqueue, so the dispatcher may be ahead. */
+export const submitted: ReadonlyArray<string> = ["queued", "sending", "completed"];
+
 const campaignWaitFloorSeconds = 180;
 
 const mappingReadyTimeout = Duration.minutes(5);

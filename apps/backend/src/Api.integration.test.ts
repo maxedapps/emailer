@@ -40,6 +40,7 @@ import {
   sendToSimulatorList,
   setAlarmState,
   simulator,
+  submitted,
   submitToSimulatorList,
   uniqueAddress,
   unsuppress,
@@ -48,9 +49,6 @@ import {
 const sendTestTimeout = 480_000;
 
 const breakerTestTimeout = 1_200_000;
-
-/** States a send response can carry: the API re-reads after enqueue, so the dispatcher may be ahead. */
-const submitted: ReadonlyArray<string> = ["queued", "sending", "completed"];
 
 const failIfCompleted = ["completed"] as const;
 
