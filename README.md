@@ -53,7 +53,7 @@ Copy `.env.example` to an untracked `.env` and fill it in. Alchemy and the CLI r
 | `EMAILER_API_URL`            | CLI      | API Function URL from the `apiUrl` stack output.                                                                                                                                                                                      |
 | `AWS_PROFILE`                | deploy   | AWS CLI/SSO profile. Leave unset if you export credentials into the environment.                                                                                                                                                      |
 
-Do not set `EMAILER_UNSUBSCRIBE_SECRET` in `.env`. Alchemy mints it, binds it into the functions, and **rotates it when the stage is destroyed**, which invalidates every unsubscribe link already sent.
+Do not set `EMAILER_UNSUBSCRIBE_SECRET` or `EMAILER_PREVIEW_SECRET`. Alchemy mints both, binds them into the functions, and **rotates them when the stage is destroyed**, which invalidates every unsubscribe link already sent and every preview link.
 
 `.env.example` also lists `EMAILER_TEST_*`, `EMAILER_UNSUBSCRIBE_URL` and `EMAILER_UNSUBSCRIBE_SECRET`. Those are for the live integration suite only, not for operating the service ([Develop and test](#develop-and-test)).
 
@@ -138,23 +138,23 @@ pnpm exec alchemy plan   --config alchemy.run.ts --stage prod --env-file .env --
 pnpm exec alchemy deploy --config alchemy.run.ts --stage prod --env-file .env --profile emailer --yes --no-input
 ```
 
-Do not pass `--detailed`: it prints bound secrets, including `EMAILER_API_TOKEN` and the unsubscribe signing key. Treat a secret you have printed as exposed and replace it.
+Do not pass `--detailed`: it prints bound secrets, including `EMAILER_API_TOKEN` and the signing keys. Treat a secret you have printed as exposed and replace it.
 
-After a code change, Alchemy can report a Lambda as `noop` and keep the old bundle. Redeploy with `--force`, then confirm each function's `CodeSha256` changed:
+After a code change, Alchemy can plan a function as `noop` and keep the old bundle ([why](wiki/alchemy/version-specific-traps.md#a-changed-bundle-can-deploy-as-noop)). Redeploy with `--force`, then confirm each function's `CodeSha256` changed:
 
 ```sh
-aws lambda get-function-configuration --function-name emailer-<stage>-<api|dispatcher|feedback|unsubscribe> --query CodeSha256
+aws lambda get-function-configuration --function-name emailer-<stage>-<api|dispatcher|feedback|unsubscribe|preview> --query CodeSha256
 ```
 
-The stack deploys four Lambdas (API, dispatcher, bounce/complaint consumer, unsubscribe page), one table, the dispatch queue and its dead-letter queue, a scheduler group, feedback wiring, seven alarms and an alert topic. Both Function URLs are public (`authType: NONE`): the API authorizes with the bearer token; unsubscribe authorizes with the signed token in the link.
+The stack deploys five Lambdas (API, dispatcher, bounce/complaint consumer, unsubscribe page, preview page), one table, the dispatch queue and its dead-letter queue, a scheduler group, feedback wiring, seven alarms and an alert topic. The three Function URLs are public (`authType: NONE`): the API authorizes with the bearer token; the unsubscribe and preview pages authorize with the signed token in their links.
 
-Outputs: `apiUrl`, `unsubscribeUrl`, `feedbackFunctionArn`, `feedbackFailureQueueUrl`, `alertsTopicArn`. Put `apiUrl` in `EMAILER_API_URL`.
+Outputs: `apiUrl`, `unsubscribeUrl`, `previewUrl`, `feedbackFunctionArn`, `feedbackFailureQueueUrl`, `alertsTopicArn`. Put `apiUrl` in `EMAILER_API_URL`.
 
 ```sh
 pnpm exec alchemy destroy --config alchemy.run.ts --stage prod --env-file .env --profile emailer --yes --no-input
 ```
 
-Destroying a stage deletes its resources and rotates the unsubscribe key. The sending identity and Alchemy bootstrap/state buckets stay.
+Destroying a stage deletes its resources and rotates the unsubscribe and preview keys. The sending identity and Alchemy bootstrap/state buckets stay.
 
 ## Use
 
@@ -186,11 +186,19 @@ node --env-file=.env apps/cli/src/main.ts lists import <listId> --file contacts.
 node --env-file=.env apps/cli/src/main.ts lists delete <listId>
 
 node --env-file=.env apps/cli/src/main.ts campaigns create \
+  --list <listId> --subject "Release notes" --markdown newsletter.md
+node --env-file=.env apps/cli/src/main.ts campaigns create \
   --list <listId> --subject "Release notes" --text newsletter.txt
 node --env-file=.env apps/cli/src/main.ts campaigns create \
   --list <listId> --subject "Release notes" --text newsletter.txt --html newsletter.html
 node --env-file=.env apps/cli/src/main.ts campaigns create \
   --list <listId> --subject "Release notes" --text newsletter.txt --filter plan=pro
+node --env-file=.env apps/cli/src/main.ts campaigns update <campaignId> --markdown newsletter.md
+node --env-file=.env apps/cli/src/main.ts campaigns update <campaignId> --subject "New subject" --clear-filter
+node --env-file=.env apps/cli/src/main.ts campaigns preview <campaignId> --open
+node --env-file=.env apps/cli/src/main.ts campaigns test <campaignId> --to you@example.com --to colleague@example.com
+node --env-file=.env apps/cli/src/main.ts campaigns test <campaignId> --list <listId>
+node --env-file=.env apps/cli/src/main.ts campaigns delete <campaignId>
 node --env-file=.env apps/cli/src/main.ts campaigns send <campaignId>
 node --env-file=.env apps/cli/src/main.ts campaigns get <campaignId>
 node --env-file=.env apps/cli/src/main.ts campaigns list
@@ -203,6 +211,16 @@ node --env-file=.env apps/cli/src/main.ts addresses unsuppress --email you@examp
 ```
 
 `lists import` expects JSON of the form `{ "contacts": [ { "email": "...", "name": "...", "attributes": { "plan": "pro" } } ] }`. `name` and `attributes` are optional. A file with a key the contract does not declare, such as a misspelled `attributs`, is rejected before anything is sent, and the error names the key's path. Importing an address that already has a contact adds the membership but leaves that contact's name and attributes unchanged; use `contacts update` for those.
+
+### Drafting a campaign
+
+1. Write the campaign as one Markdown file and create a draft from it: `campaigns create --markdown newsletter.md`. The CLI renders both parts: HTML with inline styles in a 600px layout, and plain text from the same source.
+2. Run `campaigns preview <id>` for a 24-hour link. It works from any browser, including on a phone or from a headless machine; `--open` also opens it locally.
+3. Edit the file and run `campaigns update <id> --markdown newsletter.md`. Reload the same link to see the change.
+4. Run `campaigns test <id> --to you@example.com` to get a `[Test]` copy in a real inbox.
+5. Run `campaigns send <id>`.
+
+In Markdown, use absolute `https://` image URLs. Raw HTML passes through unstyled. Every Markdown campaign shares one layout; hand-written bodies still work with `--text` and `--html`.
 
 ### Contracts
 
@@ -217,7 +235,10 @@ node --env-file=.env apps/cli/src/main.ts addresses unsuppress --email you@examp
 - `campaigns list` omits the body; `campaigns get` includes it.
 - `campaigns send` exits zero when the campaign is **queued**. Poll `campaigns get` for `progress`, `feedback` (`bounced`, `complained`) and a `paused` reason.
 - `campaigns schedule` exits zero when the campaign is `scheduled`. `--at` is an ISO date (`YYYY-MM-DD`) or date-time with minute precision; no zone means UTC. Past instants are **409**. Scheduler fires with 60-second precision. `campaigns send` on a scheduled campaign sends now.
-- `campaigns cancel` withdraws a pending run. `scheduled`, or a `queued` first send that never started, returns to `draft`. A `queued` resume returns to `paused` with reason `manual`. `sending`, `completed`, and a conflicting replacement generation are **409**. Cancel does not stop in-flight SES submissions or recall mail.
+- `campaigns cancel` withdraws a pending run. `scheduled`, or a `queued` first send that never started, returns to `draft`. A `queued` resume returns to `paused` with reason `manual`. `sending`, `completed`, and a conflicting replacement generation are **409** `CampaignStateConflict`. Cancel does not stop in-flight SES submissions or recall mail.
+- `campaigns update` and `campaigns delete` apply to drafts only; any other state is **409** `CampaignStateConflict`. Cancel a scheduled campaign to edit it. Content flags replace the whole body: `--text` without `--html` drops an earlier HTML body. `--markdown` excludes `--text`/`--html`. `--clear-filter` sends to the whole list again.
+- `campaigns preview` answers `{ url, expiresAt }`. Anyone holding the link sees that campaign until it expires, so share it like a password. It always renders the campaign as it is now, with a placeholder instead of the recipient's unsubscribe link. A single link cannot be revoked; destroying the stage revokes all of them.
+- `campaigns test` sends right away to 1–20 `--to` addresses, or to a `--list` of at most 20 members; the campaign's filter does not apply. For `--list` it shows the member count and asks on stderr; pass `--yes` when no one can answer (a script or pipe). The subject gets a `[Test] ` prefix. Unsubscribed and suppressed addresses are skipped, and each address gets one attempt. It uses the account's daily quota and send pacing, and answers **503** `SendingPaused` while a reputation halt or the daily budget stops sending. **The unsubscribe link in a test message is real**: clicking it opts that address out of every campaign. A test bounce or complaint suppresses the address but never counts against the campaign.
 - An individual recipient is never retried automatically. A lost SES response stays `uncertain`.
 
 Every message gets a postal footer, `List-Unsubscribe` and one-click `List-Unsubscribe-Post`. Open/click tracking is off.
@@ -241,7 +262,7 @@ A fresh stage with `EMAILER_ALERT_EMAIL` set can mail several `OK:` notification
 **Replay failed feedback** (from the non-secret stack outputs; `--env-file` will not expand `$VAR`):
 
 ```sh
-node --env-file=.env apps/backend/src/ReplayFeedback.ts \
+node --env-file=.env apps/backend/src/feedback/ReplayFeedback.ts \
   --queue-url "$EMAILER_FEEDBACK_FAILURE_QUEUE_URL" \
   --function-arn "$EMAILER_FEEDBACK_FUNCTION_ARN" \
   --max-messages 10

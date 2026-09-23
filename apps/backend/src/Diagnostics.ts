@@ -1,7 +1,7 @@
 import * as Schemas from "@emailer/api/Schemas";
 import { Effect, Option, Schema } from "effect";
 
-import { StorageFailure } from "./Storage/Errors.ts";
+import { StorageFailure } from "./storage/Errors.ts";
 
 const Tagged = Schema.Struct({ _tag: Schema.String });
 
@@ -39,9 +39,8 @@ const reportStorageFailure = (failure: StorageFailure) =>
   });
 
 /**
- * The API boundary for every operation that only touches storage. Internal detail is recorded and
- * converted here, exactly once, rather than at each call site, where mapping the failure would
- * throw its cause away.
+ * The API boundary for every operation that only touches storage. Internal detail is recorded here
+ * and converted here, exactly once, so no call site maps the failure itself or loses its cause.
  */
 export const publicly = <A, E, R>(
   operation: Effect.Effect<A, E, R>,

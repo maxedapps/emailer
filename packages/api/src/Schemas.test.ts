@@ -872,16 +872,16 @@ describe("PauseReason", () => {
     ));
 });
 
-describe("CampaignCancellationConflict", () => {
+describe("CampaignStateConflict", () => {
   it.each(["draft", "scheduled", "queued", "sending", "paused", "completed"] as const)(
     "encodes with state %s",
     (state) =>
       Effect.runPromise(
         Effect.gen(function* () {
-          const error = new Schemas.CampaignCancellationConflict({ state });
-          const encoded = yield* Schema.encodeEffect(Schemas.CampaignCancellationConflict)(error);
+          const error = new Schemas.CampaignStateConflict({ state });
+          const encoded = yield* Schema.encodeEffect(Schemas.CampaignStateConflict)(error);
 
-          expect(encoded._tag).toBe("CampaignCancellationConflict");
+          expect(encoded._tag).toBe("CampaignStateConflict");
           expect(encoded.state).toBe(state);
           expect("runToken" in encoded).toBe(false);
         }),
@@ -895,7 +895,7 @@ describe("public error statuses", () => {
     [Schemas.EmailAlreadyUsed, 409],
     [Schemas.AddressOptedOut, 409],
     [Schemas.SendAtNotInFuture, 409],
-    [Schemas.CampaignCancellationConflict, 409],
+    [Schemas.CampaignStateConflict, 409],
     [Schemas.PayloadTooLarge, 413],
     [Schemas.StorageUnavailable, 503],
   ] as const;
@@ -903,4 +903,33 @@ describe("public error statuses", () => {
   it.each(declared)("declares the status every consumer decodes against", (error, status) => {
     expect(error.ast.annotations?.httpApiStatus).toBe(status);
   });
+});
+
+describe("UpdateCampaignPayload", () => {
+  const decode = Schema.decodeUnknownEffect(Schemas.UpdateCampaignPayload);
+
+  it("keeps an absent field absent and an explicit null as null", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        expect(yield* decode({})).toStrictEqual({});
+        expect(yield* decode({ html: null, filter: null })).toStrictEqual({
+          html: null,
+          filter: null,
+        });
+        expect(yield* decode({ subject: "New", filter: { plan: "pro" } })).toStrictEqual({
+          subject: "New",
+          filter: { plan: "pro" },
+        });
+      }),
+    ));
+
+  it.each([{ text: null }, { subject: null }, { listId: null }, { html: "" }, { text: "" }])(
+    "refuses %j",
+    (payload) =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          expect(Result.isFailure(yield* Effect.result(decode(payload)))).toBe(true);
+        }),
+      ),
+  );
 });

@@ -7,7 +7,8 @@
  *
  * Automated sends go only to SES mailbox-simulator addresses. `submitToSimulatorList` is the
  * test-side guard: it pages a list and refuses to run the submit if any member is not a simulator
- * address. `sendToSimulatorList` is the send form of that guard.
+ * address. `sendToSimulatorList` is the send form of that guard, and `testToSimulators` the form
+ * for test sends, which also checks explicit addresses.
  */
 import { NodeCrypto } from "@effect/platform-node";
 import { fromChain } from "@distilled.cloud/aws/Credentials";
@@ -22,7 +23,6 @@ import * as Schemas from "@emailer/api/Schemas";
 import { Config, Crypto, Duration, Effect, Layer, Predicate, Schedule, Schema } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 
-import { encodeDispatchMessage } from "../src/Dispatch.ts";
 import { newIdentifier, nowIso } from "../src/Identifiers.ts";
 import {
   attributeOf,
@@ -30,16 +30,17 @@ import {
   NumberAttribute,
   str,
   tableLogicalId,
-} from "../src/Storage/Items.ts";
-import { suppressionWrites, unsubscribeWrites } from "../src/Storage/Addresses.ts";
-import { audienceOperations } from "../src/Storage/Audience.ts";
-import { campaignStoreOperations } from "../src/Storage/Campaigns.ts";
-import { feedbackWrites } from "../src/Storage/Feedback.ts";
-import { transactionPrimitives, writePrimitives } from "../src/Storage/Primitives.ts";
-import { unsubscribeSigningKey } from "../src/Unsubscribe.ts";
+} from "../src/storage/Items.ts";
+import { suppressionWrites, unsubscribeWrites } from "../src/storage/Addresses.ts";
+import { audienceOperations } from "../src/storage/Audience.ts";
+import { campaignStoreOperations } from "../src/storage/Campaigns.ts";
+import { feedbackWrites } from "../src/storage/Feedback.ts";
+import { transactionPrimitives, writePrimitives } from "../src/storage/Primitives.ts";
+import { unsubscribeSigningKey } from "../src/consent/Unsubscribe.ts";
+import { encodeDispatchMessage } from "../src/sending/Dispatch.ts";
 
-import type { AddressStatus } from "../src/Storage/Addresses.ts";
-import type { TableOperations } from "../src/Storage/Items.ts";
+import type { AddressStatus } from "../src/storage/Addresses.ts";
+import type { TableOperations } from "../src/storage/Items.ts";
 
 const simulatorHost = "@simulator.amazonses.com";
 
@@ -54,11 +55,8 @@ const staleWakeLogTimeout = Duration.minutes(5);
 
 const mappingPoll = Schedule.spaced("3 seconds");
 
-/**
- * How long a probe wake must sit unconsumed before the dispatcher's pollers count as stopped: one
- * full SQS long-poll cycle. Draining pollers were seen taking five seconds to pick a message up.
- */
-const probeSettle = Duration.seconds(20);
+/** Longer than the 20-second long poll Lambda's SQS pollers use, so an idle canary is not luck. */
+const pollerQuietWindow = Duration.seconds(25);
 
 const mappingUpdateRetry = Schedule.max([Schedule.recurs(20), Schedule.spaced("5 seconds")]);
 
@@ -328,6 +326,33 @@ export const sendToSimulatorList = (client: EmailerClient, listId: string, campa
     client.campaigns.send({ params: { id: campaignId } }),
   );
 
+/** A test send, refused before any request unless every recipient is a simulator address. */
+export const testToSimulators = (
+  client: EmailerClient,
+  campaignId: string,
+  recipients: { readonly to: ReadonlyArray<string> } | { readonly listId: string },
+) =>
+  Effect.gen(function* () {
+    const addresses =
+      "to" in recipients
+        ? recipients.to
+        : (yield* listAllMembers(client, recipients.listId)).map((member) => member.email);
+
+    for (const address of addresses) {
+      if (!address.endsWith(simulatorHost)) {
+        throw new Error(
+          `refusing to test-send campaign ${campaignId}: ${address} is not a simulator address`,
+        );
+      }
+    }
+
+    const params = { id: campaignId };
+
+    return yield* "to" in recipients
+      ? client.campaigns.test({ params, payload: { to: recipients.to } })
+      : client.campaigns.test({ params, payload: { listId: recipients.listId } });
+  });
+
 export const accountSendQuota = Effect.gen(function* () {
   const getAccount = yield* sesv2.getAccount;
   const account = yield* getAccount({});
@@ -587,68 +612,65 @@ const dispatcherMapping = Effect.gen(function* () {
 
   const mapping = mappings[0];
   const uuid = mapping?.UUID;
+  const queueArn = mapping?.EventSourceArn;
 
-  if (mapping === undefined || uuid === undefined) {
-    throw new Error(`dispatch mapping for ${functionName} has no UUID`);
+  if (mapping === undefined || uuid === undefined || queueArn === undefined) {
+    throw new Error(`dispatch mapping for ${functionName} has no UUID or source queue`);
   }
 
-  if (mapping.EventSourceArn === undefined) {
-    throw new Error(`dispatch mapping for ${functionName} has no event source`);
-  }
-
-  return { uuid, state: mapping.State, queueArn: mapping.EventSourceArn };
+  return { uuid, state: mapping.State, queueArn };
 });
 
 /**
- * A mapping reporting Disabled can still deliver: live, its pollers kept invoking the dispatcher
- * for more than twenty seconds afterwards. A probe wake for a campaign that does not exist, still
- * queued a full poll cycle after it was sent, shows they have stopped. The dispatcher discards
- * probes as stale once the mapping is restored.
+ * "Disabled" is reported before Lambda's pollers stop: on 2026-09-23 a wake enqueued a second after
+ * the mapping reached Disabled was still consumed, and one enqueued two minutes later was not. A
+ * canary settles it without guessing a delay. It is a stale wake the dispatcher discards, left on
+ * the queue until it has sat unreceived for longer than a long poll; while pollers still run, each
+ * canary is consumed and another is sent. Restoring the mapping later discards the canaries.
  */
 const awaitPollersStopped = (queueArn: string) =>
   Effect.gen(function* () {
     const getQueueUrl = yield* sqs.getQueueUrl;
     const sendMessage = yield* sqs.sendMessage;
     const getQueueAttributes = yield* sqs.getQueueAttributes;
-
-    const { QueueUrl } = yield* getQueueUrl({
-      QueueName: queueArn.slice(queueArn.lastIndexOf(":") + 1),
-    });
+    const { QueueUrl } = yield* getQueueUrl({ QueueName: queueArn.split(":").at(-1) ?? "" });
 
     if (QueueUrl === undefined) {
-      throw new Error(`no queue URL for ${queueArn}`);
+      throw new Error(`no URL for dispatch queue ${queueArn}`);
     }
 
-    const probeHeld = Effect.gen(function* () {
-      const MessageBody = yield* encodeDispatchMessage({
+    const canaryIdle = Effect.gen(function* () {
+      const canary = yield* encodeDispatchMessage({
         campaignId: yield* newIdentifier,
         runToken: yield* newIdentifier,
-      }).pipe(Effect.orDie);
-
-      yield* sendMessage({ QueueUrl, MessageBody });
-      yield* Effect.sleep(probeSettle);
-
-      const result = yield* getQueueAttributes({
-        QueueUrl,
-        AttributeNames: ["ApproximateNumberOfMessages"],
       });
 
-      return Number.parseInt(result.Attributes?.ApproximateNumberOfMessages ?? "0", 10) > 0;
+      yield* sendMessage({ QueueUrl, MessageBody: canary });
+      yield* Effect.sleep(pollerQuietWindow);
+
+      const { Attributes } = yield* getQueueAttributes({
+        QueueUrl,
+        AttributeNames: ["ApproximateNumberOfMessages", "ApproximateNumberOfMessagesNotVisible"],
+      });
+
+      return (
+        Number(Attributes?.ApproximateNumberOfMessages ?? "0") >= 1 &&
+        Number(Attributes?.ApproximateNumberOfMessagesNotVisible ?? "1") === 0
+      );
     });
 
-    yield* probeHeld.pipe(
-      Effect.repeat({ until: (held: boolean) => held }),
+    yield* canaryIdle.pipe(
+      Effect.repeat({ until: (idle: boolean) => idle }),
       Effect.timeoutOrElse({
         duration: mappingReadyTimeout,
-        orElse: () => Effect.die(new Error(`the pollers of ${queueArn} did not stop`)),
+        orElse: () => Effect.die(new Error(`pollers of ${queueArn} kept receiving`)),
       }),
     );
   });
 
 /**
- * Disables only the owned test dispatcher SQS mapping, waits until it is Disabled and its pollers
- * have stopped, and restores the original Enabled state when the scope closes — including on
- * failure.
+ * Disables only the owned test dispatcher SQS mapping, waits until Disabled and its pollers have
+ * stopped, and restores the original Enabled state when the scope closes — including on failure.
  */
 export const disableDispatcherMapping = Effect.acquireRelease(
   Effect.gen(function* () {

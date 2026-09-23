@@ -121,7 +121,7 @@ describe("makeEmailerClient", () => {
   });
 
   it("surfaces a cancellation conflict as a typed failure", () => {
-    const conflictBody = '{"_tag":"CampaignCancellationConflict","state":"sending"}';
+    const conflictBody = '{"_tag":"CampaignStateConflict","state":"sending"}';
 
     const transport = transportReplying(() => json(409, conflictBody));
 
@@ -129,7 +129,7 @@ describe("makeEmailerClient", () => {
       client.campaigns.cancel({ params: { id: contactId } }),
     ).then((result) => {
       expect(Result.isFailure(result) ? result.failure : undefined).toBeInstanceOf(
-        Schemas.CampaignCancellationConflict,
+        Schemas.CampaignStateConflict,
       );
       expect(Result.isFailure(result) && result.failure).toMatchObject({ state: "sending" });
       expect(Result.isFailure(result) && result.failure).not.toHaveProperty("runToken");

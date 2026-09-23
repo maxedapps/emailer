@@ -6,7 +6,7 @@
   "scripts": {
     "prepare": "effect-tsgo patch --oxlint",
     "emailer": "node apps/cli/src/main.ts",
-    "feedback:replay": "node apps/backend/src/ReplayFeedback.ts",
+    "feedback:replay": "node apps/backend/src/feedback/ReplayFeedback.ts",
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",
     "lint": "oxlint --type-aware --type-check --deny-warnings --report-unused-disable-directives .",

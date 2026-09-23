@@ -8,6 +8,7 @@
 - Superseded in part: [ADR-0012](0012-reputation-guardrails.md) for the pause reasons and the deferral of feedback counts; [ADR-0013](0013-repeat-safe-writes.md) for "Conditional writes are single-attempt" and the lost-race reading of a retried write; [ADR-0014](0014-campaign-body-item-and-summaries.md) for the campaign record, whose body now lives in its own `BODY` item and is read by the dispatcher once per slice.
 - Amended: [campaign-segmentation](work/campaign-segmentation.md) — a member a campaign filter excludes is not a recipient; it gets no row and is not counted in `skipped`
 - Amended: [codebase-cleanup](work/codebase-cleanup.md) — SES reports `Max24HourSend` as `-1` for an unlimited quota; the account term then drops out of the daily limit and only `EMAILER_DAILY_SEND_CEILING`, when set, applies
+- Superseded in part: [ADR-0020](0020-drafts-previews-and-test-sends.md) for "the API never submits to SES again and no longer constructs the mailer": the API sends `[Test]` copies, sharing the send guard and pacing.
 
 ## Context
 

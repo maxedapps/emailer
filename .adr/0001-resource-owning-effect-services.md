@@ -4,6 +4,7 @@
 - Date: 2026-09-11
 - Superseded in part: [ADR-0009](0009-account-level-sending-identity.md) for two clauses: "Keep one root `alchemy.run.ts`" (the identity now has its own stack) and the SES identity's placement in `Mailer.ts`. `:19` already allows "a small separate resource module … if a concrete shared ownership need arises", which this is. `Mailer.ts` still owns the service, configuration set, send binding and implementation.
 - Superseded in part: [ADR-0011](0011-open-recipient-set-and-paced-dispatch.md) for "immediate plain-text submission to one allowlisted recipient".
+- Amended: [ADR-0020](0020-drafts-previews-and-test-sends.md) — the backend's capabilities are grouped into concern folders (`api`, `audience`, `campaigns`, `consent`, `feedback`, `identity`, `sending`, `storage`), and every function builds its services once from a Live layer. Resource ownership by module is unchanged.
 - Authority: The user accepted the capability-oriented Alchemy design and requested its implementation plan. Acceptance covers the architecture, not implementation or production deployment.
 
 ## Context

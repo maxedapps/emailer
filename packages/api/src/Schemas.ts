@@ -20,6 +20,12 @@ export const maxAttributeValueLength = 512;
 
 export const maxImportEntries = 20;
 
+/**
+ * The most recipients one test send reaches. It goes out synchronously inside the API's 60-second
+ * budget, and at SES's slowest pace of one message a second twenty still fit.
+ */
+export const maxTestRecipients = 20;
+
 export const minPageSize = 1;
 
 export const maxPageSize = 100;
@@ -337,6 +343,20 @@ export const UpdateContactPayload = Schema.Struct({
 
 export type UpdateContactPayload = typeof UpdateContactPayload.Type;
 
+/**
+ * A draft edit, with `UpdateContactPayload`'s convention: absent leaves a field alone, and null
+ * removes an optional one — the HTML body, or the filter so the campaign goes to the whole list.
+ */
+export const UpdateCampaignPayload = Schema.Struct({
+  listId: Schema.optionalKey(EntityId),
+  subject: Schema.optionalKey(CampaignSubject),
+  text: Schema.optionalKey(CampaignText),
+  html: Schema.optionalKey(Schema.NullOr(CampaignHtml)),
+  filter: Schema.optionalKey(Schema.NullOr(ContactAttributes)),
+});
+
+export type UpdateCampaignPayload = typeof UpdateCampaignPayload.Type;
+
 export const UpdateListPayload = Schema.Struct({
   name: EntityName,
 });
@@ -421,6 +441,58 @@ export const ImportContactsResult = Schema.Struct({
 
 export type ImportContactsResult = typeof ImportContactsResult.Type;
 
+const TestRecipients = Schema.Array(EmailAddress).check(
+  Schema.isNonEmpty(),
+  Schema.isMaxLength(maxTestRecipients),
+);
+
+/** Explicit addresses, each at most once, or one list whose every member is a recipient. */
+export const TestSendPayload = Schema.Union([
+  Schema.Struct({
+    to: TestRecipients.pipe(
+      Schema.refine(
+        (to: typeof TestRecipients.Type): to is typeof TestRecipients.Type =>
+          new Set(to.map(mailboxKey)).size === to.length,
+        { message: "Expected each address to appear at most once" },
+      ),
+    ),
+  }),
+  Schema.Struct({ listId: EntityId }),
+]);
+
+export type TestSendPayload = typeof TestSendPayload.Type;
+
+export const TestSendOutcome = Schema.Union([
+  Schema.Struct({
+    email: NormalizedEmailAddress,
+    outcome: Schema.Literal("accepted"),
+    messageId: Schema.String,
+  }),
+  Schema.Struct({
+    email: NormalizedEmailAddress,
+    outcome: Schema.Literal("skipped"),
+    reason: Schema.Literals(["unsubscribed", "suppressed", "bouncing"]),
+  }),
+  Schema.Struct({
+    email: NormalizedEmailAddress,
+    outcome: Schema.Literal("rejected"),
+    rejectionCode: RejectionCode,
+  }),
+  Schema.Struct({ email: NormalizedEmailAddress, outcome: Schema.Literal("uncertain") }),
+]);
+
+export type TestSendOutcome = typeof TestSendOutcome.Type;
+
+/** One entry per recipient, in the order they were given or listed. */
+export const TestSendResult = Schema.Struct({ recipients: Schema.Array(TestSendOutcome) });
+
+export type TestSendResult = typeof TestSendResult.Type;
+
+/** A short-lived public link to a campaign's rendered preview. */
+export const PreviewLink = Schema.Struct({ url: Schema.String, expiresAt: Timestamp });
+
+export type PreviewLink = typeof PreviewLink.Type;
+
 const EntityKind = Schema.Literals(["contact", "list", "campaign"]);
 
 export class NotFound extends Schema.TaggedError<NotFound>()(
@@ -448,12 +520,30 @@ export class SendAtNotInFuture extends Schema.TaggedError<SendAtNotInFuture>()(
   { httpApiStatus: 409 },
 ) {}
 
-export class CampaignCancellationConflict extends Schema.TaggedError<CampaignCancellationConflict>()(
-  "CampaignCancellationConflict",
+/**
+ * The campaign is in a state the operation does not apply to: cancelling one that is sending, or
+ * editing or deleting one that is no longer a draft. `state` is what it was found in.
+ */
+export class CampaignStateConflict extends Schema.TaggedError<CampaignStateConflict>()(
+  "CampaignStateConflict",
   {
     state: Schema.Literals(["draft", "scheduled", "queued", "sending", "paused", "completed"]),
   },
   { httpApiStatus: 409 },
+) {}
+
+/** The test list has more members than a test send may reach. */
+export class TestAudienceTooLarge extends Schema.TaggedError<TestAudienceTooLarge>()(
+  "TestAudienceTooLarge",
+  { limit: Schema.Int },
+  { httpApiStatus: 409 },
+) {}
+
+/** The account-wide guard refuses every send right now: a reputation halt or a spent daily budget. */
+export class SendingPaused extends Schema.TaggedError<SendingPaused>()(
+  "SendingPaused",
+  { reason: Schema.Literals(["reputation", "daily-quota"]) },
+  { httpApiStatus: 503 },
 ) {}
 
 export class PayloadTooLarge extends Schema.TaggedError<PayloadTooLarge>()(

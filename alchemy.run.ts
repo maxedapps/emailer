@@ -1,15 +1,17 @@
 import { Stack } from "alchemy";
 import * as AWS from "alchemy/AWS";
-import { Config, Effect, Option } from "effect";
+import { Config, Effect, Layer, Option } from "effect";
 
-import ApiFunction from "./apps/backend/src/Api.ts";
-import { dispatchFailures } from "./apps/backend/src/Dispatch.ts";
-import DispatcherFunction from "./apps/backend/src/Dispatcher.ts";
-import FeedbackFunction, { feedbackFailures } from "./apps/backend/src/Feedback.ts";
-import { feedbackPublishing } from "./apps/backend/src/Mailer.ts";
-import { alertsTopic, reputationAlarms } from "./apps/backend/src/Reputation.ts";
-import { UnsubscribeFunction } from "./apps/backend/src/Unsubscribe.ts";
-import UnsubscribePage from "./apps/backend/src/UnsubscribePage.ts";
+import ApiFunction from "./apps/backend/src/api/Api.ts";
+import PreviewPage from "./apps/backend/src/campaigns/PreviewPage.ts";
+import { PreviewFunction } from "./apps/backend/src/campaigns/Previews.ts";
+import { dispatchFailures } from "./apps/backend/src/sending/Dispatch.ts";
+import DispatcherFunction from "./apps/backend/src/sending/Dispatcher.ts";
+import FeedbackFunction, { feedbackFailures } from "./apps/backend/src/feedback/Feedback.ts";
+import { feedbackPublishing } from "./apps/backend/src/sending/Mailer.ts";
+import { alertsTopic, reputationAlarms } from "./apps/backend/src/sending/Reputation.ts";
+import { UnsubscribeFunction } from "./apps/backend/src/consent/Unsubscribe.ts";
+import UnsubscribePage from "./apps/backend/src/consent/UnsubscribePage.ts";
 
 export default Stack(
   "Emailer",
@@ -22,6 +24,8 @@ export default Stack(
     const api = yield* ApiFunction;
 
     const unsubscribe = yield* UnsubscribeFunction;
+
+    const preview = yield* PreviewFunction;
 
     const feedback = yield* FeedbackFunction;
     yield* DispatcherFunction;
@@ -98,15 +102,14 @@ export default Stack(
     return {
       apiUrl: api.functionUrl,
       unsubscribeUrl: unsubscribe.functionUrl,
+      previewUrl: preview.functionUrl,
       feedbackFunctionArn: feedback.functionArn,
       feedbackFailureQueueUrl: failures.queueUrl,
       alertsTopicArn: topic.topicArn,
     };
   }).pipe(
-    // The unsubscribe function is declared as a bare tag so the Dispatcher's props and the stack
-    // output can reference its URL: an inline class builds when yielded, which would run the
-    // function's props and init inside the Dispatcher at every cold start. Without its .make
-    // Layer, planning fails with missingImplementation.
-    Effect.provide(UnsubscribePage),
+    // The public functions are declared as bare tags so the API's and the Dispatcher's props can
+    // reference their URLs; without their .make Layers, planning fails with missingImplementation.
+    Effect.provide(Layer.mergeAll(UnsubscribePage, PreviewPage)),
   ),
 );

@@ -25,8 +25,11 @@ import {
   mailFromDomainOf,
   mailFromRecords,
   publisherFor,
-} from "../apps/backend/src/SendingDns.ts";
-import { senderLogicalId, sendingIdentityStack } from "../apps/backend/src/SendingIdentity.ts";
+} from "../apps/backend/src/identity/SendingDns.ts";
+import {
+  senderLogicalId,
+  sendingIdentityStack,
+} from "../apps/backend/src/identity/SendingIdentity.ts";
 
 type AwsProviders = Layer.Success<ReturnType<typeof AWS.providers>>;
 
