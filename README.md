@@ -23,14 +23,13 @@ Do not skip lifecycle scripts. There is no build step: Node 24 runs the TypeScri
 2. Fill in `.env` ([Configure](#configure)).
 3. Create the Alchemy profile and bootstrap the account ([One-time setup](#one-time-setup)).
 4. Set up the sending identity ([Sending identity](#sending-identity-once-per-account-and-region)):
-   - publish the MAIL FROM and DMARC records;
-   - deploy the identity stack;
-   - publish its three DKIM records;
-   - wait until SES reports them verified.
+   - without `EMAILER_DNS`, publish its MAIL FROM and DMARC records first;
+   - deploy the identity stack, then publish its DKIM records if DNS is manual;
+   - wait until SES reports it verified.
 5. Deploy the service and put `apiUrl` into `.env` ([Deploy the service](#deploy-the-service)).
 6. If you set `EMAILER_ALERT_EMAIL`, confirm the subscription mail it receives.
 
-The only manual work outside the CLI is DNS:
+Nothing is manual outside the CLI when `EMAILER_DNS` manages your zone, except a DMARC report authorization record on another domain. Without it, you publish DNS by hand:
 
 - six records for a domain without DMARC;
 - five if it already has one;
@@ -40,17 +39,19 @@ The only manual work outside the CLI is DNS:
 
 Copy `.env.example` to an untracked `.env` and fill it in. Alchemy and the CLI read the file you pass with `--env-file`; they do not interpolate `$OTHER` inside it.
 
-| Variable                     | Required | Purpose                                                                                                                                                                                       |
-| ---------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `EMAILER_API_TOKEN`          | yes      | Bearer token for every API route. 32 random bytes, base64url (43 characters). Generate with `node -e 'import("node:crypto").then(c => console.log(c.randomBytes(32).toString("base64url")))'` |
-| `EMAILER_SENDER_IDENTITY`    | yes      | SES domain identity, e.g. `mail.example.com`. Both stacks must use the same value. Changing it on the identity stack **replaces** the identity and leaves the old one retained but untracked. |
-| `EMAILER_FROM_EMAIL`         | yes      | From address. Must belong to `EMAILER_SENDER_IDENTITY`. The domain does not need a mailbox.                                                                                                   |
-| `EMAILER_POSTAL_ADDRESS`     | yes      | Physical postal address rendered into every message footer (CAN-SPAM). Empty fails closed at function construction.                                                                           |
-| `AWS_REGION`                 | yes      | Region for both stacks. Never guessed.                                                                                                                                                        |
-| `EMAILER_DAILY_SEND_CEILING` | no       | Positive integer daily send cap for this stage.                                                                                                                                               |
-| `EMAILER_ALERT_EMAIL`        | no       | Alarm notifications. SNS sends one confirmation per stage; follow the `SubscribeURL` before expecting mail.                                                                                   |
-| `EMAILER_API_URL`            | CLI      | API Function URL from the `apiUrl` stack output.                                                                                                                                              |
-| `AWS_PROFILE`                | deploy   | AWS CLI/SSO profile. Leave unset if you export credentials into the environment.                                                                                                              |
+| Variable                     | Required | Purpose                                                                                                                                                                                                                               |
+| ---------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `EMAILER_API_TOKEN`          | yes      | Bearer token for every API route. 32 random bytes, base64url (43 characters). Generate with `node -e 'import("node:crypto").then(c => console.log(c.randomBytes(32).toString("base64url")))'`                                         |
+| `EMAILER_SENDER_IDENTITY`    | yes      | SES domain identity, e.g. `mail.example.com`. Both stacks must use the same value. Changing it on the identity stack **replaces** the identity and leaves the old one retained but untracked.                                         |
+| `EMAILER_FROM_EMAIL`         | yes      | From address. Must belong to `EMAILER_SENDER_IDENTITY`. The domain does not need a mailbox.                                                                                                                                           |
+| `EMAILER_POSTAL_ADDRESS`     | yes      | Physical postal address rendered into every message footer (CAN-SPAM). Empty fails closed at function construction.                                                                                                                   |
+| `AWS_REGION`                 | yes      | Region for both stacks. Never guessed.                                                                                                                                                                                                |
+| `EMAILER_DNS`                | no       | `route53` or `cloudflare`: the identity stack publishes its DNS records in the Route 53 hosted zone of the same account, or in the enclosing Cloudflare zone. Unset: you publish them by hand.                                        |
+| `EMAILER_DMARC_REPORT_EMAIL` | no       | Only with `EMAILER_DNS`: also publish `_dmarc.<identity>` as `p=none`, reporting to this address. Set it only if the domain has no DMARC record yet. A report address on another domain still needs its authorization record by hand. |
+| `EMAILER_DAILY_SEND_CEILING` | no       | Positive integer daily send cap for this stage.                                                                                                                                                                                       |
+| `EMAILER_ALERT_EMAIL`        | no       | Alarm notifications. SNS sends one confirmation per stage; follow the `SubscribeURL` before expecting mail.                                                                                                                           |
+| `EMAILER_API_URL`            | CLI      | API Function URL from the `apiUrl` stack output.                                                                                                                                                                                      |
+| `AWS_PROFILE`                | deploy   | AWS CLI/SSO profile. Leave unset if you export credentials into the environment.                                                                                                                                                      |
 
 Do not set `EMAILER_UNSUBSCRIBE_SECRET`. Alchemy mints it, binds it into the functions, and **rotates it when the stage is destroyed**, which invalidates every unsubscribe link already sent.
 
@@ -71,48 +72,62 @@ pnpm exec alchemy profile edit --profile emailer --add AWS --method sso --set ss
 pnpm exec alchemy provider aws bootstrap --aws-profile <your-aws-sso-profile> --region <region>
 ```
 
+**Only for `EMAILER_DNS=cloudflare`.** Add Cloudflare to the profile, with OAuth or an API token that has Zone Read and DNS Edit on the zone. A `CLOUDFLARE_API_TOKEN` together with `CLOUDFLARE_ACCOUNT_ID`, in the environment or the env file, takes precedence over the profile.
+
+```sh
+pnpm exec alchemy profile edit --profile emailer --add Cloudflare
+```
+
 ## Sending identity (once per account and Region)
 
-DNS is published by hand. The stacks never create Route 53 or other DNS records.
+The identity stack owns the SES domain identity. With `EMAILER_DNS` set, it also owns the DNS records the identity needs. Without it, you publish them by hand, partly before the deploy.
 
-1. Publish MX, SPF and DMARC **before** SES probes MAIL FROM.
-2. Deploy the identity stack at `--stage shared`.
-3. Publish the three Easy DKIM `CNAME`s (command below).
-4. Wait for `DkimStatus=SUCCESS` and `MailFromDomainStatus=SUCCESS`, usually minutes and at most 72 hours.
-   - Until DKIM verifies, SES refuses to send.
-   - Until MAIL FROM verifies, SES uses its own bounce domain, so SPF does not align.
-5. On a delivered message, confirm `spf=pass`, `dkim=pass` and `dmarc=pass`.
+### Automatic DNS
 
-Replace `mail.example.com` with your `EMAILER_SENDER_IDENTITY` and `us-east-1` with your `AWS_REGION`. A root domain works the same way, e.g. `bounce.example.com` and `_dmarc.example.com`.
+The stack writes the MAIL FROM MX and SPF records at `bounce.<identity>` first, and sets the identity's MAIL FROM only after both writes finish. The three DKIM `CNAME`s follow, read from SES. The DMARC record is written only when `EMAILER_DMARC_REPORT_EMAIL` is set, independently of the others.
+
+Records are kept when the stack is destroyed, like the identity.
+
+- **`route53`:** the public hosted zone in the same AWS account that contains the domain. **An existing record with the same name and type is overwritten without warning.**
+- **`cloudflare`:** the Cloudflare zone that encloses the domain. An existing record with the same name and type stops the deploy until you adopt it (see below). Switching this mode off later is not a configuration change: the records' state still needs the Cloudflare provider.
+- **Reports to another domain:** if `EMAILER_DMARC_REPORT_EMAIL` is on another organizational domain, its authorization record, `<identity>._report._dmarc.<report host>` → `"v=DMARC1"`, stays manual.
+
+### Manual DNS
+
+Publish MX, SPF and DMARC **before** the first deploy, so SES never finds the MAIL FROM record missing. Replace `mail.example.com` with your `EMAILER_SENDER_IDENTITY` and `us-east-1` with your `AWS_REGION`. A root domain works the same way, e.g. `bounce.example.com` and `_dmarc.example.com`.
 
 - MX `bounce.mail.example.com` → `10 feedback-smtp.us-east-1.amazonses.com`
 - TXT `bounce.mail.example.com` → `"v=spf1 include:amazonses.com ~all"`
 - TXT `_dmarc.mail.example.com` → `"v=DMARC1; p=none; rua=mailto:dmarc@your-reports.example"`
 - If `rua` is on a different organizational domain, also publish TXT `mail.example.com._report._dmarc.<rua-host>` → `"v=DMARC1"`
-- After deploy: CNAME `<token>._domainkey.mail.example.com` → `<token>.<SigningHostedZone>` for each DKIM token
 
-**A name can hold only one DMARC record.** If `_dmarc.<your domain>` already exists, which is common on a root domain, keep it instead of adding a second one. It must not set `aspf=s`.
-
-Read the DKIM tokens and `SigningHostedZone` after the deploy. Never assume the zone; it differs by Region:
-
-```sh
-aws sesv2 get-email-identity --email-identity mail.example.com --query 'DkimAttributes.[Tokens,SigningHostedZone]'
-```
-
-Do not use the `bounce.` subdomain as a From address. Never destroy stack `EmailerSending`. Exclude `AWS.SES.*` from `alchemy unsafe nuke`.
-
-**If the domain is already an SES identity in this account and Region**, for example one set up by another email service, the deploy stops with `OwnedBySomeoneElse`:
-
-- Keep that identity; recreating it can break DKIM.
-- Publish the MAIL FROM MX, SPF and DMARC records.
-- Deploy this stack once with `--adopt`. Its DKIM records stay as they are.
-- Remove the old MAIL FROM subdomain's records after `MailFromDomainStatus=SUCCESS`.
-- Pass `--adopt` only to this one-resource stack, never with `alchemy.run.ts`, where it applies to every resource.
-- To move a deployed `EmailerSending` onto such a domain, destroy it first. Changing `EMAILER_SENDER_IDENTITY` in place plans a replacement, and that path takes over the existing identity without the ownership check.
+### Deploy and verify
 
 ```sh
 pnpm exec alchemy deploy --config stacks/sending-identity.ts --stage shared --env-file .env --profile emailer --yes --no-input
 ```
+
+1. **Manual DNS only:** publish the three `CNAME`s from the stack output `dkimRecords` (`name` → `value`). Copy their target: the zone differs by Region and by identity.
+2. Wait for `DkimStatus=SUCCESS` and `MailFromDomainStatus=SUCCESS`, usually minutes and at most 72 hours.
+   - Until DKIM verifies, SES refuses to send.
+   - Until MAIL FROM verifies, SES uses its own bounce domain, so SPF does not align.
+3. On a delivered message, confirm `spf=pass`, `dkim=pass` and `dmarc=pass`.
+
+### Rules for either way
+
+- **A name can hold only one DMARC record.** If `_dmarc.<your domain>` already exists, which is common on a root domain, keep it instead of adding a second one. It must not set `aspf=s`.
+- Do not use the `bounce.` subdomain as a From address.
+- Never destroy stack `EmailerSending`.
+- With any config, exclude `AWS.SES.*` from `alchemy unsafe nuke`.
+- Never run `alchemy unsafe nuke` with this stack's config at all: it enumerates the SES identity and every DNS record the credentials reach.
+
+**If the identity (or, in `cloudflare` mode, one of its records) already exists**, for example set up by another email service, the deploy stops with `OwnedBySomeoneElse`:
+
+- Keep that identity; recreating it can break DKIM.
+- Deploy this stack once with `--adopt`. It takes over the identity and every existing record it declares. The existing DKIM records keep their values.
+- Remove the old MAIL FROM subdomain's records after `MailFromDomainStatus=SUCCESS`.
+- Never pass `--adopt` with `alchemy.run.ts`, where it applies to every resource.
+- To move a deployed `EmailerSending` onto such a domain, destroy it first. Changing `EMAILER_SENDER_IDENTITY` in place plans a replacement, and that path takes over the existing identity without the ownership check.
 
 ## Deploy the service
 

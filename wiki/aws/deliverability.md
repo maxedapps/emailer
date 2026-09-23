@@ -15,7 +15,7 @@ Deliverability is a feedback-controlled operation: valid authentication, wanted 
 
 Default SES MAIL FROM is not your visible From domain, so SPF passing alone does not prove DMARC alignment. Easy DKIM can provide alignment; a custom MAIL FROM provides another path. Validate received headers in a real mailbox instead of treating DNS record creation as proof of success.
 
-Publish MAIL FROM records before SES or a public resolver probes them. A resolver that answers NXDOMAIN may cache that for the zone's negative TTL. After publication, verify at the authoritative server first, then at a public resolver. [DKIM](https://docs.aws.amazon.com/ses/latest/dg/send-email-authentication-dkim.html), [Custom MAIL FROM](https://docs.aws.amazon.com/ses/latest/dg/mail-from.html), [DMARC](https://docs.aws.amazon.com/ses/latest/dg/send-email-authentication-dmarc.html)
+Publish MAIL FROM records before SES or a public resolver probes them. A resolver that answers NXDOMAIN may cache that for the zone's negative TTL — the smaller of the SOA record's own TTL and its MINIMUM field (RFC 2308), 15 minutes for Route 53's defaults and 30 for Cloudflare's. After publication, verify at the authoritative server first, then at a public resolver. [DKIM](https://docs.aws.amazon.com/ses/latest/dg/send-email-authentication-dkim.html), [Custom MAIL FROM](https://docs.aws.amazon.com/ses/latest/dg/mail-from.html), [DMARC](https://docs.aws.amazon.com/ses/latest/dg/send-email-authentication-dmarc.html)
 
 A cautious rollout starts with DMARC reporting and verified alignment, then strengthens policy based on all legitimate senders for that domain. `p=none` is the required starting point. Do not overwrite existing SPF/DMARC records without inventorying those senders.
 

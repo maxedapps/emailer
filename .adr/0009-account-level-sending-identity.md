@@ -7,6 +7,7 @@
 - Supersedes in part: [ADR-0002](0002-domain-sending-identity.md)'s per-stage identity lifecycle, its `example.com` domain choice, and its propagation-race explanation with the `INSYNC`/`dig` obligation built on it. Also two clauses of [ADR-0001](0001-resource-owning-effect-services.md): "Keep one root `alchemy.run.ts`", since the identity has its own stack; and the SES identity's placement inside `Mailer.ts`, which keeps its service, configuration set, send binding and implementation. ADR-0001's own allowance for "a small separate resource module … if a concrete shared ownership need arises" is the need met here.
 - Extended by: [ADR-0010](0010-aligned-mail-from-spf-and-dmarc.md) — MAIL FROM, SPF and DMARC records join the retained inventory.
 - Superseded in part: [ADR-0017](0017-adopted-root-domain-sending-identity.md) — the `mail.example.com` domain choice and "created once": the root-domain identity is adopted, not created.
+- Superseded in part: [ADR-0018](0018-optional-dns-management.md) — "published **once**, operationally" and alternative 5: with `EMAILER_DNS` the stack declares the records itself.
 
 ## Context
 

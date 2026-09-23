@@ -16,6 +16,7 @@
   - ADR-0009's one-shot identity stack, `RemovalPolicy.retain()` and cross-stage reference;
   - ADR-0010's custom MAIL FROM at `bounce.<identity>`, `USE_DEFAULT_VALUE` and `p=none` first;
   - ADR-0002's missing `Reply-To`.
+- Superseded in part: [ADR-0018](0018-optional-dns-management.md) — `--adopt` on the "one-resource" identity stack: the stack now also declares DNS records, and adopting existing ones is intended.
 
 ## Context
 
