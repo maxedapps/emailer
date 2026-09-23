@@ -8,11 +8,11 @@ import { Mailer, submissionTimeout } from "./Mailer.ts";
 import { AudienceStore } from "../storage/Audience.ts";
 import { CampaignStore } from "../storage/Campaigns.ts";
 import { operationTimeout } from "../storage/Items.ts";
-import { unsubscribeLink } from "../consent/Unsubscribe.ts";
 
 import type { DispatchMessage } from "./Dispatch.ts";
 import type { SendGuard } from "./SendGuard.ts";
-import type { OutgoingMessage } from "./Mailer.ts";
+import type { SendPurpose } from "./Mailer.ts";
+import type { MessageContent } from "./Message.ts";
 
 /**
  * Members per invocation. One page is the only loop shape, so every two-page
@@ -160,6 +160,7 @@ export const runSlice = Effect.fn("Dispatching.runSlice")(function* (
 
   const page = listed.value;
   const { text, html } = yield* campaigns.getCampaignBody(message.campaignId);
+  const content: MessageContent = { subject, text, html };
   // ExclusiveStartKey of the last member this slice finished (skip, settle, or
   // already-claimed). A budget overrun before sending N checkpoints here so
   // the next page starts after N-1.
@@ -243,20 +244,11 @@ export const runSlice = Effect.fn("Dispatching.runSlice")(function* (
       continue;
     }
 
-    const unsubscribeUrl = yield* unsubscribeLink(member.email).pipe(Effect.orDie);
-
-    const outgoing: OutgoingMessage = {
+    const submitted = yield* submitClaimed({
       recipient: member.email,
-      subject,
-      text,
-      html,
-      unsubscribeUrl,
+      content,
       campaignId: message.campaignId,
       sendId,
-    };
-
-    const submitted = yield* submitClaimed({
-      outgoing,
       contactId: member.id,
       runToken: message.runToken,
       limit: guard.limit,
@@ -282,7 +274,10 @@ export const runSlice = Effect.fn("Dispatching.runSlice")(function* (
 type ClaimedSubmit = { readonly kind: "next" } | { readonly kind: "stop" };
 
 const submitClaimed = Effect.fn("Dispatching.submitClaimed")(function* (input: {
-  readonly outgoing: OutgoingMessage;
+  readonly recipient: string;
+  readonly content: MessageContent;
+  readonly campaignId: string;
+  readonly sendId: string;
   readonly contactId: string;
   readonly runToken: string;
   readonly limit: number;
@@ -290,20 +285,21 @@ const submitClaimed = Effect.fn("Dispatching.submitClaimed")(function* (input: {
 }) {
   const mailer = yield* Mailer;
   const campaigns = yield* CampaignStore;
-  const { outgoing, contactId, runToken, limit } = input;
+  const { recipient, content, campaignId, sendId, contactId, runToken, limit } = input;
+  const purpose: SendPurpose = { kind: "campaign", campaignId, sendId };
 
   for (let attempt = 0; ; attempt += 1) {
     const delay = attempt === 0 ? input.firstDelay : yield* consumeSlot(limit);
 
     yield* Effect.sleep(delay);
 
-    const attemptResult = yield* Effect.result(mailer.submit(outgoing));
+    const attemptResult = yield* Effect.result(mailer.send(recipient, content, purpose));
     const finishedAt = yield* nowIso;
 
     if (Result.isFailure(attemptResult)) {
       yield* campaigns.settleRecipient(
-        outgoing.campaignId,
-        outgoing.sendId,
+        campaignId,
+        sendId,
         contactId,
         { state: "uncertain" },
         finishedAt,
@@ -316,8 +312,8 @@ const submitClaimed = Effect.fn("Dispatching.submitClaimed")(function* (input: {
 
     if (sent.outcome === "accepted") {
       yield* campaigns.settleRecipient(
-        outgoing.campaignId,
-        outgoing.sendId,
+        campaignId,
+        sendId,
         contactId,
         { state: "accepted", messageId: sent.messageId },
         finishedAt,
@@ -331,19 +327,13 @@ const submitClaimed = Effect.fn("Dispatching.submitClaimed")(function* (input: {
 
       if (backoff === undefined) {
         yield* campaigns.settleRecipient(
-          outgoing.campaignId,
-          outgoing.sendId,
+          campaignId,
+          sendId,
           contactId,
           { state: "rejected", rejectionCode: "rate-limited" },
           finishedAt,
         );
-        yield* campaigns.pauseRun(
-          outgoing.campaignId,
-          runToken,
-          "rate-limited",
-          contactId,
-          finishedAt,
-        );
+        yield* campaigns.pauseRun(campaignId, runToken, "rate-limited", contactId, finishedAt);
 
         return { kind: "stop" } satisfies ClaimedSubmit;
       }
@@ -353,21 +343,15 @@ const submitClaimed = Effect.fn("Dispatching.submitClaimed")(function* (input: {
     }
 
     yield* campaigns.settleRecipient(
-      outgoing.campaignId,
-      outgoing.sendId,
+      campaignId,
+      sendId,
       contactId,
       { state: "rejected", rejectionCode: sent.rejectionCode },
       finishedAt,
     );
 
     if (sent.rejectionCode === "sending-paused") {
-      yield* campaigns.pauseRun(
-        outgoing.campaignId,
-        runToken,
-        "sending-paused",
-        contactId,
-        finishedAt,
-      );
+      yield* campaigns.pauseRun(campaignId, runToken, "sending-paused", contactId, finishedAt);
 
       return { kind: "stop" } satisfies ClaimedSubmit;
     }

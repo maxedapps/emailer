@@ -1,21 +1,16 @@
 import * as Retry from "@distilled.cloud/aws/Retry";
 import * as AWS from "alchemy/AWS";
 import { fromCredentials } from "alchemy/AWS/Credentials";
-import { Cause, ConfigProvider, Effect, Exit, Layer, Result, Schema } from "effect";
+import { ConfigProvider, Effect, Layer, Redacted, Result, Schema } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 import { describe, expect, it } from "vitest";
 
-import {
-  belongsToIdentity,
-  footerFor,
-  htmlFooterFor,
-  mailerAddresses,
-  makeSubmit,
-  SenderNotOnIdentity,
-  SubmissionUncertain,
-} from "./Mailer.ts";
+import { mintToken } from "../consent/Unsubscribe.ts";
+import { makeSend, SubmissionUncertain } from "./Mailer.ts";
+import { footerFor, htmlFooterFor } from "./Message.ts";
 
-import type { OutgoingMessage } from "./Mailer.ts";
+import type { SendPurpose } from "./Mailer.ts";
+import type { MessageContent } from "./Message.ts";
 
 interface SentRequest {
   readonly url: string;
@@ -89,38 +84,61 @@ const identity = asResource<AWS.SES.EmailIdentity>(identityStandIn);
 
 const configurationSet = asResource<AWS.SES.ConfigurationSet>(configurationSetStandIn);
 
-const unsubscribeUrl = "https://unsub.lambda-url.eu-central-1.on.aws/unsubscribe/token";
+const unsubscribeBase = "https://unsub.lambda-url.eu-central-1.on.aws";
+
+const unsubscribeSecret = "8f14e45fceea167a5a36dedd4bea2543a1b2c3d4e5f60718293a4b5c6d7e8f90";
+
+const recipient = "max@example.com";
+
+const unsubscribeUrl = `${unsubscribeBase}/unsubscribe/${mintToken(Redacted.make(unsubscribeSecret), recipient)}`;
 
 const postalAddress = "Example GmbH, Example Street 1, 12345 Example City, Germany";
 
-const message: OutgoingMessage = {
-  recipient: "max@example.com",
+const content: MessageContent = {
   subject: "Grüße 😀",
   text: "Hallo\n\nZeile zwei — ende",
   html: undefined,
-  unsubscribeUrl,
+};
+
+const campaignSend: SendPurpose = {
+  kind: "campaign",
   campaignId: "0195f0a0-1111-4222-8333-4444444ca409",
   sendId: "0195f0a0-1111-4222-8333-44444444e5d1",
 };
 
-const submitting = (transport: Transport, outgoing: OutgoingMessage = message) =>
+const sending = (
+  transport: Transport,
+  sent: MessageContent = content,
+  purpose: SendPurpose = campaignSend,
+) =>
   Effect.gen(function* () {
     const send = yield* AWS.SES.SendEmail(identity, configurationSet);
 
-    return yield* Effect.result(makeSubmit(send, "news@example.com", postalAddress)(outgoing));
-  }).pipe(Effect.provide(sendEmailLayer(transport)));
+    return yield* Effect.result(
+      makeSend(send, "news@example.com", postalAddress)(recipient, sent, purpose),
+    );
+  }).pipe(
+    Effect.provide(sendEmailLayer(transport)),
+    Effect.provideService(
+      ConfigProvider.ConfigProvider,
+      ConfigProvider.fromEnvRecord({
+        EMAILER_UNSUBSCRIBE_URL: `${unsubscribeBase}/`,
+        EMAILER_UNSUBSCRIBE_SECRET: unsubscribeSecret,
+      }),
+    ),
+  );
 
 const acceptedBody = JSON.stringify({ MessageId: "0100018f-deadbeef" });
 
 const parseJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
 
-describe("makeSubmit", () => {
+describe("makeSend", () => {
   it("submits one message with one recipient, the exact content and the bound configuration set", () =>
     Effect.runPromise(
       Effect.gen(function* () {
         const transport = transportReplying(() => awsJson(200, acceptedBody));
 
-        const outcome = yield* submitting(transport);
+        const outcome = yield* sending(transport);
 
         expect(Result.isSuccess(outcome) && outcome.success).toStrictEqual({
           outcome: "accepted",
@@ -154,8 +172,8 @@ describe("makeSubmit", () => {
             },
           },
           EmailTags: [
-            { Name: "campaignId", Value: message.campaignId },
-            { Name: "sendId", Value: message.sendId },
+            { Name: "campaignId", Value: campaignSend.campaignId },
+            { Name: "sendId", Value: campaignSend.sendId },
           ],
           ConfigurationSetName: "emailer-mail",
         });
@@ -168,7 +186,7 @@ describe("makeSubmit", () => {
         const transport = transportReplying(() => awsJson(200, acceptedBody));
         const html = "<html><body><p>Hallo</p></body></html>";
 
-        const outcome = yield* submitting(transport, { ...message, html });
+        const outcome = yield* sending(transport, { ...content, html });
 
         expect(Result.isSuccess(outcome) && outcome.success).toStrictEqual({
           outcome: "accepted",
@@ -200,21 +218,20 @@ describe("makeSubmit", () => {
             },
           },
           EmailTags: [
-            { Name: "campaignId", Value: message.campaignId },
-            { Name: "sendId", Value: message.sendId },
+            { Name: "campaignId", Value: campaignSend.campaignId },
+            { Name: "sendId", Value: campaignSend.sendId },
           ],
           ConfigurationSetName: "emailer-mail",
         });
       }),
     ));
 
-  it("inserts the HTML footer before an uppercase closing body tag", () =>
+  it("sends a test with the same content and headers but no message tags", () =>
     Effect.runPromise(
       Effect.gen(function* () {
         const transport = transportReplying(() => awsJson(200, acceptedBody));
-        const html = "<HTML><BODY><p>Hallo</p></BODY></HTML>";
 
-        yield* submitting(transport, { ...message, html });
+        yield* sending(transport, content, { kind: "test" });
 
         const request = yield* parseJson(transport.sent[0]?.body ?? "{}");
 
@@ -229,10 +246,6 @@ describe("makeSubmit", () => {
                   Data: `Hallo\n\nZeile zwei — ende${footerFor(unsubscribeUrl, postalAddress)}`,
                   Charset: "UTF-8",
                 },
-                Html: {
-                  Data: `<HTML><BODY><p>Hallo</p>${htmlFooterFor(unsubscribeUrl, postalAddress)}</BODY></HTML>`,
-                  Charset: "UTF-8",
-                },
               },
               Headers: [
                 { Name: "List-Unsubscribe", Value: `<${unsubscribeUrl}>` },
@@ -240,92 +253,6 @@ describe("makeSubmit", () => {
               ],
             },
           },
-          EmailTags: [
-            { Name: "campaignId", Value: message.campaignId },
-            { Name: "sendId", Value: message.sendId },
-          ],
-          ConfigurationSetName: "emailer-mail",
-        });
-      }),
-    ));
-
-  it("inserts the HTML footer before </body> when the document contains İ", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const transport = transportReplying(() => awsJson(200, acceptedBody));
-        const html = "<html><body>İçerik</body></html>";
-
-        yield* submitting(transport, { ...message, html });
-
-        const request = yield* parseJson(transport.sent[0]?.body ?? "{}");
-
-        expect(request).toStrictEqual({
-          FromEmailAddress: "news@example.com",
-          Destination: { ToAddresses: ["max@example.com"] },
-          Content: {
-            Simple: {
-              Subject: { Data: "Grüße 😀", Charset: "UTF-8" },
-              Body: {
-                Text: {
-                  Data: `Hallo\n\nZeile zwei — ende${footerFor(unsubscribeUrl, postalAddress)}`,
-                  Charset: "UTF-8",
-                },
-                Html: {
-                  Data: `<html><body>İçerik${htmlFooterFor(unsubscribeUrl, postalAddress)}</body></html>`,
-                  Charset: "UTF-8",
-                },
-              },
-              Headers: [
-                { Name: "List-Unsubscribe", Value: `<${unsubscribeUrl}>` },
-                { Name: "List-Unsubscribe-Post", Value: "List-Unsubscribe=One-Click" },
-              ],
-            },
-          },
-          EmailTags: [
-            { Name: "campaignId", Value: message.campaignId },
-            { Name: "sendId", Value: message.sendId },
-          ],
-          ConfigurationSetName: "emailer-mail",
-        });
-      }),
-    ));
-
-  it("appends the HTML footer when the document has no closing body tag", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const transport = transportReplying(() => awsJson(200, acceptedBody));
-        const html = "<p>Hallo</p>";
-
-        yield* submitting(transport, { ...message, html });
-
-        const request = yield* parseJson(transport.sent[0]?.body ?? "{}");
-
-        expect(request).toStrictEqual({
-          FromEmailAddress: "news@example.com",
-          Destination: { ToAddresses: ["max@example.com"] },
-          Content: {
-            Simple: {
-              Subject: { Data: "Grüße 😀", Charset: "UTF-8" },
-              Body: {
-                Text: {
-                  Data: `Hallo\n\nZeile zwei — ende${footerFor(unsubscribeUrl, postalAddress)}`,
-                  Charset: "UTF-8",
-                },
-                Html: {
-                  Data: `${html}${htmlFooterFor(unsubscribeUrl, postalAddress)}`,
-                  Charset: "UTF-8",
-                },
-              },
-              Headers: [
-                { Name: "List-Unsubscribe", Value: `<${unsubscribeUrl}>` },
-                { Name: "List-Unsubscribe-Post", Value: "List-Unsubscribe=One-Click" },
-              ],
-            },
-          },
-          EmailTags: [
-            { Name: "campaignId", Value: message.campaignId },
-            { Name: "sendId", Value: message.sendId },
-          ],
           ConfigurationSetName: "emailer-mail",
         });
       }),
@@ -351,7 +278,7 @@ describe("makeSubmit", () => {
           awsJson(429, JSON.stringify({ message: "rate exceeded" }), "TooManyRequestsException"),
         );
 
-        const outcome = yield* submitting(transport);
+        const outcome = yield* sending(transport);
 
         expect(Result.isSuccess(outcome) && outcome.success).toStrictEqual({
           outcome: "rejected",
@@ -392,7 +319,7 @@ describe("makeSubmit", () => {
           awsJson(400, JSON.stringify({ message: "not verified" }), "MessageRejected"),
         );
 
-        const outcome = yield* submitting(transport);
+        const outcome = yield* sending(transport);
 
         expect(Result.isSuccess(outcome) && outcome.success).toStrictEqual({
           outcome: "rejected",
@@ -409,7 +336,7 @@ describe("makeSubmit", () => {
           awsJson(400, JSON.stringify({ message: "slow down" }), "ThrottlingException"),
         );
 
-        const outcome = yield* submitting(transport);
+        const outcome = yield* sending(transport);
 
         expect(Result.isSuccess(outcome) && outcome.success).toStrictEqual({
           outcome: "rejected",
@@ -426,7 +353,7 @@ describe("makeSubmit", () => {
           awsJson(500, JSON.stringify({ message: "we broke" })),
         );
 
-        const outcome = yield* submitting(transport);
+        const outcome = yield* sending(transport);
 
         expect(Result.isFailure(outcome) ? outcome.failure : undefined).toBeInstanceOf(
           SubmissionUncertain,
@@ -442,7 +369,7 @@ describe("makeSubmit", () => {
           throw new TypeError("fetch failed: ECONNREFUSED");
         });
 
-        const outcome = yield* submitting(transport);
+        const outcome = yield* sending(transport);
 
         expect(Result.isFailure(outcome) && outcome.failure.reason).toBe("transport");
         expect(transport.sent).toHaveLength(1);
@@ -454,7 +381,7 @@ describe("makeSubmit", () => {
       Effect.gen(function* () {
         const transport = transportReplying(() => awsJson(200, JSON.stringify({})));
 
-        const outcome = yield* submitting(transport);
+        const outcome = yield* sending(transport);
 
         expect(Result.isFailure(outcome) && outcome.failure.reason).toBe("malformed-response");
       }),
@@ -467,10 +394,10 @@ describe("makeSubmit", () => {
           awsJson(500, JSON.stringify({ message: "we broke" })),
         );
 
-        const outcome = yield* submitting(transport);
+        const outcome = yield* sending(transport);
         const rendered = String(Result.isFailure(outcome) ? outcome.failure : "");
 
-        expect(rendered).not.toContain(message.text);
+        expect(rendered).not.toContain(content.text);
         expect(rendered).not.toContain("not-a-real-secret");
       }),
     ));
@@ -494,106 +421,6 @@ describe("Retry.none", () => {
         }).pipe(Effect.provide(sendEmailLayer(transport)), Effect.exit);
 
         expect(transport.sent).toHaveLength(1);
-      }),
-    ));
-});
-
-describe("belongsToIdentity", () => {
-  it("accepts an address whose domain is the identity", () => {
-    expect(belongsToIdentity("no-reply@example.com", "example.com")).toBe(true);
-  });
-
-  it("accepts an address on a subdomain of the identity", () => {
-    expect(belongsToIdentity("no-reply@mail.example.com", "example.com")).toBe(true);
-  });
-
-  it("refuses a domain that merely ends with the identity's characters", () => {
-    expect(belongsToIdentity("no-reply@notexample.com", "example.com")).toBe(false);
-  });
-
-  it("refuses an unrelated domain", () => {
-    expect(belongsToIdentity("no-reply@other.example.net", "example.com")).toBe(false);
-  });
-
-  it("refuses an address on the parent of a subdomain identity", () => {
-    expect(belongsToIdentity("emailer-test@example.com", "mail.example.com")).toBe(false);
-  });
-});
-
-describe("footerFor", () => {
-  // The literal, not a composition of the same interpolations: asserting only
-  // that the link and the address appear somewhere would pass if the two were
-  // swapped, and every message would then label the postal address as the
-  // unsubscribe link.
-  it("labels the link and separates itself from the campaign body", () => {
-    expect(footerFor(unsubscribeUrl, postalAddress)).toBe(
-      `\n\n---\nUnsubscribe from these emails: ${unsubscribeUrl}\n\n${postalAddress}`,
-    );
-  });
-});
-
-describe("htmlFooterFor", () => {
-  it("labels the link and the postal address as HTML paragraphs", () => {
-    const postal = `Acme & Co <"O'Reilly">`;
-
-    expect(htmlFooterFor(unsubscribeUrl, postal)).toBe(
-      `<p>Unsubscribe from these emails: <a href="${unsubscribeUrl}">${unsubscribeUrl}</a></p><p>Acme &amp; Co &lt;&quot;O&#39;Reilly&quot;&gt;</p>`,
-    );
-  });
-});
-
-describe("mailerAddresses", () => {
-  const resolving = (postal: string = postalAddress) =>
-    Effect.result(mailerAddresses).pipe(
-      Effect.provideService(
-        ConfigProvider.ConfigProvider,
-        ConfigProvider.fromEnvRecord({
-          EMAILER_SENDER_IDENTITY: "Example.COM",
-          EMAILER_FROM_EMAIL: "no-reply@example.com",
-          EMAILER_POSTAL_ADDRESS: postal,
-        }),
-      ),
-    );
-
-  it("refuses a blank postal address rather than sending non-compliant mail", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        expect(Result.isFailure(yield* resolving("   "))).toBe(true);
-      }),
-    ));
-
-  it("trims the configured postal address", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const outcome = yield* resolving(`  ${postalAddress}  `);
-
-        expect(Result.isSuccess(outcome) && outcome.success.postalAddress).toBe(postalAddress);
-      }),
-    ));
-
-  it("dies when the From address is not on the identity", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const exit = yield* Effect.exit(mailerAddresses).pipe(
-          Effect.provideService(
-            ConfigProvider.ConfigProvider,
-            ConfigProvider.fromEnvRecord({
-              EMAILER_SENDER_IDENTITY: "mail.example.com",
-              EMAILER_FROM_EMAIL: "emailer-test@example.com",
-              EMAILER_POSTAL_ADDRESS: postalAddress,
-            }),
-          ),
-        );
-
-        if (!Exit.isFailure(exit)) {
-          throw new Error("Expected mailerAddresses to die");
-        }
-
-        const defect = Cause.findDefect(exit.cause);
-
-        expect(Result.isSuccess(defect) && defect.success instanceof SenderNotOnIdentity).toBe(
-          true,
-        );
       }),
     ));
 });

@@ -1,16 +1,6 @@
 import { NodeCrypto } from "@effect/platform-node";
 import * as Schemas from "@emailer/api/Schemas";
-import {
-  Clock,
-  ConfigProvider,
-  Duration,
-  Effect,
-  Fiber,
-  Layer,
-  Logger,
-  Option,
-  Result,
-} from "effect";
+import { Clock, Duration, Effect, Fiber, Layer, Logger, Option, Result } from "effect";
 import { TestClock } from "effect/testing";
 import { RateLimiter } from "effect/unstable/persistence";
 import { describe, expect, it } from "vitest";
@@ -23,7 +13,8 @@ import { CampaignStore } from "../storage/Campaigns.ts";
 import { unusedAudience } from "../storage/Testing.ts";
 
 import type { PauseReason } from "@emailer/api/Schemas";
-import type { OutgoingMessage, SubmissionOutcome } from "./Mailer.ts";
+import type { SendPurpose, SubmissionOutcome } from "./Mailer.ts";
+import type { MessageContent } from "./Message.ts";
 import type { SendGuard } from "./SendGuard.ts";
 import type { AddressStatus } from "../storage/Addresses.ts";
 import type { RecipientSettlement, SkipReason } from "../storage/Campaigns.ts";
@@ -69,15 +60,6 @@ const defaultGuard: SendGuard = {
 const zeros = { accepted: 0, bounced: 0, complained: 0 };
 
 const sliceTimeout = Duration.minutes(5);
-
-const unsubscribeEnv = {
-  EMAILER_UNSUBSCRIBE_URL: "https://unsubscribe.example.com/",
-  EMAILER_UNSUBSCRIBE_SECRET: "8f14e45fceea167a5a36dedd4bea2543a1b2c3d4e5f60718293a4b5c6d7e8f90",
-};
-
-const configuration = Layer.succeed(ConfigProvider.ConfigProvider)(
-  ConfigProvider.fromEnvRecord(unsubscribeEnv),
-);
 
 interface RecipientRow {
   readonly sendId?: string;
@@ -355,22 +337,26 @@ const limiterDouble = (delays: ReadonlyArray<Duration.Duration> = []): LimiterDo
   return { layer, consumes };
 };
 
+interface SentMessage extends MessageContent {
+  readonly recipient: string;
+  readonly purpose: SendPurpose;
+}
+
 interface MailerDouble {
   readonly layer: Layer.Layer<Mailer>;
-  readonly submits: Array<OutgoingMessage>;
+  readonly sent: Array<SentMessage>;
 }
 
 const mailerDouble = (
   outcomes: ReadonlyArray<SubmissionOutcome | SubmissionUncertain> = [],
 ): MailerDouble => {
-  const submits: Array<OutgoingMessage> = [];
+  const sent: Array<SentMessage> = [];
   const remaining = [...outcomes];
 
   const layer = Layer.succeed(Mailer)({
-    sender: "no-reply@example.com",
-    submit: (message) =>
+    send: (recipient, content, purpose) =>
       Effect.gen(function* () {
-        submits.push(message);
+        sent.push({ recipient, ...content, purpose });
 
         const next = remaining.shift();
 
@@ -382,7 +368,7 @@ const mailerDouble = (
       }),
   });
 
-  return { layer, submits };
+  return { layer, sent };
 };
 
 interface WakeDouble {
@@ -475,7 +461,6 @@ const fixture = (scenario: Scenario = {}): Fixture => {
       limiter.layer,
       Layer.succeed(DispatchGuard)({ current: Effect.succeed(guard) }),
       NodeCrypto.layer,
-      configuration,
     ),
   };
 };
@@ -490,9 +475,7 @@ const runSliceNow = (fix: Fixture, extraDeadline = sliceTimeout) =>
   });
 
 const onTestClock = <A, E, R>(operation: Effect.Effect<A, E, R>) =>
-  operation.pipe(
-    Effect.provide(Layer.mergeAll(TestClock.layer(), NodeCrypto.layer, configuration)),
-  );
+  operation.pipe(Effect.provide(Layer.mergeAll(TestClock.layer(), NodeCrypto.layer)));
 
 const successOf = <A, E>(attempt: Result.Result<A, E>): A => {
   if (Result.isFailure(attempt)) {
@@ -525,7 +508,7 @@ describe("runSlice", () => {
           expect(fix.world.claims).toStrictEqual([memberA.id, memberB.id]);
           expect(fix.world.settlements).toHaveLength(2);
           expect(fix.world.counters.accepted).toBe(2);
-          expect(fix.mailer.submits.map((submit) => submit.recipient)).toStrictEqual([
+          expect(fix.mailer.sent.map((message) => message.recipient)).toStrictEqual([
             memberA.email,
             memberB.email,
           ]);
@@ -554,7 +537,23 @@ describe("runSlice", () => {
 
           successOf(yield* runSliceNow(fix));
 
-          expect(fix.mailer.submits.map((submit) => submit.text)).toStrictEqual([text]);
+          expect(fix.mailer.sent.map((message) => message.text)).toStrictEqual([text]);
+        }),
+      ),
+    ));
+
+  it("sends as the campaign, under the send id of the row it claimed", () =>
+    Effect.runPromise(
+      onTestClock(
+        Effect.gen(function* () {
+          const fix = fixture({ members: [memberA] });
+
+          successOf(yield* runSliceNow(fix));
+
+          expect(fix.mailer.sent.map((message) => message.purpose)).toStrictEqual([
+            { kind: "campaign", campaignId, sendId: fix.world.rows.get(memberA.id)?.sendId },
+          ]);
+          expect(fix.mailer.sent[0]?.subject).toBe(subject);
         }),
       ),
     ));
@@ -584,8 +583,8 @@ describe("runSlice", () => {
 
           successOf(yield* runSliceNow(fix));
 
-          expect(fix.mailer.submits).toHaveLength(1);
-          expect(fix.mailer.submits[0]?.html).toBe(html);
+          expect(fix.mailer.sent).toHaveLength(1);
+          expect(fix.mailer.sent[0]?.html).toBe(html);
         }),
       ),
     ));
@@ -598,8 +597,8 @@ describe("runSlice", () => {
 
           successOf(yield* runSliceNow(fix));
 
-          expect(fix.mailer.submits).toHaveLength(1);
-          expect(fix.mailer.submits[0]?.html).toBeUndefined();
+          expect(fix.mailer.sent).toHaveLength(1);
+          expect(fix.mailer.sent[0]?.html).toBeUndefined();
         }),
       ),
     ));
@@ -624,7 +623,7 @@ describe("runSlice", () => {
           ]);
           expect(fix.world.counters.skipped).toBe(2);
           expect(fix.world.counters.accepted).toBe(1);
-          expect(fix.mailer.submits).toHaveLength(1);
+          expect(fix.mailer.sent).toHaveLength(1);
           expect(fix.world.completed).toBe(1);
         }),
       ),
@@ -639,7 +638,7 @@ describe("runSlice", () => {
           successOf(yield* runSliceNow(fix));
 
           expect(fix.world.claims).toHaveLength(0);
-          expect(fix.mailer.submits).toHaveLength(0);
+          expect(fix.mailer.sent).toHaveLength(0);
           expect(fix.limiter.consumes).toHaveLength(2);
           expect(fix.world.completed).toBe(1);
           expect(fix.wake.messages).toHaveLength(0);
@@ -673,7 +672,7 @@ describe("runSlice", () => {
           successOf(attempt);
 
           expect(fix.world.claims).toHaveLength(0);
-          expect(fix.mailer.submits).toHaveLength(0);
+          expect(fix.mailer.sent).toHaveLength(0);
           expect(fix.world.listCalls).toHaveLength(0);
           expect(fix.world.settlements).toHaveLength(0);
           expect(fix.world.completed).toBe(0);
@@ -707,7 +706,7 @@ describe("runSlice", () => {
           successOf(yield* runSliceNow(fix));
 
           expect(fix.world.claims).toHaveLength(0);
-          expect(fix.mailer.submits).toHaveLength(0);
+          expect(fix.mailer.sent).toHaveLength(0);
           expect(fix.wake.messages).toHaveLength(0);
 
           const outcome = yield* CampaignStore.pipe(
@@ -747,7 +746,7 @@ describe("runSlice", () => {
 
           expect(fix.world.counters.accepted).toBe(1);
           expect(fix.world.claims).toStrictEqual([memberA.id]);
-          expect(fix.mailer.submits).toHaveLength(1);
+          expect(fix.mailer.sent).toHaveLength(1);
           expect(fix.world.checkpoints).toMatchObject([{ previous: undefined, next: memberA.id }]);
           expect(fix.wake.messages).toStrictEqual([{ campaignId, runToken }]);
           expect(fix.world.completed).toBe(0);
@@ -767,8 +766,8 @@ describe("runSlice", () => {
           successOf(yield* runSliceNow(continuation));
 
           expect(continuation.world.claims).toStrictEqual([memberB.id]);
-          expect(continuation.mailer.submits).toHaveLength(1);
-          expect(continuation.mailer.submits[0]?.recipient).toBe(memberB.email);
+          expect(continuation.mailer.sent).toHaveLength(1);
+          expect(continuation.mailer.sent[0]?.recipient).toBe(memberB.email);
           expect(continuation.world.completed).toBe(1);
         }),
       ),
@@ -784,7 +783,7 @@ describe("runSlice", () => {
 
           expect(failureOf(attempt)).toBeInstanceOf(SliceOverrun);
           expect(fix.world.claims).toHaveLength(0);
-          expect(fix.mailer.submits).toHaveLength(0);
+          expect(fix.mailer.sent).toHaveLength(0);
           expect(fix.world.checkpoints).toHaveLength(0);
           expect(fix.wake.messages).toHaveLength(0);
         }),
@@ -830,7 +829,7 @@ describe("runSlice", () => {
 
           successOf(yield* Fiber.join(fiber));
 
-          expect(fix.mailer.submits).toHaveLength(4);
+          expect(fix.mailer.sent).toHaveLength(4);
           expect(fix.limiter.consumes).toHaveLength(4);
           expect(
             fix.limiter.consumes.every((consumed) => consumed.limit === defaultGuard.limit),
@@ -876,7 +875,7 @@ describe("runSlice", () => {
 
           expect(fix.world.claims).toHaveLength(0);
           expect(fix.world.listCalls).toHaveLength(0);
-          expect(fix.mailer.submits).toHaveLength(0);
+          expect(fix.mailer.sent).toHaveLength(0);
           expect(fix.world.paused).toStrictEqual([{ reason: "daily-quota", cursor: memberA.id }]);
         }),
       ),
@@ -933,7 +932,7 @@ describe("runSlice", () => {
           expect(fix.world.claims).toHaveLength(0);
           expect(fix.world.listCalls).toHaveLength(0);
           expect(fix.limiter.consumes).toHaveLength(0);
-          expect(fix.mailer.submits).toHaveLength(0);
+          expect(fix.mailer.sent).toHaveLength(0);
           expect(fix.world.paused).toStrictEqual([{ reason: "reputation", cursor: memberA.id }]);
         }),
       ),
@@ -1068,7 +1067,7 @@ describe("runSlice", () => {
 
           expect(fix.world.skips).toStrictEqual([{ contactId: memberA.id, reason: "bouncing" }]);
           expect(fix.world.claims).toHaveLength(0);
-          expect(fix.mailer.submits).toHaveLength(0);
+          expect(fix.mailer.sent).toHaveLength(0);
           expect(fix.world.completed).toBe(1);
         }),
       ),
@@ -1095,7 +1094,7 @@ describe("runSlice", () => {
           expect(fix.world.counters.skipped).toBe(0);
           expect(fix.world.statusCalls).toStrictEqual([memberA.email]);
           expect(fix.limiter.consumes).toHaveLength(1);
-          expect(fix.mailer.submits.map((submit) => submit.recipient)).toStrictEqual([
+          expect(fix.mailer.sent.map((message) => message.recipient)).toStrictEqual([
             memberA.email,
           ]);
           expect(fix.world.checkpoints).toMatchObject([{ previous: undefined, next: later }]);
@@ -1120,7 +1119,7 @@ describe("runSlice", () => {
           expect(fix.world.checkpoints).toMatchObject([{ previous: undefined, next: memberB.id }]);
           expect(fix.world.rows.has(memberB.id)).toBe(false);
           expect(fix.world.claims).toHaveLength(0);
-          expect(fix.mailer.submits).toHaveLength(0);
+          expect(fix.mailer.sent).toHaveLength(0);
           expect(fix.limiter.consumes).toHaveLength(1);
           expect(fix.world.statusCalls).toStrictEqual([memberA.email]);
           expect(fix.wake.messages).toStrictEqual([{ campaignId, runToken }]);
