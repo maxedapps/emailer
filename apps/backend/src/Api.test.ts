@@ -17,7 +17,6 @@ import { StorageFailure } from "./Storage/Errors.ts";
 import { unusedAudience } from "./Storage/Testing.ts";
 
 import type { AddressStatus } from "./Storage/Addresses.ts";
-import type { StoredContactList } from "./Storage/Lists.ts";
 
 const token = "3o4Xr7nJ1pQvKzB2sYtLwMhGfDcEaN9uRiVoP0qTzXY";
 
@@ -85,7 +84,7 @@ const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store 
   > = Effect.succeed({});
 
   const contacts = new Map<string, Schemas.Contact>();
-  const lists = new Map<string, StoredContactList>();
+  const lists = new Map<string, Schemas.ContactList>();
   const members = new Map<string, Array<string>>();
   const campaigns = new Map<string, Schemas.Campaign>();
   const runTokens = new Map<string, string>();
@@ -187,7 +186,7 @@ const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store 
     createList: (list) =>
       Effect.sync(() => {
         writes.push("createList");
-        lists.set(list.id, { list, membershipVersion: 0 });
+        lists.set(list.id, list);
       }),
     getList: (id) =>
       Effect.sync(() => {
@@ -199,7 +198,7 @@ const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store 
       Effect.sync(() => {
         reads.push("listLists");
 
-        const page = [...lists.values()].slice(0, limit).map((stored) => stored.list);
+        const page = [...lists.values()].slice(0, limit);
 
         return { items: page, nextCursor: undefined };
       }),
@@ -213,9 +212,9 @@ const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store 
           return Option.none<Schemas.ContactList>();
         }
 
-        const renamed = { ...stored.list, name };
+        const renamed = { ...stored, name };
 
-        lists.set(id, { list: renamed, membershipVersion: stored.membershipVersion });
+        lists.set(id, renamed);
 
         return Option.some(renamed);
       }),
@@ -258,9 +257,7 @@ const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store 
       Effect.sync(() => {
         writes.push("removeMember");
 
-        const stored = lists.get(listId);
-
-        if (stored === undefined) {
+        if (!lists.has(listId)) {
           return "list-missing" as const;
         }
 
@@ -268,7 +265,6 @@ const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store 
           listId,
           (members.get(listId) ?? []).filter((id) => id !== contactId),
         );
-        lists.set(listId, { list: stored.list, membershipVersion: stored.membershipVersion + 1 });
 
         return "removed" as const;
       }),
@@ -276,9 +272,7 @@ const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store 
       Effect.sync(() => {
         writes.push("importContacts");
 
-        const stored = lists.get(listId);
-
-        if (stored === undefined) {
+        if (!lists.has(listId)) {
           return { outcome: "list-missing" as const };
         }
 
@@ -307,7 +301,6 @@ const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store 
         });
 
         members.set(listId, joined);
-        lists.set(listId, { list: stored.list, membershipVersion: stored.membershipVersion + 1 });
 
         return { outcome: "imported" as const, contacts: imported };
       }),
@@ -319,9 +312,7 @@ const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store 
           return "contact-missing" as const;
         }
 
-        const stored = lists.get(listId);
-
-        if (stored === undefined) {
+        if (!lists.has(listId)) {
           return "list-missing" as const;
         }
 
@@ -332,7 +323,6 @@ const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store 
         }
 
         members.set(listId, [...current, contactId]);
-        lists.set(listId, { list: stored.list, membershipVersion: stored.membershipVersion + 1 });
 
         return "added" as const;
       }),

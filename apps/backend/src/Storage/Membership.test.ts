@@ -31,7 +31,7 @@ describe("addMember", () => {
     };
   };
 
-  it("checks both parents, advances the counter and writes both membership directions", () =>
+  it("checks both parents and writes both membership directions", () =>
     Effect.runPromise(
       Effect.gen(function* () {
         const { table, run } = addMember({});
@@ -50,12 +50,10 @@ describe("addMember", () => {
             },
           },
           {
-            Update: {
+            ConditionCheck: {
               Table: tableLogicalId,
               Key: { pk: { S: `LIST#${listId}` }, sk: { S: "META" } },
-              UpdateExpression: "SET membershipVersion = membershipVersion + :one",
               ConditionExpression: "attribute_exists(pk)",
-              ExpressionAttributeValues: { ":one": { N: "1" } },
             },
           },
           {
@@ -112,7 +110,7 @@ describe("addMember", () => {
       }),
     ));
 
-  it("treats a repeated addition as a no-op that does not advance the counter", () =>
+  it("treats a repeated addition as a no-op", () =>
     Effect.runPromise(
       Effect.gen(function* () {
         const { run } = addMember({
@@ -156,7 +154,7 @@ describe("removeMember", () => {
     };
   };
 
-  it("removes both directions and advances the counter in one transaction", () =>
+  it("removes both directions and checks the list in one transaction", () =>
     Effect.runPromise(
       Effect.gen(function* () {
         const { table, run } = removeMember({});
@@ -180,29 +178,13 @@ describe("removeMember", () => {
             },
           },
           {
-            Update: {
+            ConditionCheck: {
               Table: tableLogicalId,
               Key: { pk: { S: `LIST#${listId}` }, sk: { S: "META" } },
-              UpdateExpression: "SET membershipVersion = membershipVersion + :one",
               ConditionExpression: "attribute_exists(pk)",
-              ExpressionAttributeValues: { ":one": { N: "1" } },
             },
           },
         ]);
-      }),
-    ));
-
-  it("moves membershipVersion, which is what refuses a stale campaign claim", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, run } = removeMember({});
-
-        yield* run;
-
-        const bump = table.transactionRequests[0]?.TransactItems[2]?.Update;
-
-        expect(bump?.UpdateExpression).toBe("SET membershipVersion = membershipVersion + :one");
-        expect(bump?.Key).toStrictEqual({ pk: { S: `LIST#${listId}` }, sk: { S: "META" } });
       }),
     ));
 
@@ -401,7 +383,7 @@ describe("deleteContact", () => {
       }),
     ));
 
-  it("removes each membership in its own transaction and deletes META last", () =>
+  it("removes each membership in its own unconditioned transaction and deletes META last", () =>
     Effect.runPromise(
       Effect.gen(function* () {
         const table = scriptedTable({
@@ -423,15 +405,6 @@ describe("deleteContact", () => {
             Delete: {
               Table: tableLogicalId,
               Key: { pk: { S: `CONTACT#${contactId}` }, sk: { S: `LISTOF#${listId}` } },
-            },
-          },
-          {
-            Update: {
-              Table: tableLogicalId,
-              Key: { pk: { S: `LIST#${listId}` }, sk: { S: "META" } },
-              UpdateExpression: "SET membershipVersion = membershipVersion + :one",
-              ConditionExpression: "attribute_exists(pk)",
-              ExpressionAttributeValues: { ":one": { N: "1" } },
             },
           },
         ]);
@@ -474,25 +447,6 @@ describe("deleteContact", () => {
         const attempt = yield* Effect.result(operationsFor(table).deleteContact(contactId));
 
         expect(failureOf(attempt).reason).toBe("unavailable");
-      }),
-    ));
-
-  it("falls back to a removal with no bump when the list has vanished", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const table = scriptedTable({
-          ...found,
-          query: [Effect.succeed({ Items: [reverseItem(listId)] })],
-          transactWriteItems: [cancelled("None", "None", "ConditionalCheckFailed")],
-        });
-
-        expect(yield* operationsFor(table).deleteContact(contactId)).toBe("deleted");
-
-        expect(table.transactionRequests[1]?.TransactItems).toHaveLength(2);
-        expect(table.transactionRequests[1]?.TransactItems[0]?.Delete?.Key).toStrictEqual({
-          pk: { S: `LIST#${listId}` },
-          sk: { S: `MEMBER#${contactId}` },
-        });
       }),
     ));
 
@@ -587,34 +541,36 @@ describe("deleteList", () => {
         expect(yield* operationsFor(table).deleteList(listId)).toBe("deleted");
 
         expect(table.queryRequests[0]?.Limit).toBe(40);
-        expect(table.transactionRequests[0]?.TransactItems).toHaveLength(81);
-        expect(table.transactionRequests[1]?.TransactItems).toHaveLength(7);
+        expect(
+          table.transactionRequests.map((request) => request.TransactItems.length),
+        ).toStrictEqual([80, 6, 1]);
       }),
     ));
 
-  it("bumps on a page that is not the last, and never alongside the META delete", () =>
+  it("deletes META last and alone, and sends nothing for a page with no members", () =>
     Effect.runPromise(
       Effect.gen(function* () {
+        // A page that ends exactly on the limit still carries a continuation key; the page after
+        // it is empty, and an empty transaction would be refused on every repeat.
         const table = scriptedTable({
           ...found,
           query: [
             Effect.succeed({
-              Items: memberItems(1),
+              Items: memberItems(40),
               LastEvaluatedKey: { pk: { S: `LIST#${listId}` }, sk: { S: "MEMBER#x" } },
             }),
-            Effect.succeed({ Items: memberItems(1) }),
+            Effect.succeed({ Items: [] }),
           ],
         });
 
-        yield* operationsFor(table).deleteList(listId);
+        expect(yield* operationsFor(table).deleteList(listId)).toBe("deleted");
 
-        const first = table.transactionRequests[0]?.TransactItems ?? [];
-        const last = table.transactionRequests[1]?.TransactItems ?? [];
-
-        expect(first[2]?.Update?.Key).toStrictEqual(listMeta);
-        expect(last[2]?.Delete?.Key).toStrictEqual(listMeta);
-        // The bump and the deletion address one item; together they would be rejected outright.
-        expect(last.some((item) => item.Update !== undefined)).toBe(false);
+        expect(table.queryRequests).toHaveLength(2);
+        expect(table.transactionRequests).toHaveLength(2);
+        expect(table.transactionRequests[0]?.TransactItems).toHaveLength(80);
+        expect(table.transactionRequests[1]?.TransactItems).toStrictEqual([
+          { Delete: { Table: tableLogicalId, Key: listMeta } },
+        ]);
       }),
     ));
 
@@ -680,9 +636,10 @@ describe("importContacts", () => {
         const items = table.transactionRequests[0]?.TransactItems ?? [];
 
         expect(items).toHaveLength(5);
-        expect(items[0]?.Update?.Key).toStrictEqual({
-          pk: { S: `LIST#${listId}` },
-          sk: { S: "META" },
+        expect(items[0]?.ConditionCheck).toStrictEqual({
+          Table: tableLogicalId,
+          Key: { pk: { S: `LIST#${listId}` }, sk: { S: "META" } },
+          ConditionExpression: "attribute_exists(pk)",
         });
         expect(items[1]?.Put?.Item?.["pk"]).toStrictEqual({ S: `CONTACT#${contactId}` });
         expect(items[2]?.Put?.Item?.["pk"]).toStrictEqual({ S: "EMAIL#max@example.com" });
@@ -759,11 +716,12 @@ describe("importContacts", () => {
 
         const items = second.table.transactionRequests[0]?.TransactItems ?? [];
 
-        // Members are upserted, so nothing new is created; only the list's counter moves.
+        // Members are upserted and the list is only checked, so nothing new is created.
         expect(items.some((item) => item.Put !== undefined)).toBe(false);
-        expect(items[0]?.Update?.UpdateExpression).toBe(
-          "SET membershipVersion = membershipVersion + :one",
-        );
+        expect(items[0]?.ConditionCheck?.Key).toStrictEqual({
+          pk: { S: `LIST#${listId}` },
+          sk: { S: "META" },
+        });
       }),
     ));
 

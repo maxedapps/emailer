@@ -814,7 +814,7 @@ describe("the deployed service", () => {
 });
 
 describe("the deployed table", () => {
-  it("treats a repeated membership as a no-op that does not advance the counter", () =>
+  it("treats a repeated membership as a no-op", () =>
     live(
       Effect.gen(function* () {
         const settings = yield* configuration;
@@ -826,14 +826,43 @@ describe("the deployed table", () => {
         yield* storage.createList({ id: listId, name: "condition probe", createdAt: now });
 
         expect(yield* storage.addMember(listId, contactId, now)).toBe("added");
-
-        const afterFirst = yield* storage.getList(listId);
-
         expect(yield* storage.addMember(listId, contactId, now)).toBe("already-member");
 
-        const afterSecond = yield* storage.getList(listId);
+        const members = yield* storage.listMembers(listId, 100, undefined);
 
-        expect(afterSecond).toStrictEqual(afterFirst);
+        expect(Option.getOrUndefined(members)?.items.map((contact) => contact.id)).toStrictEqual([
+          contactId,
+        ]);
+
+        yield* storage.deleteList(listId);
+        yield* storage.deleteContact(contactId);
+      }),
+    ));
+
+  it("refuses a membership in a list that is not there and writes neither direction", () =>
+    live(
+      Effect.gen(function* () {
+        const settings = yield* configuration;
+        const storage = yield* liveStorage(settings.tableName);
+
+        const listId = yield* newIdentifier;
+        const now = yield* nowIso;
+        // The contact exists, so the refusal can only come from the list check: slot 0 checks the
+        // contact and would answer `contact-missing` first whatever the list slot holds.
+        const contactId = yield* contactFor(storage, yield* uniqueAddress);
+
+        expect(yield* storage.addMember(listId, contactId, now)).toBe("list-missing");
+
+        // No read path shows a membership of a list that is not there, so the absence of both
+        // directions is proven by creating the list and adding the contact again: both member
+        // `Put`s are conditional on absence, and `addMember` reports `already-member` if the
+        // refused attempt had left either behind.
+        yield* storage.createList({ id: listId, name: "missing-list probe", createdAt: now });
+
+        expect(yield* storage.addMember(listId, contactId, now)).toBe("added");
+
+        yield* storage.deleteList(listId);
+        yield* storage.deleteContact(contactId);
       }),
     ));
 });
@@ -1208,7 +1237,7 @@ describe("the deployed delete cascade", () => {
           interleaved.importContacts(listId, [{ id: original, email: address }], yield* nowIso),
         );
 
-        // Slot 0 bumps the list, slot 1 checks the contact exists, slot 2 is the holder check.
+        // Slot 0 checks the list, slot 1 checks the contact exists, slot 2 is the holder check.
         // Exactly that slot failing says DynamoDB refused the stale holder and nothing else.
         const refusal = Result.isFailure(attempt) ? attempt.failure : undefined;
 

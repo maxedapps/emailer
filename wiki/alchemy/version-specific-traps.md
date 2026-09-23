@@ -76,7 +76,7 @@ Record compatibility at the level actually observed: metadata accepted, TypeScri
 
 ## A changed bundle can deploy as `noop`
 
-In beta.79, after editing application source that is bundled into a Lambda, `alchemy deploy` can report every resource as `noop` and finish in seconds, leaving the previously deployed bundle in place — `CodeSha256` and `LastModified` unchanged. `alchemy deploy --force` ("Force updates for resources that would otherwise no-op") redeploys the new code. Verify a code change actually shipped by reading the deployed function's `CodeSha256`, not by trusting the deploy summary; a `noop` line is not evidence that the artifact matches your source.
+In beta.79, after editing application source that is bundled into a Lambda, `alchemy deploy` can report every resource as `noop` and finish in seconds, leaving the previously deployed bundle in place — `CodeSha256` and `LastModified` unchanged. Observed again on 2026-09-23: a redeploy updated only the one function whose props had changed, while three functions whose bundled code had changed reported `noop` and kept their old `CodeSha256` until `--force`. `alchemy deploy --force` ("Force updates for resources that would otherwise no-op") redeploys the new code. Verify a code change actually shipped by reading the deployed function's `CodeSha256`, not by trusting the deploy summary; a `noop` line is not evidence that the artifact matches your source.
 
 ## CLI defaults also need version checks
 

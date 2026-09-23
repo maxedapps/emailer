@@ -2,7 +2,7 @@
 
 > **Status:** In progress
 > **Updated:** 2026-09-23
-> **ADRs:** [0021](../0021-whole-project-unused-code-check.md) (T1), [0005](../0005-contact-identity-and-membership-access-paths.md) (amended by T4), [0007](../0007-immutable-recipient-unsubscribe-links.md) (link before claim, T3), [0008](../0008-storage-capabilities-and-error-boundaries.md), [0011](../0011-open-recipient-set-and-paced-dispatch.md). [0022](../0022-api-contract-rejects-undeclared-fields.md) (T3). T4 adds one more. ADR numbers 0019–0020 are left for untracked proposals in the main checkout.
+> **ADRs:** [0021](../0021-whole-project-unused-code-check.md) (T1), [0005](../0005-contact-identity-and-membership-access-paths.md) (amended by T4), [0007](../0007-immutable-recipient-unsubscribe-links.md) (link before claim, T3), [0008](../0008-storage-capabilities-and-error-boundaries.md), [0011](../0011-open-recipient-set-and-paced-dispatch.md). [0022](../0022-api-contract-rejects-undeclared-fields.md) (T3), [0023](../0023-lists-carry-no-membership-version.md) (T4). ADR numbers 0019–0020 are left for untracked proposals in the main checkout.
 
 ## Outcome and boundaries
 
@@ -146,13 +146,23 @@
 
 ### T4 — Remove `membershipVersion`
 
-- **Status:** Pending
+- **Status:** Verified
 - **Items:**
   - T4.1: a list-existence `ConditionCheck` replaces the increments. The field goes, along with the `deleteContact` fallback, `deleteList`'s last-page special case, and the stale comments.
   - T4.2: update the unit pins; replace the counter oracle in `Api.integration.test.ts`; add a live case proving that adding to a deleted list is refused.
   - T4.3: a new ADR amending ADR-0005.
 - **Acceptance:** `pnpm check` is green, plus a `test-cleanup` deploy and the full integration suite, then destroy.
 - **Evidence:**
+  - **Lists:** no version is stored. `getList` returns `Option<ContactList>`; old items with the attribute still decode.
+  - **List check:** `addMember`, `removeMember` and `importContacts` carry `listExists` (`ConditionCheck` with `attribute_exists(pk)`) in the old slot, so the index mapping is unchanged.
+  - **Cascades:** the contact cascade is one 2-delete transaction per membership, with no fallback. The list cascade uses 80-action pages, skips empty pages, and deletes META last on its own.
+  - **Unit tests:** pins updated. `pnpm check` exit 0, 742 unit tests.
+  - **Redeploy of `test-cleanup` (phases 1–4):**
+    - A plain `deploy` updated only the API, whose env changed. Dispatcher, Feedback and Unsubscribe reported `noop` with unchanged `CodeSha256`: the known Alchemy trap, confirmed on beta.79 and recorded in the wiki.
+    - `deploy --force` updated all 28 resources, and every function's `CodeSha256` changed (api `6Vg+9cR7…`, dispatcher `+R/SAIM2…`, feedback `y9pA6RIa…`, unsubscribe `VeIxwzgX…`).
+    - The API's env no longer has `EMAILER_UNSUBSCRIBE_*`.
+  - **Full integration suite:** 36/36 in 552 s. It includes the rewritten "treats a repeated membership as a no-op" and the new "refuses a membership in a list that is not there and writes neither direction" (a real `ConditionCheck`), and the L1-reworked mapping hold passed.
+  - **ADR:** [0023](../0023-lists-carry-no-membership-version.md), linked from ADR-0005.
 
 ### T5 — Tests and docs
 
@@ -170,7 +180,7 @@
 
 ## Handoff
 
-- **Next action:** T4
+- **Next action:** T5
 - **Reviews:**
   - **Checkpoint A** (fresh reviewer, commits `c72055b..0f35cd5`, git objects only): no regressions. Dispositions:
     - **L1:** the probe inside acquire could leave the mapping disabled. Fixed now: the waits moved after `acquireRelease`.

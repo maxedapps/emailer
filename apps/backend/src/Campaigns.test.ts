@@ -11,7 +11,6 @@ import { StorageFailure } from "./Storage/Errors.ts";
 import { unusedAudience } from "./Storage/Testing.ts";
 
 import type { CampaignControl } from "./Storage/Campaigns.ts";
-import type { StoredContactList } from "./Storage/Lists.ts";
 
 const listId = "0195f0a0-1111-4222-8333-44444444109e";
 
@@ -45,7 +44,7 @@ interface RunHistory {
 }
 
 interface World {
-  readonly lists: Map<string, StoredContactList>;
+  readonly lists: Map<string, Schemas.ContactList>;
   readonly campaigns: Map<string, Schemas.Campaign>;
   readonly runTokens: Map<string, string>;
   readonly startedAt: Map<string, string>;
@@ -412,10 +411,7 @@ interface Fixture {
 const fixture = (scenario: Scenario = {}): Fixture => {
   const world = emptyWorld();
 
-  world.lists.set(listId, {
-    list: { id: listId, name: "Readers", createdAt: "2026-09-11T09:00:00.000Z" },
-    membershipVersion: 1,
-  });
+  world.lists.set(listId, { id: listId, name: "Readers", createdAt: "2026-09-11T09:00:00.000Z" });
   const campaign = scenario.campaign ?? draftCampaign;
 
   world.campaigns.set(campaignId, campaign);
