@@ -36,6 +36,7 @@ import { campaignStoreOperations } from "../src/storage/Campaigns.ts";
 import { feedbackWrites } from "../src/storage/Feedback.ts";
 import { transactionPrimitives, writePrimitives } from "../src/storage/Primitives.ts";
 import { unsubscribeSigningKey } from "../src/consent/Unsubscribe.ts";
+import { encodeDispatchMessage } from "../src/sending/Dispatch.ts";
 
 import type { AddressStatus } from "../src/storage/Addresses.ts";
 import type { TableOperations } from "../src/storage/Items.ts";
@@ -49,6 +50,9 @@ export const mappingReadyTimeout = Duration.minutes(5);
 export const staleWakeLogTimeout = Duration.minutes(5);
 
 const mappingPoll = Schedule.spaced("3 seconds");
+
+/** Longer than the 20-second long poll Lambda's SQS pollers use, so an idle canary is not luck. */
+const pollerQuietWindow = Duration.seconds(25);
 
 const mappingUpdateRetry = Schedule.max([Schedule.recurs(20), Schedule.spaced("5 seconds")]);
 
@@ -577,17 +581,65 @@ const dispatcherMapping = Effect.gen(function* () {
 
   const mapping = mappings[0];
   const uuid = mapping?.UUID;
+  const queueArn = mapping?.EventSourceArn;
 
-  if (mapping === undefined || uuid === undefined) {
-    throw new Error(`dispatch mapping for ${functionName} has no UUID`);
+  if (mapping === undefined || uuid === undefined || queueArn === undefined) {
+    throw new Error(`dispatch mapping for ${functionName} has no UUID or source queue`);
   }
 
-  return { uuid, state: mapping.State };
+  return { uuid, state: mapping.State, queueArn };
 });
 
 /**
- * Disables only the owned test dispatcher SQS mapping, waits until Disabled, and restores the
- * original Enabled state when the scope closes — including on failure.
+ * "Disabled" is reported before Lambda's pollers stop: on 2026-09-23 a wake enqueued a second after
+ * the mapping reached Disabled was still consumed, and one enqueued two minutes later was not. A
+ * canary settles it without guessing a delay. It is a stale wake the dispatcher discards, left on
+ * the queue until it has sat unreceived for longer than a long poll; while pollers still run, each
+ * canary is consumed and another is sent. Restoring the mapping later discards the canaries.
+ */
+const awaitPollersStopped = (queueArn: string) =>
+  Effect.gen(function* () {
+    const getQueueUrl = yield* sqs.getQueueUrl;
+    const sendMessage = yield* sqs.sendMessage;
+    const getQueueAttributes = yield* sqs.getQueueAttributes;
+    const { QueueUrl } = yield* getQueueUrl({ QueueName: queueArn.split(":").at(-1) ?? "" });
+
+    if (QueueUrl === undefined) {
+      throw new Error(`no URL for dispatch queue ${queueArn}`);
+    }
+
+    const canaryIdle = Effect.gen(function* () {
+      const canary = yield* encodeDispatchMessage({
+        campaignId: yield* newIdentifier,
+        runToken: yield* newIdentifier,
+      });
+
+      yield* sendMessage({ QueueUrl, MessageBody: canary });
+      yield* Effect.sleep(pollerQuietWindow);
+
+      const { Attributes } = yield* getQueueAttributes({
+        QueueUrl,
+        AttributeNames: ["ApproximateNumberOfMessages", "ApproximateNumberOfMessagesNotVisible"],
+      });
+
+      return (
+        Number(Attributes?.ApproximateNumberOfMessages ?? "0") >= 1 &&
+        Number(Attributes?.ApproximateNumberOfMessagesNotVisible ?? "1") === 0
+      );
+    });
+
+    yield* canaryIdle.pipe(
+      Effect.repeat({ until: (idle: boolean) => idle }),
+      Effect.timeoutOrElse({
+        duration: mappingReadyTimeout,
+        orElse: () => Effect.die(new Error(`pollers of ${queueArn} kept receiving`)),
+      }),
+    );
+  });
+
+/**
+ * Disables only the owned test dispatcher SQS mapping, waits until Disabled and its pollers have
+ * stopped, and restores the original Enabled state when the scope closes — including on failure.
  */
 export const disableDispatcherMapping = Effect.acquireRelease(
   Effect.gen(function* () {
@@ -598,6 +650,8 @@ export const disableDispatcherMapping = Effect.acquireRelease(
       yield* setMappingEnabled(mapping.uuid, false);
       yield* awaitMappingState(mapping.uuid, "Disabled");
     }
+
+    yield* awaitPollersStopped(mapping.queueArn);
 
     return { uuid: mapping.uuid, originalEnabled };
   }),
