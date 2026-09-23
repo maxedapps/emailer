@@ -1,16 +1,15 @@
 import type * as Schemas from "@emailer/api/Schemas";
-import { Clock, Context, Data, Duration, Effect, Option, Result } from "effect";
-import { RateLimiter } from "effect/unstable/persistence";
+import { Clock, Data, Duration, Effect, Option, Result } from "effect";
 
 import { CampaignWake } from "../campaigns/Campaigns.ts";
 import { newIdentifier, nowIso } from "../Identifiers.ts";
 import { Mailer, submissionTimeout } from "./Mailer.ts";
+import { consumeSlot, SendGuard } from "./SendGuard.ts";
 import { AudienceStore } from "../storage/Audience.ts";
 import { CampaignStore } from "../storage/Campaigns.ts";
 import { operationTimeout } from "../storage/Items.ts";
 
 import type { DispatchMessage } from "./Dispatch.ts";
-import type { SendGuard } from "./SendGuard.ts";
 import type { SendPurpose } from "./Mailer.ts";
 import type { MessageContent } from "./Message.ts";
 
@@ -29,26 +28,11 @@ export const breaker = {
 } as const;
 
 /**
- * Per-slice send guard. The dispatcher constructs this from `GetAccount`,
- * `DescribeAlarms` and the optional daily ceiling so tests can stub the result.
- */
-export class DispatchGuard extends Context.Service<
-  DispatchGuard,
-  {
-    readonly current: Effect.Effect<SendGuard>;
-  }
->()("emailer/backend/DispatchGuard") {}
-
-/**
  * The first member's limiter delay already exceeds the remaining invocation
  * budget. Returning normally would acknowledge the SQS message and drop the
  * work; failing lets `reportedAndFatal` die so SQS redelivers.
  */
 export class SliceOverrun extends Data.TaggedError("SliceOverrun") {}
-
-const limiterWindow = "1 second";
-
-const limiterKey = "ses-send";
 
 const rateLimitedBackoffs = [
   Duration.seconds(1),
@@ -58,21 +42,6 @@ const rateLimitedBackoffs = [
 
 const reservationFor = (delay: Duration.Duration) =>
   Duration.sum(delay, Duration.sum(submissionTimeout, Duration.times(operationTimeout, 2)));
-
-const consumeSlot = (limit: number) =>
-  Effect.gen(function* () {
-    const limiter = yield* RateLimiter.RateLimiter;
-
-    const consumed = yield* limiter.consume({
-      key: limiterKey,
-      window: limiterWindow,
-      limit,
-      onExceeded: "delay",
-      algorithm: "fixed-window",
-    });
-
-    return consumed.delay;
-  });
 
 const remainingUntil = (deadline: number) =>
   Effect.map(Clock.currentTimeMillis, (now) => Duration.millis(deadline - now));
@@ -89,7 +58,7 @@ export const runSlice = Effect.fn("Dispatching.runSlice")(function* (
   const campaigns = yield* CampaignStore;
   const audience = yield* AudienceStore;
   const wake = yield* CampaignWake;
-  const guards = yield* DispatchGuard;
+  const guards = yield* SendGuard;
 
   // Names this slice on the checkpoint it writes, so a retried checkpoint is recognised as its own.
   const sliceId = yield* newIdentifier;

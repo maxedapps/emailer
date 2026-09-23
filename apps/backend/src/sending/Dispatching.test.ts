@@ -6,8 +6,9 @@ import { RateLimiter } from "effect/unstable/persistence";
 import { describe, expect, it } from "vitest";
 
 import { CampaignWake } from "../campaigns/Campaigns.ts";
-import { DispatchGuard, memberPageSize, runSlice, SliceOverrun } from "./Dispatching.ts";
+import { memberPageSize, runSlice, SliceOverrun } from "./Dispatching.ts";
 import { Mailer, SubmissionUncertain } from "./Mailer.ts";
+import { SendGuard } from "./SendGuard.ts";
 import { AudienceStore } from "../storage/Audience.ts";
 import { CampaignStore } from "../storage/Campaigns.ts";
 import { unusedAudience } from "../storage/Testing.ts";
@@ -15,7 +16,7 @@ import { unusedAudience } from "../storage/Testing.ts";
 import type { PauseReason } from "@emailer/api/Schemas";
 import type { SendPurpose, SubmissionOutcome } from "./Mailer.ts";
 import type { MessageContent } from "./Message.ts";
-import type { SendGuard } from "./SendGuard.ts";
+import type { SendAllowance } from "./SendGuard.ts";
 import type { AddressStatus } from "../storage/Addresses.ts";
 import type { RecipientSettlement, SkipReason } from "../storage/Campaigns.ts";
 
@@ -51,7 +52,7 @@ const subject = "Release notes";
 
 const text = "Hello there";
 
-const defaultGuard: SendGuard = {
+const defaultGuard: SendAllowance = {
   limit: 8,
   dailyExhausted: false,
   halted: Option.none(),
@@ -400,7 +401,7 @@ interface Scenario {
   readonly listMissing?: boolean;
   readonly statuses?: ReadonlyArray<readonly [string, AddressStatus]>;
   readonly claimed?: ReadonlyArray<string>;
-  readonly guard?: SendGuard;
+  readonly guard?: SendAllowance;
   readonly run?: { accepted: number; bounced: number; complained: number };
   readonly delays?: ReadonlyArray<Duration.Duration>;
   readonly outcomes?: ReadonlyArray<SubmissionOutcome | SubmissionUncertain>;
@@ -412,7 +413,7 @@ interface Fixture {
   readonly mailer: MailerDouble;
   readonly limiter: LimiterDouble;
   readonly layer: Layer.Layer<
-    CampaignWake | AudienceStore | CampaignStore | Mailer | RateLimiter.RateLimiter | DispatchGuard
+    CampaignWake | AudienceStore | CampaignStore | Mailer | RateLimiter.RateLimiter | SendGuard
   >;
 }
 
@@ -459,7 +460,7 @@ const fixture = (scenario: Scenario = {}): Fixture => {
       wake.layer,
       mailer.layer,
       limiter.layer,
-      Layer.succeed(DispatchGuard)({ current: Effect.succeed(guard) }),
+      Layer.succeed(SendGuard)({ current: Effect.succeed(guard) }),
       NodeCrypto.layer,
     ),
   };

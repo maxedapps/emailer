@@ -1,16 +1,15 @@
 import { NodeCrypto } from "@effect/platform-node";
 import { Stack } from "alchemy";
 import * as AWS from "alchemy/AWS";
-import { Clock, Config, Duration, Effect, Layer, Option, Stream } from "effect";
+import { Clock, Duration, Effect, Layer, Stream } from "effect";
 import { RateLimiter } from "effect/unstable/persistence";
 
 import { CampaignWake } from "../campaigns/Campaigns.ts";
 import { reportedAndFatal } from "../Diagnostics.ts";
 import { decodeDispatchMessage, dispatchQueue, encodeDispatchMessage } from "./Dispatch.ts";
-import { DispatchGuard, runSlice } from "./Dispatching.ts";
+import { runSlice } from "./Dispatching.ts";
 import { Mailer, MailerLive } from "./Mailer.ts";
-import { reputationAlarms } from "./Reputation.ts";
-import { sendGuard, SendPacingLive } from "./SendGuard.ts";
+import { SendGuard, SendGuardLive, SendPacingLive } from "./SendGuard.ts";
 import { AudienceStore, AudienceStoreLive } from "../storage/Audience.ts";
 import { CampaignStore, CampaignStoreLive } from "../storage/Campaigns.ts";
 import { unavailable } from "../storage/Errors.ts";
@@ -19,8 +18,6 @@ import { UnsubscribeFunction, unsubscribeSecret } from "../consent/Unsubscribe.t
 const logRetention = Duration.days(7);
 
 const invocationTimeout = Duration.minutes(5);
-
-const dailySendCeiling = Config.option(Config.int("EMAILER_DAILY_SEND_CEILING"));
 
 const dispatcherProps = Effect.gen(function* () {
   const { stage } = yield* Stack;
@@ -60,12 +57,7 @@ export default class DispatcherFunction extends AWS.Lambda.Function<DispatcherFu
     const limiter = yield* RateLimiter.RateLimiter;
     const queue = yield* dispatchQueue;
     const sendMessage = yield* AWS.SQS.SendMessage(queue);
-    const getAccount = yield* AWS.SES.GetAccount();
-    const alarms = yield* reputationAlarms;
-    const describeAlarms = yield* AWS.CloudWatch.DescribeAlarms(...alarms);
-    // Constructor Config is a deploy-time capture, which is what the optional
-    // daily ceiling wants: the value is fixed for the function's lifetime.
-    const ceiling = Option.getOrUndefined(yield* dailySendCeiling);
+    const guard = yield* SendGuard;
 
     const capabilities = Layer.mergeAll(
       Layer.succeed(AudienceStore)(audience),
@@ -81,9 +73,7 @@ export default class DispatcherFunction extends AWS.Lambda.Function<DispatcherFu
             Effect.asVoid,
           ),
       }),
-      Layer.succeed(DispatchGuard)({
-        current: sendGuard(getAccount, () => describeAlarms(), ceiling).pipe(Effect.orDie),
-      }),
+      Layer.succeed(SendGuard)(guard),
       NodeCrypto.layer,
     );
 
@@ -105,11 +95,10 @@ export default class DispatcherFunction extends AWS.Lambda.Function<DispatcherFu
         MailerLive,
         CampaignStoreLive,
         AudienceStoreLive,
+        SendGuardLive,
         SendPacingLive,
         AWS.Lambda.QueueEventSource,
         AWS.SQS.SendMessageHttp,
-        AWS.SES.GetAccountHttp,
-        AWS.CloudWatch.DescribeAlarmsHttp,
       ).pipe(Layer.provide(NodeCrypto.layer)),
     ),
   ),
