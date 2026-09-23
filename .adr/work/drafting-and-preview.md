@@ -1,6 +1,6 @@
 # Drafting, previews and test sends
 
-> **Status:** In progress. On 2026-09-23 the user told us to implement the plan, which accepted ADR-0019 and ADR-0020.
+> **Status:** Implemented and live-gated on 2026-09-23. The prod deploy waits for the user (G3). The user's instruction to implement the plan accepted ADR-0019 and ADR-0020.
 > **ADRs:**
 > - **New, Accepted:**
 >   - [0019 — Markdown campaign bodies rendered by the CLI](../0019-markdown-campaign-bodies.md)
@@ -201,7 +201,7 @@ Tests sit beside their modules. Three things differ from the layout the user saw
     - the format and the secret are unchanged.
 - **Starts at:** `consent/Unsubscribe.ts:26-100`, `api/Auth.ts:20-28`
 - **Depends on:** T1
-- **Status:** Pending
+- **Status:** Done. The frozen unsubscribe token was added first and passed before and after the rewrite.
 - **Tests:**
   - `SignedToken.test.ts` (unit): the round trip, a tampered field or digest, the wrong field count or version, uppercase hex, over-length input, a character outside the set.
   - `consent/Unsubscribe.test.ts` (unit): the golden vector, the independent signature, and the existing rejections. These protect already-delivered links.
@@ -228,7 +228,7 @@ Tests sit beside their modules. Three things differ from the layout the user saw
   - `Dispatching.ts` calls `send` with the campaign purpose.
 - **Starts at:** `sending/Mailer.ts:20-212`, `sending/Dispatching.ts:224-238`
 - **Depends on:** T2
-- **Status:** Pending
+- **Status:** Done. `MessageContent.html` is optional, so a stored campaign composes as it is.
 - **Tests:**
   - `sending/Message.test.ts` (unit, new): footer placement with `</BODY>`, `İ` and no body tag; escaping; headers; text only.
   - `sending/Mailer.test.ts` (unit): the six exact SES-request assertions, retargeted, plus a test-purpose request without `EmailTags`.
@@ -250,7 +250,7 @@ Tests sit beside their modules. Three things differ from the layout the user saw
   - Fix the "Per-run" comment: the guard is evaluated per slice.
 - **Starts at:** `sending/Dispatching.ts:35-75`, `sending/SendGuard.ts`, `sending/Dispatcher.ts:63-68, 84-86`
 - **Depends on:** T1
-- **Status:** Pending
+- **Status:** Done. `DescribeAlarms` types its failure as `any`, so `SendGuardLive` pins it with `Effect.orDie` before combining the two reads.
 - **Tests:**
   - `sending/SendGuard.test.ts` (unit): the guard cases as direct assertions, and `consumeSlot` against the memory RateLimiter.
   - `sending/Dispatching.test.ts`: stubs retargeted to `SendGuard`.
@@ -308,7 +308,7 @@ Tests sit beside their modules. Three things differ from the layout the user saw
   - Change no behaviour or output.
 - **Starts at:** `apps/cli/src/Commands.ts`, `Commands.test.ts:18-518`
 - **Depends on:** none. It can run in its own worktree after T1, and merge before T7.
-- **Status:** Pending
+- **Status:** Done in an isolated worktree, which has since been removed. There were 54 CLI tests before and after, with identical titles and identical help and completion output.
 - **Tests:** every CLI test is kept. They protect the unchanged output and exit codes.
 - **Verify:** `pnpm check`: expect a pass, with the same CLI test count.
 
@@ -322,7 +322,7 @@ Tests sit beside their modules. Three things differ from the layout the user saw
     - all tests.
   - Update the README's 409 wording (`README.md:214`).
 - **Depends on:** T5, T6
-- **Status:** Pending
+- **Status:** Done.
 - **Tests:** the existing cancel-conflict tests are retargeted. They protect the unchanged 409 behaviour.
 - **Verify:**
   - `grep -rn CampaignCancellationConflict apps packages README.md`: expect no output.
@@ -344,7 +344,7 @@ Tests sit beside their modules. Three things differ from the layout the user saw
     - `create` uses them, and `--text` becomes optional.
 - **Starts at:** new `apps/cli/src/Markdown.ts`; `commands/Campaigns.ts` (create)
 - **Depends on:** T6
-- **Status:** Pending
+- **Status:** Done. The reference newsletter renders to about 5 KB of HTML.
 - **Tests:**
   - `Markdown.test.ts` (unit; the fixture comes from `scratchpad/md-research/newsletter.md`). It protects:
     - every element's inline style;
@@ -390,7 +390,7 @@ Tests sit beside their modules. Three things differ from the layout the user saw
     - The harness gets both handlers.
 - **Starts at:** `storage/Campaigns.ts:241-330, 736-771`, `campaigns/Campaigns.ts:57-86`, `packages/api/src/Schemas.ts:296-306`
 - **Depends on:** T7, T8
-- **Status:** Pending
+- **Status:** Done. `update --markdown` without `--subject` reads the draft's subject for the HTML title, but only when a Markdown body needs it.
 - **Tests:**
   - `storage/Campaigns.test.ts` (unit, scripted table): both exact transaction shapes (filter set and removed), delete, and the conflict mapping.
   - `campaigns/Campaigns.test.ts` (unit):
@@ -436,7 +436,10 @@ Tests sit beside their modules. Three things differ from the layout the user saw
     - The harness gets the handler.
 - **Starts at:** new `campaigns/TestSends.ts`; `api/Api.ts`; `feedback/Feedback.ts:83-89`; new `apps/cli/src/Terminal.ts`; `main.ts:11-15`
 - **Depends on:** T3, T4, T5, T7, T9 (T9 and T10 edit the same contract and CLI files, so they run in sequence)
-- **Status:** Pending
+- **Status:** Done.
+  - `accepted` also carries the `messageId`, to match a message in an inbox.
+  - The typed client splits a union payload per member, so the CLI branches its call.
+  - The harness pages members the way DynamoDB does: a full page reports a cursor.
 - **Tests:**
   - `campaigns/TestSends.test.ts` (unit, with `TestClock` and doubles):
     - the `[Test]` subject and the test purpose;
@@ -489,7 +492,9 @@ Tests sit beside their modules. Three things differ from the layout the user saw
     - the harness gets the handler.
 - **Starts at:** new `campaigns/Previews.ts` and `campaigns/PreviewPage.ts`; `alchemy.run.ts:104-109`; `api/Api.ts` (props)
 - **Depends on:** T2, T3, T5, T9 (`CampaignReader`), T10 (`Terminal.ts`)
-- **Status:** Pending
+- **Status:** Done.
+  - Links in the sandboxed frame open in a new tab: a `<base target="_blank">` goes into the frame's copy of the HTML.
+  - The prod plan showed `3 to create, 4 to update, 4 binding changes` and nothing replaced or deleted.
 - **Tests:**
   - `campaigns/Previews.test.ts` (unit, `TestClock`): the round trip, the expiry boundary, tampering, the wrong field shape, and the length bound.
   - `campaigns/PreviewPage.test.ts` (unit, composed router, `CampaignReader` double):
@@ -547,7 +552,14 @@ Tests sit beside their modules. Three things differ from the layout the user saw
     3. **G2:** with the user's yes, send one `test --to` to the operator inbox and read it through the umail MCP. Expect `dkim=pass` with both unsubscribe headers in `h=`, the footer under the card, and a legible text part.
     4. Destroy the stage, and verify the inventory.
 - **Depends on:** T1–T11
-- **Status:** Pending
+- **Status:** Done.
+  - **Sweep:** limited to the three dead types, the symbols this slice introduced without outside users, and comments that described replaced designs. The older module-local exports stay as they are.
+  - **Deploy trap:** redeploying over the T5 stage exposed that Alchemy beta.77 plans code-only changes as `noop` (the diff returns early on an unresolved `exports.handler`). The stage was redeployed with `--force`, and the cause is recorded in `wiki/alchemy/version-specific-traps.md`.
+  - **Integration suite:** 5 files, 40 cases, green in 621 s.
+  - **Walkthrough:** passed, including G2 in the operator's test inbox: `dkim=pass`, both unsubscribe headers signed, `dmarc=pass`, styles intact, text part legible.
+  - **`--open`:** on this headless machine it prints the link and exits 0 with no process left behind. Opening an actual desktop browser was not observed.
+  - **Teardown:** the stage was destroyed, and the account inventory shows no `test` resources.
+  - **Secrets:** the test-stage API token was replaced after a `--detailed` plan printed it into a local log, and that log was deleted.
 - **Tests:** the integration cases above protect what unit tests cannot see: IAM, bindings, the Function URLs, and the feedback path.
 - **Verify:**
   - `pnpm check`: expect a pass.
@@ -559,7 +571,14 @@ Tests sit beside their modules. Three things differ from the layout the user saw
 
 - **Change:** none to code. Plan both stacks and record the result, anonymized.
 - **Depends on:** T12
-- **Status:** Pending
+- **Status:** Planned. Prod has not been deployed; that waits for the user (G3).
+  - **Prod plan:** `3 to create, 4 to update, 4 binding changes`.
+    - Creates: Preview, PreviewLogs, PreviewSecret.
+    - Updates: Api, Dispatcher, Feedback, Unsubscribe.
+    - New permissions: `SendEmail`, `GetAccount` and `DescribeAlarms` for Api, and `GetItem` for Preview.
+    - Nothing is replaced or deleted.
+  - **Identity stack:** `no changes`.
+  - **Code shipping:** each function's `main` path differs from prod's state, so a plain deploy ships the current bundles. Check `CodeSha256` afterwards.
 - **Verify:**
   - Plan prod. Expect updates to Api, Dispatcher, Feedback and Unsubscribe, creates for Preview, PreviewLogs and PreviewSecret, and zero replace or delete.
   - Plan the identity stack: expect no changes.

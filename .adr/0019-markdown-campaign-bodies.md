@@ -3,6 +3,7 @@
 - Status: Accepted
 - Date: 2026-09-23
 - Accepted: 2026-09-23
+- Confirmed: 2026-09-23. On the ephemeral stage `test`, a draft created from the reference newsletter rendered to about 5 KB of HTML. Its preview showed every element styled, the image at full card width, and the footer below the card, at desktop and at 390px width. A `[Test]` copy delivered to the operator's test inbox kept every inline style, and its text part carried no Markdown syntax. The stage was destroyed.
 - Authority: On 2026-09-23 the user asked for Markdown authoring with email-conformant HTML output, and asked for MJML and other tools to be evaluated. After seeing the research, they followed the recommendation to use `marked` alone, in the CLI. See [the plan](work/drafting-and-preview.md).
 
 ## Context

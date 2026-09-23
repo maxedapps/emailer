@@ -3,6 +3,12 @@
 - Status: Accepted
 - Date: 2026-09-23
 - Accepted: 2026-09-23
+- Confirmed: 2026-09-23 on the ephemeral stage `test`, which was then destroyed and checked against the account inventory:
+  - The whole integration suite passed: 5 files, 40 cases, including the new drafting, preview and test-send cases.
+  - A CLI walkthrough exercised create, preview, update and the same link reloaded, test sends to `--to` and to `--list` (answered `y`, answered `n`, closed stdin, `--yes`), delete, and a real send. The real send's `accepted: 3` counted none of the eight test sends made before it.
+  - One `[Test]` copy reached the operator's test inbox with `dkim=pass` for the sending domain, both unsubscribe headers in the signed `h=` list, and `dmarc=pass`.
+  - The preview answered with all four headers, and a link clicked inside its frame opened a new tab.
+  - The prod plan shows three creates (Preview, PreviewLogs, PreviewSecret) and nothing replaced or deleted.
 - Authority: On 2026-09-23 the user asked for more ways to draft and preview campaigns: a preview that works on a headless machine through a short-lived public URL, and a test command that sends to several addresses or to one list, with a recipient-count warning. They followed every recommendation that the research produced:
   - editable and deletable drafts;
   - a confirmation prompt with `--yes`;
