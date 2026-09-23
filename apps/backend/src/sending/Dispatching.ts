@@ -1,7 +1,6 @@
 import type * as Schemas from "@emailer/api/Schemas";
 import { Clock, Data, Duration, Effect, Option, Result } from "effect";
 
-import { describeCause } from "../Diagnostics.ts";
 import { newIdentifier, nowIso } from "../Identifiers.ts";
 import { CampaignWake } from "./Dispatch.ts";
 import { Mailer, submissionTimeout } from "./Mailer.ts";
@@ -249,17 +248,6 @@ const submitClaimed = Effect.fn("Dispatching.submitClaimed")(function* (input: {
     const finishedAt = yield* nowIso;
 
     if (Result.isFailure(attemptResult)) {
-      const uncertain = attemptResult.failure;
-
-      // The row records only that the outcome is unknown; why is kept here, reduced to its
-      // classification so neither the recipient nor an SDK payload reaches the log.
-      yield* Effect.logWarning("submission uncertain", {
-        campaignId,
-        sendId,
-        reason: uncertain.reason,
-        cause: describeCause(uncertain.cause),
-      });
-
       yield* campaigns.settleRecipient(
         campaignId,
         sendId,

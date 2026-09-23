@@ -1,7 +1,7 @@
 import * as Retry from "@distilled.cloud/aws/Retry";
 import * as AWS from "alchemy/AWS";
 import { fromCredentials } from "alchemy/AWS/Credentials";
-import { ConfigProvider, Effect, Layer, Redacted, Result, Schema } from "effect";
+import { ConfigProvider, Effect, Layer, Logger, Redacted, Result, Schema } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 import { describe, expect, it } from "vitest";
 
@@ -131,6 +131,8 @@ const sending = (
 const acceptedBody = JSON.stringify({ MessageId: "0100018f-deadbeef" });
 
 const parseJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
+
+const encodeJson = Schema.encodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
 
 describe("makeSend", () => {
   it("submits one message with one recipient, the exact content and the bound configuration set", () =>
@@ -386,6 +388,31 @@ describe("makeSend", () => {
         expect(Result.isFailure(outcome) && outcome.failure.reason).toBe("malformed-response");
       }),
     ));
+
+  it.each([
+    ["a campaign send", campaignSend],
+    ["a test send", { kind: "test" } satisfies SendPurpose],
+  ])("logs why %s ended uncertain, without the recipient's address", (_label, purpose) =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const transport = transportReplying(() =>
+          awsJson(500, JSON.stringify({ message: `Unavailable while sending to ${recipient}` })),
+        );
+
+        const messages: Array<unknown> = [];
+
+        const outcome = yield* sending(transport, content, purpose).pipe(
+          Effect.provide(Logger.layer([Logger.make((options) => messages.push(options.message))])),
+        );
+
+        expect(Result.isFailure(outcome)).toBe(true);
+        expect(messages).toStrictEqual([
+          ["submission uncertain", { ...purpose, reason: "transport", cause: "InternalError" }],
+        ]);
+        expect(yield* encodeJson(messages)).not.toContain(recipient);
+      }),
+    ),
+  );
 
   it("does not put the message body or credentials in the failure it reports", () =>
     Effect.runPromise(

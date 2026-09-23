@@ -1,7 +1,6 @@
-import { ServiceUnavailable } from "@distilled.cloud/aws/Errors";
 import { NodeCrypto } from "@effect/platform-node";
 import * as Schemas from "@emailer/api/Schemas";
-import { Clock, Duration, Effect, Fiber, Layer, Logger, Option, Result, Schema } from "effect";
+import { Clock, Duration, Effect, Fiber, Layer, Logger, Option, Result } from "effect";
 import { TestClock } from "effect/testing";
 import { RateLimiter } from "effect/unstable/persistence";
 import { describe, expect, it } from "vitest";
@@ -466,28 +465,6 @@ const runSliceNow = (fix: Fixture, extraDeadline = sliceTimeout) =>
     ).pipe(Effect.provide(fix.layer));
   });
 
-interface LogEntry {
-  readonly level: string;
-  readonly message: unknown;
-}
-
-const capturingLogs = (entries: Array<LogEntry>) =>
-  Logger.layer([
-    Logger.make((options) => {
-      entries.push({ level: options.logLevel, message: options.message });
-    }),
-  ]);
-
-const toJson = Schema.encodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
-
-const entriesFor = (entries: ReadonlyArray<LogEntry>, message: string) =>
-  entries.filter((entry) => {
-    // SAFETY: Effect.log*(message, data) reaches a logger as [message, data].
-    const recorded = entry.message as ReadonlyArray<unknown> | string | undefined;
-
-    return Array.isArray(recorded) ? recorded[0] === message : recorded === message;
-  });
-
 const onTestClock = <A, E, R>(operation: Effect.Effect<A, E, R>) =>
   operation.pipe(Effect.provide(Layer.mergeAll(TestClock.layer(), NodeCrypto.layer)));
 
@@ -665,9 +642,25 @@ describe("runSlice", () => {
       onTestClock(
         Effect.gen(function* () {
           const fix = fixture({ beginOutcome: "stale" });
-          const entries: Array<LogEntry> = [];
+          const entries: Array<{ readonly level: string; readonly message: unknown }> = [];
+          const now = yield* Clock.currentTimeMillis;
 
-          successOf(yield* runSliceNow(fix).pipe(Effect.provide(capturingLogs(entries))));
+          const attempt = yield* Effect.result(
+            runSlice({ campaignId, runToken }, now + Duration.toMillis(sliceTimeout)),
+          ).pipe(
+            Effect.provide(
+              Layer.mergeAll(
+                fix.layer,
+                Logger.layer([
+                  Logger.make((options) => {
+                    entries.push({ level: options.logLevel, message: options.message });
+                  }),
+                ]),
+              ),
+            ),
+          );
+
+          successOf(attempt);
 
           expect(fix.world.claims).toHaveLength(0);
           expect(fix.mailer.sent).toHaveLength(0);
@@ -676,11 +669,20 @@ describe("runSlice", () => {
           expect(fix.world.completed).toBe(0);
           expect(fix.wake.messages).toHaveLength(0);
 
-          expect(entriesFor(entries, "stale wake discarded")).toStrictEqual([
-            {
-              level: "Info",
-              message: ["stale wake discarded", { campaignId, runToken, disposition: "stale" }],
-            },
+          const stale = entries.filter((entry) => {
+            // SAFETY: Effect.logInfo(message, data) reaches a logger as [message, data].
+            const recorded = entry.message as ReadonlyArray<unknown> | string | undefined;
+
+            return Array.isArray(recorded)
+              ? recorded[0] === "stale wake discarded"
+              : recorded === "stale wake discarded";
+          });
+
+          expect(stale).toHaveLength(1);
+          expect(stale[0]?.level).toBe("Info");
+          expect(stale[0]?.message).toStrictEqual([
+            "stale wake discarded",
+            { campaignId, runToken, disposition: "stale" },
           ]);
         }),
       ),
@@ -847,50 +849,6 @@ describe("runSlice", () => {
           ]);
           expect(fix.wake.messages).toHaveLength(0);
           expect(fix.world.completed).toBe(0);
-        }),
-      ),
-    ));
-
-  it("logs why a submission ended uncertain, without the recipient's address", () =>
-    Effect.runPromise(
-      onTestClock(
-        Effect.gen(function* () {
-          const fix = fixture({
-            outcomes: [
-              new SubmissionUncertain({
-                reason: "transport",
-                cause: new ServiceUnavailable({
-                  message: `Unavailable while sending to ${memberA.email}`,
-                }),
-              }),
-            ],
-          });
-
-          const entries: Array<LogEntry> = [];
-
-          successOf(yield* runSliceNow(fix).pipe(Effect.provide(capturingLogs(entries))));
-
-          const row = fix.world.rows.get(memberA.id);
-
-          expect(row?.state).toBe("uncertain");
-          expect(fix.world.settlements).toStrictEqual([
-            { contactId: memberA.id, settlement: { state: "uncertain" } },
-          ]);
-          expect(entriesFor(entries, "submission uncertain")).toStrictEqual([
-            {
-              level: "Warn",
-              message: [
-                "submission uncertain",
-                {
-                  campaignId,
-                  sendId: row?.sendId,
-                  reason: "transport",
-                  cause: "ServiceUnavailable",
-                },
-              ],
-            },
-          ]);
-          expect(yield* toJson(entries)).not.toContain(memberA.email);
         }),
       ),
     ));

@@ -5,6 +5,7 @@ import * as AWS from "alchemy/AWS";
 import { Context, Data, Duration, Effect, Layer } from "effect";
 
 import { unsubscribeLink } from "../consent/Unsubscribe.ts";
+import { describeCause } from "../Diagnostics.ts";
 import { sendingIdentity } from "../identity/SendingIdentity.ts";
 import { compose, senderSettings } from "./Message.ts";
 
@@ -139,6 +140,15 @@ export const makeSend =
         Effect.timeout(submissionTimeout),
         Effect.catchTag("TimeoutError", (cause) =>
           Effect.fail(new SubmissionUncertain({ reason: "timeout", cause })),
+        ),
+        // Callers record only that the outcome is unknown; why is logged here, where it is
+        // classified, reduced so neither the recipient nor an SDK payload reaches the log.
+        Effect.tapError((uncertain) =>
+          Effect.logWarning("submission uncertain", {
+            ...purpose,
+            reason: uncertain.reason,
+            cause: describeCause(uncertain.cause),
+          }),
         ),
       );
     });

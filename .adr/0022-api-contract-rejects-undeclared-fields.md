@@ -51,7 +51,7 @@ Since Effect RC113, schema-level `parseOptions` annotations are ignored. RC116 a
 
 ## Confirmation
 
-- **Now:** `Commands.test.ts` proves that a misspelled import-entry key fails in the CLI, naming its path, with no request sent.
+- **Now:** "rejects an import file with a misspelled entry key, naming it, before any request" in `apps/cli/src/commands/Lists.test.ts` proves that a misspelled import-entry key fails in the CLI, naming its path, with no request sent.
 - **After the upgrade:** the `Api.test.ts` cases for an unknown payload key and an unknown query parameter answer `400`, and every existing round trip still passes.
 
 ## References

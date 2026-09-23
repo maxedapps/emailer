@@ -202,7 +202,7 @@ On 2026-09-23 the drafting slice (ADR-0019, ADR-0020) landed on `origin/main` fr
 - **Ported:**
   - the rc.117 renames in main's new files, including `Prompt.Confirm`;
   - the boolean `halted` and the `-1` quota rule in `sending/SendGuard.ts`, used by test sends as well. Their alarm and enforcement fixtures collapsed into one case;
-  - the `submission uncertain` log in `sending/Dispatching.ts`;
+  - the `submission uncertain` log, moved into `Mailer.send`, where the outcome is classified. It carries the send's purpose, so campaign and test sends both log it. The test moved to `Mailer.test.ts` and covers both purposes;
   - the strict import decode in `commands/Lists.ts`, with both CLI tests;
   - `Encoding` base64url in main's `consent/Unsubscribe.ts`, whose tokens now sign through `SignedToken`. Both golden-token tests pass;
   - `unusedCampaigns`, gaining main's `updateDraft`/`deleteDraft`;
