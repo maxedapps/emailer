@@ -216,7 +216,17 @@ On 2026-09-23 the drafting slice (ADR-0019, ADR-0020) landed on `origin/main` fr
 - **Descoped, pending approval — T3.3:** main mints the link inside `Mailer.send`, after the claim. The link settings are env the function's props pin. Alchemy captures a constructor `Config` read on the deploy machine at plan time, so the Mailer cannot read them once at construction ([wiki](../../wiki/alchemy/runtime-and-bindings.md)). Keeping the old order would mean changing the Mailer's contract or reading the config twice. The read can only fail on a deploy missing its own env; every send then fails identically and the live suite catches it at the first send. The ordering test is removed, and `makeSend`'s comment now gives the real reason for the per-send read.
 - **Found by the new checks in main's code:** seven exports used only in their own module (knip), and three stale lint suppressions.
 - **Merge drop check:** the merged tree was compared with `origin/main` and with `public`, line by line. One line of main's was silently lost: the `addressStatus` override in `Api.test.ts`'s fake, next to a removed `membershipVersion` line. It is restored.
-- **Checks:** `pnpm check` is green with 871 unit tests.
+- **Merge review** (fresh reviewer, `origin/main..1a2e548`): no high or medium findings, and the line-by-line drop check was confirmed independently. Both low findings were fixed:
+  - ADR-0022 named the deleted `Commands.test.ts`; it now names the test in `commands/Lists.test.ts`.
+  - Test sends did not log why a submission ended uncertain. The log moved into `Mailer.send` (above).
+- **Flaky live test from main:** `Drafting.integration.test.ts` expected listed test-send recipients in insertion order. Members come back in `MEMBER#<contactId>` key order, and contact ids are random UUIDv4s, so the case failed about half its runs; it failed once here. It now compares against the list's own member order, and passed 3/3 in isolation.
+- **Checks:** `pnpm check` is green with 872 unit tests.
+- **Live gate on `test-cleanup`:**
+  - The merge commit deployed 31 resources and passed the full suite, 41/41 in 523 s. That includes main's drafting cases and the mapping hold, with the restore registered before main's canary wait.
+  - A `--force` redeploy for the Mailer log changed the `CodeSha256` of api, dispatcher and feedback. Unsubscribe and preview, which do not import the Mailer, kept theirs.
+  - The first full run afterwards went 40/41; its only failure was the flaky order above. After the fix, the full suite passed 41/41 in 475 s.
+  - The stage was destroyed (31 resources). The inventory shows no function, table, queue, alarm, schedule group, topic, log group, rule, configuration set, role or mapping left for it. Prod's four functions are untouched.
+- **Leak check:** the pattern from main's drafting work doc matches nothing in the changed files, the patches, or the commit messages.
 
 ## Handoff
 
