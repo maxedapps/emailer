@@ -6,7 +6,7 @@ Related: [SQS](sqs.md)
 
 ## Runtime behavior
 
-Lambda reuses execution environments, so reusable clients belong outside per-request work. Never reuse tenant identity or mutable invocation state globally. Package the clients and dependencies actually used rather than relying on a runtime-bundled SDK version. Alchemy beta.77 supports Node.js 22 and 24 ZIP runtimes. Select a runtime supported by both the deployment provider and dependencies, then test the produced bundle. [AWS best practices](https://docs.aws.amazon.com/lambda/latest/dg/best-practices.html), [Runtime list](https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtimes.html)
+Lambda reuses execution environments, so reusable clients belong outside per-request work. Never reuse tenant identity or mutable invocation state globally. Package the clients and dependencies actually used rather than relying on a runtime-bundled SDK version. Alchemy beta.79 supports Node.js 22 and 24 ZIP runtimes. Select a runtime supported by both the deployment provider and dependencies, then test the produced bundle. [AWS best practices](https://docs.aws.amazon.com/lambda/latest/dg/best-practices.html), [Runtime list](https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtimes.html)
 
 Function timeout must include initialization overhead where applicable, network calls, processing and required cleanup. Keep a deadline margin to record an uncertain outcome and settle the response. Increasing timeout alone can increase duplicate-risk windows and held queue leases. CPU capacity scales with configured memory; benchmark representative compute and I/O workloads rather than minimizing memory by habit.
 

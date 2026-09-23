@@ -32,7 +32,7 @@ export const tokensMatch = (expected: string, supplied: string): boolean => {
  * can put it in a log line, an error or a stack frame by accident.
  */
 export const apiToken = Effect.gen(function* () {
-  const configured = yield* Config.redacted("EMAILER_API_TOKEN").pipe(
+  const configured = yield* Config.Redacted("EMAILER_API_TOKEN").pipe(
     Effect.mapError(() => new MalformedApiToken({ reason: "absent" })),
   );
 

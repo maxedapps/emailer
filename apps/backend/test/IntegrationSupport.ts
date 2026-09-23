@@ -22,6 +22,7 @@ import * as Schemas from "@emailer/api/Schemas";
 import { Config, Crypto, Duration, Effect, Layer, Predicate, Schedule, Schema } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 
+import { encodeDispatchMessage } from "../src/Dispatch.ts";
 import { newIdentifier, nowIso } from "../src/Identifiers.ts";
 import {
   attributeOf,
@@ -49,6 +50,12 @@ export const mappingReadyTimeout = Duration.minutes(5);
 export const staleWakeLogTimeout = Duration.minutes(5);
 
 const mappingPoll = Schedule.spaced("3 seconds");
+
+/**
+ * How long a probe wake must sit unconsumed before the dispatcher's pollers count as stopped: one
+ * full SQS long-poll cycle. Draining pollers were seen taking five seconds to pick a message up.
+ */
+const probeSettle = Duration.seconds(20);
 
 const mappingUpdateRetry = Schedule.max([Schedule.recurs(20), Schedule.spaced("5 seconds")]);
 
@@ -93,10 +100,10 @@ export const simulator = (kind: SimulatorKind, runId: string, n = 0): string => 
 };
 
 export const configuration = Effect.gen(function* () {
-  const apiUrl = yield* Config.string("EMAILER_API_URL");
-  const token = yield* Config.redacted("EMAILER_API_TOKEN");
-  const tableName = yield* Config.string("EMAILER_TEST_TABLE_NAME");
-  const dispatchFailuresQueueUrl = yield* Config.string("EMAILER_TEST_DISPATCH_FAILURES_QUEUE_URL");
+  const apiUrl = yield* Config.String("EMAILER_API_URL");
+  const token = yield* Config.Redacted("EMAILER_API_TOKEN");
+  const tableName = yield* Config.String("EMAILER_TEST_TABLE_NAME");
+  const dispatchFailuresQueueUrl = yield* Config.String("EMAILER_TEST_DISPATCH_FAILURES_QUEUE_URL");
 
   return { apiUrl, token, tableName, dispatchFailuresQueueUrl };
 });
@@ -104,7 +111,7 @@ export const configuration = Effect.gen(function* () {
 // Read only where it is needed: both keys are copied out of the deployment, so a
 // run that exercises nothing else should not require them.
 export const unsubscribeSettings = Effect.gen(function* () {
-  const baseUrl = yield* Config.string("EMAILER_UNSUBSCRIBE_URL");
+  const baseUrl = yield* Config.String("EMAILER_UNSUBSCRIBE_URL");
   const signingKey = yield* unsubscribeSigningKey;
 
   return { baseUrl: baseUrl.replace(/\/+$/, ""), signingKey };
@@ -472,7 +479,7 @@ export const awaitCampaignFeedback = (
 
 export const sendRows = (campaignId: string) =>
   Effect.gen(function* () {
-    const tableName = yield* Config.string("EMAILER_TEST_TABLE_NAME");
+    const tableName = yield* Config.String("EMAILER_TEST_TABLE_NAME");
     const query = yield* dynamodb.query;
     const rows: Array<SendRow> = [];
     let startKey: dynamodb.AttributeMap | undefined;
@@ -504,7 +511,7 @@ export const sendRows = (campaignId: string) =>
 
 export const campaignMeta = (campaignId: string) =>
   Effect.gen(function* () {
-    const tableName = yield* Config.string("EMAILER_TEST_TABLE_NAME");
+    const tableName = yield* Config.String("EMAILER_TEST_TABLE_NAME");
     const getItem = yield* dynamodb.getItem;
 
     const response = yield* getItem({
@@ -527,7 +534,7 @@ export const replayTransactWrite = (request: dynamodb.TransactWriteItemsInput) =
     return yield* transactWriteItems(request);
   });
 
-const dispatcherFunctionName = Config.string("EMAILER_TEST_DISPATCHER_FUNCTION_NAME");
+const dispatcherFunctionName = Config.String("EMAILER_TEST_DISPATCHER_FUNCTION_NAME");
 
 const dispatcherLogGroup = (functionName: string) => `/aws/lambda/${functionName}`;
 
@@ -582,12 +589,63 @@ const dispatcherMapping = Effect.gen(function* () {
     throw new Error(`dispatch mapping for ${functionName} has no UUID`);
   }
 
-  return { uuid, state: mapping.State };
+  if (mapping.EventSourceArn === undefined) {
+    throw new Error(`dispatch mapping for ${functionName} has no event source`);
+  }
+
+  return { uuid, state: mapping.State, queueArn: mapping.EventSourceArn };
 });
 
 /**
- * Disables only the owned test dispatcher SQS mapping, waits until Disabled, and restores the
- * original Enabled state when the scope closes — including on failure.
+ * A mapping reporting Disabled can still deliver: live, its pollers kept invoking the dispatcher
+ * for more than twenty seconds afterwards. A probe wake for a campaign that does not exist, still
+ * queued a full poll cycle after it was sent, shows they have stopped. The dispatcher discards
+ * probes as stale once the mapping is restored.
+ */
+const awaitPollersStopped = (queueArn: string) =>
+  Effect.gen(function* () {
+    const getQueueUrl = yield* sqs.getQueueUrl;
+    const sendMessage = yield* sqs.sendMessage;
+    const getQueueAttributes = yield* sqs.getQueueAttributes;
+
+    const { QueueUrl } = yield* getQueueUrl({
+      QueueName: queueArn.slice(queueArn.lastIndexOf(":") + 1),
+    });
+
+    if (QueueUrl === undefined) {
+      throw new Error(`no queue URL for ${queueArn}`);
+    }
+
+    const probeHeld = Effect.gen(function* () {
+      const MessageBody = yield* encodeDispatchMessage({
+        campaignId: yield* newIdentifier,
+        runToken: yield* newIdentifier,
+      }).pipe(Effect.orDie);
+
+      yield* sendMessage({ QueueUrl, MessageBody });
+      yield* Effect.sleep(probeSettle);
+
+      const result = yield* getQueueAttributes({
+        QueueUrl,
+        AttributeNames: ["ApproximateNumberOfMessages"],
+      });
+
+      return Number.parseInt(result.Attributes?.ApproximateNumberOfMessages ?? "0", 10) > 0;
+    });
+
+    yield* probeHeld.pipe(
+      Effect.repeat({ until: (held: boolean) => held }),
+      Effect.timeoutOrElse({
+        duration: mappingReadyTimeout,
+        orElse: () => Effect.die(new Error(`the pollers of ${queueArn} did not stop`)),
+      }),
+    );
+  });
+
+/**
+ * Disables only the owned test dispatcher SQS mapping, waits until it is Disabled and its pollers
+ * have stopped, and restores the original Enabled state when the scope closes — including on
+ * failure.
  */
 export const disableDispatcherMapping = Effect.acquireRelease(
   Effect.gen(function* () {
@@ -598,6 +656,8 @@ export const disableDispatcherMapping = Effect.acquireRelease(
       yield* setMappingEnabled(mapping.uuid, false);
       yield* awaitMappingState(mapping.uuid, "Disabled");
     }
+
+    yield* awaitPollersStopped(mapping.queueArn);
 
     return { uuid: mapping.uuid, originalEnabled };
   }),
@@ -643,7 +703,7 @@ export const awaitStaleWakeLog = (campaignId: string, runToken: string, sinceMs:
   });
 
 export const rateLimitItem = Effect.gen(function* () {
-  const tableName = yield* Config.string("EMAILER_TEST_TABLE_NAME");
+  const tableName = yield* Config.String("EMAILER_TEST_TABLE_NAME");
   const getItem = yield* dynamodb.getItem;
 
   const response = yield* getItem({
@@ -660,7 +720,7 @@ export const rateLimitItem = Effect.gen(function* () {
 });
 
 export const dispatchFailureCount = Effect.gen(function* () {
-  const queueUrl = yield* Config.string("EMAILER_TEST_DISPATCH_FAILURES_QUEUE_URL");
+  const queueUrl = yield* Config.String("EMAILER_TEST_DISPATCH_FAILURES_QUEUE_URL");
   const getQueueAttributes = yield* sqs.getQueueAttributes;
 
   const result = yield* getQueueAttributes({

@@ -653,7 +653,7 @@ describe("the deployed service", () => {
         Effect.gen(function* () {
           const settings = yield* configuration;
           const client = yield* makeEmailerClient(settings.apiUrl, settings.token);
-          const alarmName = yield* Config.string("EMAILER_TEST_SET_BOUNCE_ALARM");
+          const alarmName = yield* Config.String("EMAILER_TEST_SET_BOUNCE_ALARM");
           const quota = yield* accountSendQuota;
           const timeout = campaignStateTimeout(5, quota?.MaxSendRate);
           const runId = yield* newIdentifier;
@@ -677,7 +677,8 @@ describe("the deployed service", () => {
 
             const sent = yield* sendToSimulatorList(client, list.id, campaign.id);
 
-            expect(submitted.includes(sent.submission.state)).toBe(true);
+            // The alarm pauses the run at its first slice, which can land before the send re-reads.
+            expect([...submitted, "paused"].includes(sent.submission.state)).toBe(true);
 
             const paused = yield* awaitCampaignState(
               client,

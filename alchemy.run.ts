@@ -33,7 +33,7 @@ export default Stack(
     const topic = yield* alertsTopic;
     yield* reputationAlarms;
 
-    const alertEmail = yield* Config.option(Config.string("EMAILER_ALERT_EMAIL"));
+    const alertEmail = yield* Config.option(Config.String("EMAILER_ALERT_EMAIL"));
 
     if (Option.isSome(alertEmail)) {
       yield* AWS.SNS.Subscription("AlertsEmail", {

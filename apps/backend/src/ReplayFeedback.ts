@@ -226,13 +226,13 @@ export const replay = Effect.fn("ReplayFeedback.replay")(function* (
 const command = Command.make(
   "replay-feedback",
   {
-    queueUrl: Flag.string("queue-url").pipe(
+    queueUrl: Flag.String("queue-url").pipe(
       Flag.withDescription("The failure queue's URL, from the stack's feedbackFailureQueueUrl"),
     ),
-    functionArn: Flag.string("function-arn").pipe(
+    functionArn: Flag.String("function-arn").pipe(
       Flag.withDescription("The feedback function's ARN, from the stack's feedbackFunctionArn"),
     ),
-    maxMessages: Flag.integer("max-messages").pipe(
+    maxMessages: Flag.Int("max-messages").pipe(
       Flag.withDescription("How many messages to replay before stopping"),
       Flag.withDefault(10),
     ),

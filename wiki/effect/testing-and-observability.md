@@ -2,13 +2,13 @@
 
 [Effect](effect.md)
 
-API examples target Effect `4.0.0-rc.112`.
+API examples target Effect `4.0.0-rc.117`.
 
 ## Match tests to failure boundaries
 
 Use service Layers to inject deterministic implementations into domain tests. Test externally meaningful outcomes: an authorization denial prevents a protected operation, a duplicate job does not repeat a completed side effect, and an interrupted computation releases acquired resources. A test that repeats the implementation's own sequence of method calls does not establish those invariants.
 
-Use `@effect/vitest` with its matching Effect RC and supported Vitest peer version: `@effect/vitest@4.0.0-rc.112` requires Effect `^4.0.0-rc.112` and Vitest `>=4.1.0 <5.0.0`. `it.effect` supplies Effect testing services; use `TestClock` from `effect/testing` for retry, lease and timeout behavior. Fork sleeping work before advancing virtual time, then join it. Use a live-clock integration test only where actual I/O needs real time. [RC112 test examples](https://unpkg.com/effect@4.0.0-rc.112/ai-docs/src/09_testing/10_effect-tests.ts), [Test runner peers](https://registry.npmjs.org/@effect/vitest/4.0.0-rc.112)
+Use `@effect/vitest` with its matching Effect RC and supported Vitest peer version: `@effect/vitest@4.0.0-rc.117` requires Effect `^4.0.0-rc.117` and Vitest `>=5.0.0 <6.0.0`. `it.effect` supplies Effect testing services; use `TestClock` from `effect/testing` for retry, lease and timeout behavior. Fork sleeping work before advancing virtual time, then join it. Use a live-clock integration test only where actual I/O needs real time. [RC117 test examples](https://unpkg.com/effect@4.0.0-rc.117/ai-docs/src/09_testing/10_effect-tests.ts), [Test runner peers](https://registry.npmjs.org/@effect/vitest/4.0.0-rc.117)
 
 High-value tests include:
 
@@ -22,7 +22,7 @@ Use generated data/property tests for state transition invariants, event permuta
 
 ## Logs and spans
 
-Name business operations with `Effect.fn` or `Effect.withSpan`. Include bounded context such as operation type and outcome; correlate using request ID, operation ID and upstream request ID in controlled logs. Avoid personal data, request bodies, credentials, authorization headers and raw SDK request dumps. [Logging](https://unpkg.com/effect@4.0.0-rc.112/ai-docs/src/08_observability/10_logging.ts), [OTLP tracing](https://unpkg.com/effect@4.0.0-rc.112/ai-docs/src/08_observability/20_otlp-tracing.ts)
+Name business operations with `Effect.fn` or `Effect.withSpan`. Include bounded context such as operation type and outcome; correlate using request ID, operation ID and upstream request ID in controlled logs. Avoid personal data, request bodies, credentials, authorization headers and raw SDK request dumps. [Logging](https://unpkg.com/effect@4.0.0-rc.117/ai-docs/src/08_observability/10_logging.ts), [OTLP tracing](https://unpkg.com/effect@4.0.0-rc.117/ai-docs/src/08_observability/20_otlp-tracing.ts)
 
 Use low-cardinality metric dimensions: stage, worker, operation and outcome. Put unbounded request/resource IDs in queryable logs, not metric dimensions. Instrument success, expected failure, retry exhaustion, interruption and uncertain remote outcomes separately. Lambda error counts alone miss successful invocations that return partial failures or durably quarantine work.
 
@@ -56,7 +56,7 @@ it.effect("releases a scoped resource when its task is interrupted", () =>
 );
 ```
 
-The test advances logical time to let the child enter its long sleep, then verifies release on interruption. It checks a lifetime property rather than duplicating an implementation call sequence. `it.effect` supplies test services; a real I/O integration that needs wall-clock behavior belongs in a live-service test. An in-memory test cannot prove cleanup after a hard process kill. [Testing examples](https://unpkg.com/effect@4.0.0-rc.112/ai-docs/src/09_testing/10_effect-tests.ts), [TestClock source](https://unpkg.com/effect@4.0.0-rc.112/src/testing/TestClock.ts)
+The test advances logical time to let the child enter its long sleep, then verifies release on interruption. It checks a lifetime property rather than duplicating an implementation call sequence. `it.effect` supplies test services; a real I/O integration that needs wall-clock behavior belongs in a live-service test. An in-memory test cannot prove cleanup after a hard process kill. [Testing examples](https://unpkg.com/effect@4.0.0-rc.117/ai-docs/src/09_testing/10_effect-tests.ts), [TestClock source](https://unpkg.com/effect@4.0.0-rc.117/src/testing/TestClock.ts)
 
 ## Exercise construction and execution separately
 
@@ -68,4 +68,4 @@ At a transport boundary, exercise representative native inputs and outputs: malf
 
 Choose span boundaries around named operations and remote calls, then propagate correlation through asynchronous message metadata deliberately. A queue creates a time and process boundary; process-local context alone cannot carry identity to the next consumer. Distinguish a trace identifier from an application idempotency key.
 
-Record expected failures as outcomes with useful classifications rather than dumping entire exception objects into logs. A metric's dimension set should remain bounded; operation IDs belong in searchable event records or logs. Observe retry counts, queue latency and partial failures alongside request duration. Configure exporter services and flushing for the actual runtime; enabling spans does not by itself send them to a backend. [Tracing integration](https://unpkg.com/effect@4.0.0-rc.112/ai-docs/src/08_observability/20_otlp-tracing.ts), [CloudWatch and audit](../aws/observability.md)
+Record expected failures as outcomes with useful classifications rather than dumping entire exception objects into logs. A metric's dimension set should remain bounded; operation IDs belong in searchable event records or logs. Observe retry counts, queue latency and partial failures alongside request duration. Configure exporter services and flushing for the actual runtime; enabling spans does not by itself send them to a backend. [Tracing integration](https://unpkg.com/effect@4.0.0-rc.117/ai-docs/src/08_observability/20_otlp-tracing.ts), [CloudWatch and audit](../aws/observability.md)

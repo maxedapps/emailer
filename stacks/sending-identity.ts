@@ -60,7 +60,7 @@ export default Stack(
   "EmailerSending",
   { providers, state: AWS.state() },
   Effect.gen(function* () {
-    const emailIdentity = yield* Config.string("EMAILER_SENDER_IDENTITY");
+    const emailIdentity = yield* Config.String("EMAILER_SENDER_IDENTITY");
     const dns = yield* dnsSettings;
     const mailFromDomain = mailFromDomainOf(emailIdentity);
 

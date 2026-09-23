@@ -21,7 +21,7 @@ export class UnsubscribeFunction extends AWS.Lambda.Function<UnsubscribeFunction
   "Unsubscribe",
 ) {}
 
-export const unsubscribeSigningKey = Config.redacted("EMAILER_UNSUBSCRIBE_SECRET");
+export const unsubscribeSigningKey = Config.Redacted("EMAILER_UNSUBSCRIBE_SECRET");
 
 /** Unpadded base64url expands three input bytes into four characters, rounding up. */
 const encodedLength = (bytes: number): number => Math.ceil((bytes * 4) / 3);
@@ -107,7 +107,7 @@ export const verifyToken = (
 
 export const unsubscribeLink = Effect.fn("Unsubscribe.unsubscribeLink")(function* (email: string) {
   const configured = yield* Config.all({
-    baseUrl: Config.string("EMAILER_UNSUBSCRIBE_URL"),
+    baseUrl: Config.String("EMAILER_UNSUBSCRIBE_URL"),
     signingKey: unsubscribeSigningKey,
   });
 

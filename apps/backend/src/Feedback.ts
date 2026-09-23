@@ -37,7 +37,7 @@ const configurationSetTag = "ses:configuration-set";
 
 const campaignTag = "campaignId";
 
-export const expectedConfigurationSet = Config.string("EMAILER_CONFIGURATION_SET");
+export const expectedConfigurationSet = Config.String("EMAILER_CONFIGURATION_SET");
 
 const countsOf = (classified: ClassifiedFeedback) => ({
   bounced: classified.classification === "permanent-bounce" ? classified.recipients.length : 0,

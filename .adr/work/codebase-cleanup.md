@@ -1,0 +1,146 @@
+# Codebase cleanup and dependency upgrade
+
+> **Status:** In progress
+> **Updated:** 2026-09-23
+> **ADRs:** [0005](../0005-contact-identity-and-membership-access-paths.md) (amended by T4), [0007](../0007-immutable-recipient-unsubscribe-links.md) (link before claim, T3), [0008](../0008-storage-capabilities-and-error-boundaries.md), [0011](../0011-open-recipient-set-and-paced-dispatch.md). New records are added by T1, T3 and T4.
+
+## Outcome and boundaries
+
+- **Target:** the codebase reads as if it had been built clean from the start:
+  - current compatible dependencies;
+  - no dead code or stale comments;
+  - leftovers caught by the check suite from now on;
+  - the four correctness gaps from the whole-codebase review closed.
+- **Authority:** the user approved the 37-item plan on 2026-09-23 ("do it … big refactors and rewrites are welcome").
+- **Constraints:**
+  - Never destroy or redeploy `prod` or `EmailerSending/shared`. Live checks use the ephemeral stage `test-cleanup` only, and each is destroyed afterwards.
+  - `pnpm check` must be green at every commit.
+- **Out of scope:**
+  - renaming `StorageFailure`;
+  - object parameters on storage methods;
+  - merging the two stores or the primitive factories;
+  - splitting large files;
+  - CLI error-dump polish;
+  - DynamoDB Local, `@effect/vitest` or a coverage tool;
+  - oxlint 1.85, which is blocked because `@effect/tsgo` 0.45.0 supports only oxlint 1.81/1.82.
+- **Worktree:** `~/worktrees/emailer/codebase-cleanup`, branch `codebase-cleanup` off `public` at `c72055b`. It merges back with `--no-ff` once the final review is clear.
+
+## Tasks
+
+### T0 — Dependency upgrade
+
+- **Status:** Verified
+- **Items:**
+  - T0.1: `effect` and `@effect/platform-node` to 4.0.0-rc.117. Move the overrides to rc.117; they now exist to keep a single Effect RC.
+  - T0.2: `alchemy` to 2.0.0-beta.79 and `@distilled.cloud/aws` to 1.0.0-rc.12.
+  - T0.3: `oxfmt` 0.70.0, `vitest` 5.0.1, `@types/node` 24.13.6.
+  - T0.4: delete Alchemy's vitest 4.1.11 extension and the stale `minimumReleaseAgeExclude` entries; re-key the TypeScript 6.0.3 extension to `@alchemy.run/cloudflare-runtime@2.0.0-beta.79`.
+  - T0.5: the Effect renames (`Config.String`, `Redacted`, `Int`, `Literals`; `Flag.*`; `Argument.String`).
+  - T0.6: wiki refresh (lowercase Effect names; the Alchemy traps table).
+- **Acceptance:**
+  - `pnpm check` is green.
+  - Exactly one `effect` and one `@distilled.cloud/aws` in the lockfile.
+  - Every entry module imports.
+  - A `test-cleanup` deploy plus the full integration suite plus a `ReplayFeedback` run all pass.
+  - The stage stays up until T4, so that T4's redeploy proves on existing functions that a changed bundle ships (`CodeSha256` recorded below); it is destroyed after T4.
+- **Evidence:**
+  - **Upgrade:**
+    - A scratch trial made the renames mechanical: 46 call sites, plus the DNS work's `Config.Literals` and `Config.String`.
+    - The lockfile has exactly one version each of `effect` (rc.117), `@distilled.cloud/*` (rc.12), `alchemy` (beta.79) and `vitest` (5.0.1).
+    - `pnpm check` is green with 737 unit tests.
+    - Api, Dispatcher, Feedback, UnsubscribePage, ReplayFeedback and the CLI all import with AWS credentials removed.
+  - **Deploy:** `test-cleanup` deployed 28 resources in 90 s.
+  - **Replay:** `ReplayFeedback` through the SSO profile (Distilled's new credential chain) printed `replayed 0 message(s)`.
+  - **First full integration run:** 33/35. Neither failure came from the upgrade. Both were live races.
+    - **Alarm pause:** the forced alarm pauses the first slice before `send` re-reads its campaign, so the response can already say `paused`. The assertion now accepts `paused`.
+    - **Stale wake held by disabling the mapping:** the dispatcher consumed the wake anyway. Probed live:
+      - on a quiet stage, a message sent 1 s after `Disabled` was still invoked, and one sent 12 s after stayed queued;
+      - after a busy suite, the pollers kept invoking for more than 20 s, with up to 5 s pickup delay.
+      - `disableDispatcherMapping` now waits until a probe wake (a campaign that does not exist, discarded as stale later) stays queued for a full 20 s long-poll cycle. The finding is recorded in `wiki/aws/sqs.md`.
+    - Both cases passed 3/3 in isolation afterwards.
+  - **Final full integration run:** 35/35 in 502 s.
+  - **`CodeSha256` after the T0 deploy:**
+    - api `IO9u/ZNE…`
+    - dispatcher `s1/6Tk3D…`
+    - feedback `QH6LVA+E…`
+    - unsubscribe `Q430SHJy…`
+  - **Wiki:** 23 pages refreshed for beta.79, RC117 and Distilled rc.12. The traps table lost the RC112 pin row and gained rows for the Lambda update wait and Distilled's own signer and credential chain.
+
+### T1 — Tooling that catches leftovers, and clearing what it finds
+
+- **Status:** Pending
+- **Items:**
+  - T1.1: knip dev dependency, `knip.config.ts` and a `knip` script, all in `pnpm check`.
+  - T1.2: `--report-unused-disable-directives` on the lint script.
+  - T1.3: delete stale disable comments (`Unsubscribe.ts:5`, `Commands.test.ts:14`).
+  - T1.4: delete `apps/mcp` and the MCP SDK catalog entry.
+  - T1.5: delete `CreateContactOutcome`, `AllPrimitives` and `StoredFeedback`/`StoredFeedbackRecord`; turn `FeedbackKind`/`FeedbackOutcome` into plain unions.
+  - T1.6: remove `export` from names used only inside their own module.
+  - T1.7: replace the `MemberCursor` alias with `EntityId`.
+  - T1.8: new ADR for the whole-project unused-code gate.
+- **Acceptance:** `pnpm check`, including knip, is green with zero findings.
+- **Evidence:**
+
+### T2 — Simplify
+
+- **Status:** Pending
+- **Items:**
+  - T2.1: drop `pauseRun`'s `_now` parameter.
+  - T2.2: the API Lambda no longer carries the unsubscribe URL or secret, and the stale `alchemy.run.ts` comment goes.
+  - T2.3: one shared table-binding Layer for the audience and campaign stores.
+  - T2.4: one `campaignWake(sendMessage)`.
+  - T2.5: use the `removeMembership` helper in `Membership.ts`.
+  - T2.6: `readItems` becomes a plain loop.
+  - T2.7: `SendGuard.halted` becomes a boolean.
+  - T2.8: drop the `predecessor !== runToken` check.
+  - T2.9: `FetchHttpClient.layer` without `mergeAll`.
+  - T2.10: replace `Buffer` with Effect `Encoding` in `Unsubscribe.ts`, keeping the round-trip check.
+  - T2.11: fix stale and wrong comments.
+- **Acceptance:** `pnpm check` is green; existing tests are updated only where a signature changed.
+- **Evidence:**
+
+### T3 — Correctness and error handling
+
+- **Status:** Pending
+- **Items:**
+  - T3.1: log the reason and cause of every `uncertain` submission, without the recipient.
+  - T3.2: reject unknown request fields. `HttpApi.ParseOptions` goes on `EmailerApi`, and `lists import --file` decodes strictly. Adds a new ADR.
+  - T3.3: mint the unsubscribe link before the recipient is claimed.
+  - T3.4: `Max24HourSend: -1` means no daily limit.
+- **Acceptance:** each item has a new test; `pnpm check` is green.
+- **Evidence:**
+
+### T4 — Remove `membershipVersion`
+
+- **Status:** Pending
+- **Items:**
+  - T4.1: a list-existence `ConditionCheck` replaces the increments. The field goes, along with the `deleteContact` fallback, `deleteList`'s last-page special case, and the stale comments.
+  - T4.2: update the unit pins; replace the counter oracle in `Api.integration.test.ts`; add a live case proving that adding to a deleted list is refused.
+  - T4.3: a new ADR amending ADR-0005.
+- **Acceptance:** `pnpm check` is green, plus a `test-cleanup` deploy and the full integration suite, then destroy.
+- **Evidence:**
+
+### T5 — Tests and docs
+
+- **Status:** Pending
+- **Items:**
+  - T5.1: one shared unused-`CampaignStore` stub.
+  - T5.2: trim `Api.test.ts` to what only the HTTP layer can break.
+  - T5.3: `test:integration` loads `.env.test`, plus a README section.
+  - T5.4: README updates:
+    - the address-case advice;
+    - unknown fields are rejected;
+    - knip is part of `pnpm check`.
+- **Acceptance:** `pnpm check` is green; no protected HTTP behaviour loses its test.
+- **Evidence:**
+
+## Handoff
+
+- **Next action:** T1
+- **Reviews:**
+- **Deviations:**
+  - **T0, live test fixes:** two integration-test fixes (the alarm-pause assertion, and the probe-based mapping hold). Both correct test races observed live and change no product code.
+- **Resources:**
+  - the worktree and branch above;
+  - the ephemeral stage `Emailer/test-cleanup` (us-east-1), deployed for T0 and kept for T4, then destroyed;
+  - an untracked `.env.test` in the worktree, pointed at that stage.

@@ -24,8 +24,8 @@ import { FetchHttpClient } from "effect/unstable/http";
 export const requestTimeout = Duration.seconds(70);
 
 const emailerClient = Effect.gen(function* () {
-  const url = yield* Config.string("EMAILER_API_URL");
-  const token = yield* Config.redacted("EMAILER_API_TOKEN");
+  const url = yield* Config.String("EMAILER_API_URL");
+  const token = yield* Config.Redacted("EMAILER_API_TOKEN");
 
   return yield* makeEmailerClient(url, token);
 });
@@ -42,16 +42,16 @@ const withClient = <A>(
 const report = <Value>(value: Value) => Console.log(Inspectable.toStringUnknown(value));
 
 const idArgument = (name: string) =>
-  Argument.string(name).pipe(Argument.withSchema(Schemas.EntityId));
+  Argument.String(name).pipe(Argument.withSchema(Schemas.EntityId));
 
 const contactsCreate = Command.make(
   "create",
   {
-    email: Flag.string("email").pipe(
+    email: Flag.String("email").pipe(
       Flag.withDescription("The contact's email address"),
       Flag.withSchema(Schemas.EmailAddress),
     ),
-    name: Flag.string("name").pipe(
+    name: Flag.String("name").pipe(
       Flag.withDescription("The contact's display name"),
       Flag.withSchema(Schemas.EntityName),
       Flag.optional,
@@ -78,13 +78,13 @@ const contactsGet = Command.make(
   }),
 ).pipe(Command.withDescription("Retrieve a contact by id"));
 
-const limitFlag = Flag.integer("limit").pipe(
+const limitFlag = Flag.Int("limit").pipe(
   Flag.withDescription("How many entries to return, 1-100"),
   Flag.withSchema(Schemas.PageSize),
   Flag.optional,
 );
 
-const cursorFlag = Flag.string("cursor").pipe(
+const cursorFlag = Flag.String("cursor").pipe(
   Flag.withDescription("Continue from the cursor a previous page reported"),
 );
 
@@ -168,7 +168,7 @@ const contactsList = Command.make(
 const contactsByEmail = Command.make(
   "by-email",
   {
-    email: Flag.string("email").pipe(
+    email: Flag.String("email").pipe(
       Flag.withDescription("The address to look up"),
       Flag.withSchema(Schemas.EmailAddress),
     ),
@@ -184,21 +184,21 @@ const contactsUpdate = Command.make(
   "update",
   {
     id: idArgument("id"),
-    email: Flag.string("email").pipe(
+    email: Flag.String("email").pipe(
       Flag.withDescription("A new address for the contact"),
       Flag.withSchema(Schemas.EmailAddress),
       Flag.optional,
     ),
-    name: Flag.string("name").pipe(
+    name: Flag.String("name").pipe(
       Flag.withDescription("A new display name"),
       Flag.withSchema(Schemas.EntityName),
       Flag.optional,
     ),
-    clearName: Flag.boolean("clear-name").pipe(
+    clearName: Flag.Boolean("clear-name").pipe(
       Flag.withDescription("Remove the display name"),
       Flag.withDefault(false),
     ),
-    attr: Flag.keyValuePair("attr").pipe(
+    attr: Flag.KeyValuePair("attr").pipe(
       Flag.withDescription("Replace the whole attribute map, as repeated key=value pairs"),
       // The same bounds the service enforces, applied at parsing: too many entries or an
       // oversized key is refused here with a usable message rather than as a 400 after a round
@@ -249,7 +249,7 @@ const contacts = Command.make("contacts").pipe(
 const listsCreate = Command.make(
   "create",
   {
-    name: Flag.string("name").pipe(
+    name: Flag.String("name").pipe(
       Flag.withDescription("The list's name"),
       Flag.withSchema(Schemas.EntityName),
     ),
@@ -312,7 +312,7 @@ const listsRename = Command.make(
   "rename",
   {
     id: idArgument("id"),
-    name: Flag.string("name").pipe(
+    name: Flag.String("name").pipe(
       Flag.withDescription("The list's new name"),
       Flag.withSchema(Schemas.EntityName),
     ),
@@ -354,7 +354,7 @@ const listsImport = Command.make(
   "import",
   {
     listId: idArgument("listId"),
-    file: Flag.fileSchema("file", Schemas.ImportContactsPayload, { format: "json" }).pipe(
+    file: Flag.FileSchema("file", Schemas.ImportContactsPayload, { format: "json" }).pipe(
       Flag.withDescription("A JSON file holding the contacts to load"),
     ),
   },
@@ -393,24 +393,24 @@ const lists = Command.make("lists").pipe(
 const campaignsCreate = Command.make(
   "create",
   {
-    list: Flag.string("list").pipe(
+    list: Flag.String("list").pipe(
       Flag.withDescription("The list to send to"),
       Flag.withSchema(Schemas.EntityId),
     ),
-    subject: Flag.string("subject").pipe(
+    subject: Flag.String("subject").pipe(
       Flag.withDescription("The message subject"),
       Flag.withSchema(Schemas.CampaignSubject),
     ),
-    text: Flag.fileText("text").pipe(
+    text: Flag.FileText("text").pipe(
       Flag.withDescription("Path to a file holding the plain-text body"),
       Flag.withSchema(Schemas.CampaignText),
     ),
-    html: Flag.fileText("html").pipe(
+    html: Flag.FileText("html").pipe(
       Flag.withDescription("Path to a file holding the HTML body; the text body is still required"),
       Flag.withSchema(Schemas.CampaignHtml),
       Flag.optional,
     ),
-    filter: Flag.keyValuePair("filter").pipe(
+    filter: Flag.KeyValuePair("filter").pipe(
       Flag.withDescription(
         "Send only to members whose attributes equal every key=value given; repeat the flag per entry",
       ),
@@ -526,7 +526,7 @@ const campaignsSchedule = Command.make(
   "schedule",
   {
     id: idArgument("id"),
-    at: Flag.string("at").pipe(
+    at: Flag.String("at").pipe(
       Flag.withDescription(
         "When to send, as an ISO-8601 date or date-time (up to milliseconds); no zone means UTC",
       ),
@@ -603,7 +603,7 @@ const campaigns = Command.make("campaigns").pipe(
 const addressesStatus = Command.make(
   "status",
   {
-    email: Flag.string("email").pipe(
+    email: Flag.String("email").pipe(
       Flag.withDescription("The address to inspect, exactly as SES lists it"),
       Flag.withSchema(Schemas.ListedEmailAddress),
     ),
@@ -618,7 +618,7 @@ const addressesStatus = Command.make(
 const addressesUnsuppress = Command.make(
   "unsuppress",
   {
-    email: Flag.string("email").pipe(
+    email: Flag.String("email").pipe(
       Flag.withDescription("The address to remove from suppression, exactly as SES lists it"),
       Flag.withSchema(Schemas.ListedEmailAddress),
     ),

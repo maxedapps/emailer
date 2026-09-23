@@ -77,8 +77,8 @@ export const postalAddress = Config.schema(
 
 export const mailerAddresses = Effect.gen(function* () {
   const raw = yield* Config.all({
-    identity: Config.string("EMAILER_SENDER_IDENTITY"),
-    sender: Config.string("EMAILER_FROM_EMAIL"),
+    identity: Config.String("EMAILER_SENDER_IDENTITY"),
+    sender: Config.String("EMAILER_FROM_EMAIL"),
     postalAddress,
   });
 

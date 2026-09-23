@@ -20,7 +20,7 @@ const logRetention = Duration.days(7);
 
 const invocationTimeout = Duration.minutes(5);
 
-const dailySendCeiling = Config.option(Config.int("EMAILER_DAILY_SEND_CEILING"));
+const dailySendCeiling = Config.option(Config.Int("EMAILER_DAILY_SEND_CEILING"));
 
 const dispatcherProps = Effect.gen(function* () {
   const { stage } = yield* Stack;

@@ -2,7 +2,7 @@
 
 [Alchemy](alchemy.md)
 
-API examples target Alchemy `2.0.0-beta.77` with Effect `4.0.0-rc.112`.
+API examples target Alchemy `2.0.0-beta.79` with Effect `4.0.0-rc.117`.
 
 Related: [Lambda token authentication](../aws/http-token-authentication.md), [domain resource ownership](aws-domains-and-http.md).
 
@@ -10,11 +10,11 @@ Related: [Lambda token authentication](../aws/http-token-authentication.md), [do
 
 A stage selects a Stack instance; a profile selects credentials; the AWS account and Region select the actual cloud boundary. Stage names do not isolate account-wide quotas or singleton settings; SES quotas, reputation and domain identities are examples (SES allows one identity per domain per account and Region). Explicit physical names and cross-stage references can also defeat expected isolation. Use explicit stage/profile/Region selection for controlled environments and separate AWS accounts where production isolation matters. Account-level objects that must never be recreated, such as an Easy DKIM identity, belong in a retained owner stack rather than an ephemeral stage — see [SES](../aws/ses.md). [Stages](https://alchemy.run/environments/stages/), [Profiles](https://alchemy.run/environments/profiles/)
 
-Beta.77 deployment commands default to `live_$USER`; `dev` defaults to `dev_$USER`, after any explicit stage or `ALCHEMY_STAGE` selection. [Stage resolution source](https://unpkg.com/alchemy@2.0.0-beta.77/src/Cli/commands/flags.ts) Do not make CI rely on whichever username happens to be present. Use stage-specific endpoints and restrict preview access to external side effects. Avoid reconciling an account-wide setting independently from multiple stages.
+Beta.79 deployment commands default to `live_$USER`; `dev` defaults to `dev_$USER`, after any explicit stage or `ALCHEMY_STAGE` selection. [Stage resolution source](https://unpkg.com/alchemy@2.0.0-beta.79/src/Cli/commands/flags.ts) Do not make CI rely on whichever username happens to be present. Use stage-specific endpoints and restrict preview access to external side effects. Avoid reconciling an account-wide setting independently from multiple stages.
 
 ## S3 state is available
 
-`AWS.state()` in beta.77 persists resource records and Stack outputs in S3. Its default bucket name is `alchemy-state-{accountId}-{region}-an`, using the account-regional namespace. Keys include Stack, stage and fully qualified resource identity. Initial state access can bootstrap the bucket; **planning may therefore have a bootstrap side effect** on a fresh environment. [Published State source](https://unpkg.com/alchemy@2.0.0-beta.77/src/AWS/StateStore/State.ts)
+`AWS.state()` in beta.79 persists resource records and Stack outputs in S3. Its default bucket name is `alchemy-state-{accountId}-{region}-an`, using the account-regional namespace. Keys include Stack, stage and fully qualified resource identity. Initial state access can bootstrap the bucket; **planning may therefore have a bootstrap side effect** on a fresh environment. [Published State source](https://unpkg.com/alchemy@2.0.0-beta.79/src/AWS/StateStore/State.ts)
 
 The implementation enables bucket versioning, default encryption and public-access blocking. Default encryption is SSE-S3 (`AES256`); KMS configuration is available. Restrict deployment-role access to state and backups. Redacted values must remain recoverable by deployment, so do not treat an obscured log representation as proof that stored secrets are inaccessible.
 
@@ -32,7 +32,7 @@ Credential permissions for deployment exceed those of runtime functions. Runtime
 
 Resolve required configuration in the outer constructor so Alchemy discovers and injects it. Reading it only inside a request handler does not let planning discover it. The raw source value is captured; transformations and defaults execute again at runtime. Keep defaults deterministic. [Secrets and configuration](https://alchemy.run/environments/secrets/)
 
-RC112 spells configuration constructors `Config.string`, `Config.number`, and `Config.redacted`; RC113 renamed these constructors and breaks beta.77 runtime imports. [Versioned Config source](https://unpkg.com/effect@4.0.0-rc.112/src/Config.ts)
+RC117 spells configuration constructors in PascalCase: `Config.String`, `Config.Number`, `Config.Int` and `Config.Redacted`. Combinators such as `Config.all`, `Config.option`, `Config.schema` and `Config.withDefault` stay lowercase, and a fallible transformation is `Config.mapEffect`. [Versioned Config source](https://unpkg.com/effect@4.0.0-rc.117/src/Config.ts)
 
 Distinguish three mechanisms:
 
@@ -54,7 +54,7 @@ Inspect the saved resource record and then query the actual cloud object using i
 
 Before restoring a state object, stop concurrent writers and retain the current version. Select a known snapshot, identify cloud mutations performed afterward, and compare the restored graph with live resources before applying. An old state snapshot can name a deleted generation or omit a newly created one. Restoring it does not reverse external mutations.
 
-A state backend migration needs a consistent transfer of Stack records and outputs, correct access to any protected values, and a controlled switch of writers. Starting with an empty backend creates an ownership-discovery problem. Do not write to old and new backends independently while both target the same physical objects. S3 versioning provides useful history, but it does not supply distributed locking or a cross-object transaction. [AWS state implementation](https://unpkg.com/alchemy@2.0.0-beta.77/src/AWS/StateStore/State.ts)
+A state backend migration needs a consistent transfer of Stack records and outputs, correct access to any protected values, and a controlled switch of writers. Starting with an empty backend creates an ownership-discovery problem. Do not write to old and new backends independently while both target the same physical objects. S3 versioning provides useful history, but it does not supply distributed locking or a cross-object transaction. [AWS state implementation](https://unpkg.com/alchemy@2.0.0-beta.79/src/AWS/StateStore/State.ts)
 
 ## Secret lifetime and application lifetime
 
