@@ -1,6 +1,6 @@
 # Codebase cleanup and dependency upgrade
 
-> **Status:** Complete. Every task is verified and merged with main's drafting slice (see [Sync with main](#sync-with-main)). T3.2's API-level annotation is deferred until an Effect RC ships effect#8423 (ADR-0022); on 2026-09-23 rc.117 was still the newest, and the user approved the deferral that day.
+> **Status:** Complete, merged to `main` as PR #1 (`60061cd`) and deployed to prod on 2026-09-23 (see [Handoff](#handoff)). Every task is verified and merged with main's drafting slice (see [Sync with main](#sync-with-main)). T3.2's API-level annotation is deferred until an Effect RC ships effect#8423 (ADR-0022); on 2026-09-23 rc.117 was still the newest, and the user approved the deferral that day.
 > **Updated:** 2026-09-23
 > **ADRs:** [0021](../0021-whole-project-unused-code-check.md) (T1), [0005](../0005-contact-identity-and-membership-access-paths.md) (amended by T4), [0004](../0004-sender-owned-one-click-unsubscribe.md) (who mints the links, T2 and the sync), [0008](../0008-storage-capabilities-and-error-boundaries.md), [0011](../0011-open-recipient-set-and-paced-dispatch.md). [0022](../0022-api-contract-rejects-undeclared-fields.md) (T3), [0023](../0023-lists-carry-no-membership-version.md) (T4). ADR numbers 0019–0020 belong to the drafting slice merged from main.
 
@@ -240,8 +240,17 @@ On 2026-09-23 the drafting slice (ADR-0019, ADR-0020) landed on `origin/main` fr
 
 ## Handoff
 
-- **Next action:** the user reviews and merges PR #1. Follow-ups:
-  - prod runs the old code until it is redeployed with `--force` (then check `CodeSha256`);
+- **Merged and deployed (2026-09-23):**
+  - **Merge:** a PR review found nothing to change in the code and flagged two deploy-time risks. The first was an in-place upgrade no live gate had rehearsed, because every stage was created fresh by beta.79. The second was the forward-only list change, now recorded in ADR-0023. PR #1 was then merged with `--no-ff` as `60061cd`, whose tree is identical to the reviewed head `a98cb23`. The leak check was clean, and the worktree and branch were removed.
+  - **Prod, destroyed rather than upgraded:** prod ran neither slice and held only a test list, so the user chose to destroy and redeploy it. That sidesteps the unrehearsed upgrade path.
+    - **Destroy:** `Emailer/prod` destroyed 29 resources in 102 s. The AWS inventory then showed no function, table, queue, configuration set, alarm, topic, schedule group, rule, role, log group or mapping left for the stage, and no `Emailer` state.
+    - **Untouched:** `EmailerSending/shared` (the adopted identity and its Cloudflare records), EmailOctopus's configuration sets, identity and IAM user, and account sending (enabled, `HEALTHY`).
+  - **Fresh deploy from `60061cd`:**
+    - **Plan:** `32 to create, 30 binding changes`, nothing else.
+    - **Deploy:** 32 resources in 85 s. All five functions are `Active`/`Successful`: api `2HgurEFl…`, dispatcher `uzyb7VAG…`, feedback `12EY/nja…`, unsubscribe `X5fuEzz5…`, preview `nK4MNEjm…`. The dispatch mapping is `Enabled`, and the alert email subscription is confirmed.
+  - **Smoke test, read-only:** the CLI's `lists list` and `contacts list` answer empty. The API without a token answers `401`, and the unsubscribe and preview pages answer `404` to a forged token. No mail was sent.
+  - **Local follow-through:** the untracked `.env` points at the new API URL. The new Function URL hosts were added to the leak pattern. The unsubscribe and preview keys rotated with the stage.
+- **Follow-ups:**
   - add the `EmailerApi` `HttpApi.ParseOptions` annotation on the Effect RC containing effect#8423;
   - upgrade oxlint when `@effect/tsgo` supports a version newer than 1.82.
 - **Reviews:**
@@ -261,6 +270,6 @@ On 2026-09-23 the drafting slice (ADR-0019, ADR-0020) landed on `origin/main` fr
   - **T1, index slip:** the worker briefly staged and unstaged the `apps/mcp` deletion. The index was back at HEAD before the commit; nothing was lost.
   - **T0, live test fixes:** two integration-test fixes (the alarm-pause assertion, and the probe-based mapping hold). Both correct test races observed live and change no product code.
 - **Resources:**
-  - the worktree and branch above;
+  - the worktree and branch above, both removed after the merge;
   - the ephemeral stage `Emailer/test-cleanup` (us-east-1): deployed for T0, redeployed for T4, destroyed after the final gate, with teardown verified against the AWS inventory;
   - an untracked `.env.test` in the worktree, pointed at that stage; it is removed with the worktree.

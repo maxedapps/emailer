@@ -9,6 +9,7 @@
   - One `[Test]` copy reached the operator's test inbox with `dkim=pass` for the sending domain, both unsubscribe headers in the signed `h=` list, and `dmarc=pass`.
   - The preview answered with all four headers, and a link clicked inside its frame opened a new tab.
   - The prod plan shows three creates (Preview, PreviewLogs, PreviewSecret) and nothing replaced or deleted.
+- Deployed to prod: 2026-09-23, from `60061cd` together with the codebase cleanup. Prod held only a test list, so the user chose to destroy the stage and deploy it fresh instead of upgrading it in place; the in-place plan above was not applied. The identity stack was not touched. Details are in [the cleanup's handoff](work/codebase-cleanup.md#handoff).
 - Amended: [codebase-cleanup](work/codebase-cleanup.md) — each sender mints the recipient's unsubscribe link before it changes any state, the dispatcher before its claim, and hands it to the mailer, which composes and submits. A link that cannot be minted then stops a slice with no claimed row left unsettled. The one composer is unchanged; the preview still passes its placeholder.
 - Authority: On 2026-09-23 the user asked for more ways to draft and preview campaigns: a preview that works on a headless machine through a short-lived public URL, and a test command that sends to several addresses or to one list, with a recipient-count warning. They followed every recommendation that the research produced:
   - editable and deletable drafts;

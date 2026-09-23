@@ -1,6 +1,6 @@
 # Drafting, previews and test sends
 
-> **Status:** Implemented and live-gated on 2026-09-23. The prod deploy waits for the user (G3). The user's instruction to implement the plan accepted ADR-0019 and ADR-0020.
+> **Status:** Implemented and live-gated on 2026-09-23, and deployed to prod the same day on the user's word (G3), by destroying and redeploying the stage (see T13). The user's instruction to implement the plan accepted ADR-0019 and ADR-0020.
 > **ADRs:**
 > - **New, Accepted:**
 >   - [0019 — Markdown campaign bodies rendered by the CLI](../0019-markdown-campaign-bodies.md)
@@ -571,8 +571,8 @@ Tests sit beside their modules. Three things differ from the layout the user saw
 
 - **Change:** none to code. Plan both stacks and record the result, anonymized.
 - **Depends on:** T12
-- **Status:** Planned. Prod has not been deployed; that waits for the user (G3).
-  - **Prod plan:** `3 to create, 4 to update, 4 binding changes`.
+- **Status:** Done, differently from planned. On 2026-09-23 the user granted G3 after this slice merged with the codebase cleanup (PR #1, `60061cd`). Prod held only a test list, so the user chose to destroy `Emailer/prod` and deploy it fresh rather than apply the in-place plan below. The evidence is in the cleanup's [handoff](codebase-cleanup.md#handoff). The `campaigns preview` and `campaigns test --to` checks were not run, because the user named no recipients.
+  - **Prod plan, superseded:** `3 to create, 4 to update, 4 binding changes`.
     - Creates: Preview, PreviewLogs, PreviewSecret.
     - Updates: Api, Dispatcher, Feedback, Unsubscribe.
     - New permissions: `SendEmail`, `GetAccount` and `DescribeAlarms` for Api, and `GetItem` for Preview.

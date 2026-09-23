@@ -37,6 +37,7 @@ ADR-0005 gave every list a `membershipVersion`. Every membership write increment
 ## Consequences
 
 - Existing list items keep a stale `membershipVersion` attribute. Decoding ignores it, and it disappears as lists are recreated. No migration.
+- **The change is forward-only.** Code from before this ADR increments the counter on every membership write with `SET membershipVersion = membershipVersion + :one`, and DynamoDB refuses that expression on a list created without the attribute. Its transaction runner treats that as a failure, not a failed condition. So after a rollback past this ADR, every list created since answers `503` to membership writes, to the deletion of a contact that belongs to it, and to its own deletion past one page. Before rolling back, backfill each list `META` with `SET membershipVersion = if_not_exists(membershipVersion, :zero)`.
 - The contact cascade is one transaction per membership, never two. The list cascade's pages all have the same shape.
 - Nothing observable through the API changes.
 
