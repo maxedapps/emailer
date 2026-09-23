@@ -1,6 +1,6 @@
 # Codebase cleanup and dependency upgrade
 
-> **Status:** Partial. Every task is verified and merged with main's drafting slice (see [Sync with main](#sync-with-main)), except T3.2's API-level annotation, which waits for the Effect RC that ships effect#8423 (ADR-0022). On 2026-09-23 rc.117 was still the newest RC.
+> **Status:** Complete. Every task is verified and merged with main's drafting slice (see [Sync with main](#sync-with-main)). T3.2's API-level annotation is deferred until an Effect RC ships effect#8423 (ADR-0022); on 2026-09-23 rc.117 was still the newest, and the user approved the deferral that day.
 > **Updated:** 2026-09-23
 > **ADRs:** [0021](../0021-whole-project-unused-code-check.md) (T1), [0005](../0005-contact-identity-and-membership-access-paths.md) (amended by T4), [0004](../0004-sender-owned-one-click-unsubscribe.md) (who mints the links, T2 and the sync), [0008](../0008-storage-capabilities-and-error-boundaries.md), [0011](../0011-open-recipient-set-and-paced-dispatch.md). [0022](../0022-api-contract-rejects-undeclared-fields.md) (T3), [0023](../0023-lists-carry-no-membership-version.md) (T4). ADR numbers 0019–0020 belong to the drafting slice merged from main.
 
@@ -229,6 +229,7 @@ On 2026-09-23 the drafting slice (ADR-0019, ADR-0020) landed on `origin/main` fr
   - A `--force` redeploy for the Mailer log changed the `CodeSha256` of api, dispatcher and feedback. Unsubscribe and preview, which do not import the Mailer, kept theirs.
   - The first full run afterwards went 40/41; its only failure was the flaky order above. After the fix, the full suite passed 41/41 in 475 s.
   - The stage was destroyed (31 resources). The inventory shows no function, table, queue, alarm, schedule group, topic, log group, rule, configuration set, role or mapping left for it. Prod's four functions are untouched.
+  - **After restoring T3.3:** a fresh `test-cleanup` stage deployed from `44b901c` (31 resources) passed the full suite, 41/41 in 502 s. It was destroyed and verified against the inventory the same way. Prod's four functions are untouched.
 - **Leak check:** the pattern from main's drafting work doc matches nothing in the changed files, the patches, or the commit messages.
 - **Plan audits** (two fresh reviewers, git objects at `dd4fc5c`, 2026-09-23):
   - **This plan:** all 36 subtasks accounted for. Two were reverted or superseded by main (T2.2, T2.4), T3.2's API half is blocked upstream, and T3.3 was absent until its restoration above. No silent loss was found, checking lines in both directions and test names.
@@ -239,7 +240,7 @@ On 2026-09-23 the drafting slice (ADR-0019, ADR-0020) landed on `origin/main` fr
 
 ## Handoff
 
-- **Next action:** the user reviews the PR and decides on the T3.2 deviation. Follow-ups:
+- **Next action:** the user reviews and merges PR #1. Follow-ups:
   - prod runs the old code until it is redeployed with `--force` (then check `CodeSha256`);
   - add the `EmailerApi` `HttpApi.ParseOptions` annotation on the Effect RC containing effect#8423;
   - upgrade oxlint when `@effect/tsgo` supports a version newer than 1.82.
