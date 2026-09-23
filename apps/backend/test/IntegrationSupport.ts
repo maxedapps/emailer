@@ -654,18 +654,22 @@ export const disableDispatcherMapping = Effect.acquireRelease(
 
     if (mapping.state !== "Disabled") {
       yield* setMappingEnabled(mapping.uuid, false);
-      yield* awaitMappingState(mapping.uuid, "Disabled");
     }
 
-    yield* awaitPollersStopped(mapping.queueArn);
-
-    return { uuid: mapping.uuid, originalEnabled };
+    return { uuid: mapping.uuid, queueArn: mapping.queueArn, originalEnabled };
   }),
   (acquired) =>
     Effect.gen(function* () {
       yield* setMappingEnabled(acquired.uuid, acquired.originalEnabled);
       yield* awaitMappingState(acquired.uuid, acquired.originalEnabled ? "Enabled" : "Disabled");
     }).pipe(Effect.orDie),
+).pipe(
+  // The waits run once the restore is registered, so a wait that fails still re-enables the mapping.
+  Effect.tap((acquired) =>
+    awaitMappingState(acquired.uuid, "Disabled").pipe(
+      Effect.andThen(awaitPollersStopped(acquired.queueArn)),
+    ),
+  ),
 );
 
 const staleWakeLogged = (blob: string, campaignId: string, runToken: string) =>

@@ -3,6 +3,7 @@ import { Clock, Context, Data, Duration, Effect, Option, Result } from "effect";
 import { RateLimiter } from "effect/unstable/persistence";
 
 import { CampaignWake } from "./Campaigns.ts";
+import { describeCause } from "./Diagnostics.ts";
 import { newIdentifier, nowIso } from "./Identifiers.ts";
 import { Mailer, submissionTimeout } from "./Mailer.ts";
 import { AudienceStore } from "./Storage/Audience.ts";
@@ -205,6 +206,10 @@ export const runSlice = Effect.fn("Dispatching.runSlice")(function* (
       return;
     }
 
+    // Minted before the claim: a claimed row is only ever settled by a submission, so a link that
+    // cannot be minted must stop the slice while the member is still unclaimed.
+    const unsubscribeUrl = yield* unsubscribeLink(member.email).pipe(Effect.orDie);
+
     const sendId = yield* newIdentifier;
 
     const claimed = yield* campaigns.claimRecipient(
@@ -224,8 +229,6 @@ export const runSlice = Effect.fn("Dispatching.runSlice")(function* (
       lastProcessed = member.id;
       continue;
     }
-
-    const unsubscribeUrl = yield* unsubscribeLink(member.email).pipe(Effect.orDie);
 
     const outgoing: OutgoingMessage = {
       recipient: member.email,
@@ -283,6 +286,17 @@ const submitClaimed = Effect.fn("Dispatching.submitClaimed")(function* (input: {
     const finishedAt = yield* nowIso;
 
     if (Result.isFailure(attemptResult)) {
+      const uncertain = attemptResult.failure;
+
+      // The row records only that the outcome is unknown; why is kept here, reduced to its
+      // classification so neither the recipient nor an SDK payload reaches the log.
+      yield* Effect.logWarning("submission uncertain", {
+        campaignId: outgoing.campaignId,
+        sendId: outgoing.sendId,
+        reason: uncertain.reason,
+        cause: describeCause(uncertain.cause),
+      });
+
       yield* campaigns.settleRecipient(
         outgoing.campaignId,
         outgoing.sendId,

@@ -57,13 +57,14 @@ export const sendGuard = <EA, RA, ED, RD>(
     const enforcement =
       account.EnforcementStatus !== undefined && account.EnforcementStatus !== "HEALTHY";
 
+    // SES reports -1 for an account without a daily quota; only the ceiling then limits the day.
+    const quotaLimit =
+      max24HourSend === undefined || max24HourSend < 0 ? Infinity : max24HourSend * 0.9;
+
     return {
       limit: maxSendRate === undefined ? 1 : Math.max(1, Math.floor(maxSendRate * 0.8)),
       dailyExhausted:
-        max24HourSend === undefined
-          ? false
-          : sentLast24Hours >=
-            (ceiling === undefined ? max24HourSend * 0.9 : Math.min(max24HourSend * 0.9, ceiling)),
+        max24HourSend !== undefined && sentLast24Hours >= Math.min(quotaLimit, ceiling ?? Infinity),
       halted: alarmed || enforcement,
     };
   });

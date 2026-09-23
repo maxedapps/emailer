@@ -8,6 +8,7 @@
 - Superseded in part: [ADR-0011](0011-open-recipient-set-and-paced-dispatch.md) for the `CampaignStore` binding table (claims/finalization without `UpdateItem`) and the API's use of the mailer.
 - Superseded in part: [ADR-0012](0012-reputation-guardrails.md) for the `FeedbackStore` and `AudienceStore` capability rows.
 - Amended: [campaign-listing](work/campaign-listing.md) — CampaignStore binds all six table operations
+- Amended: [codebase-cleanup](work/codebase-cleanup.md) — `Table.ts` also holds `allTableOperations`, the one six-operation binding that AudienceStore and CampaignStore, which both perform every operation, share; every narrower capability still binds its own
 
 ## Context
 

@@ -1,8 +1,18 @@
 import { makeEmailerClient } from "@emailer/api/Client";
 import type { EmailerClient } from "@emailer/api/Client";
 import * as Schemas from "@emailer/api/Schemas";
-import { Config, Console, DateTime, Duration, Effect, Inspectable, Option, Schema } from "effect";
-import { Argument, Command, Flag } from "effect/unstable/cli";
+import {
+  Config,
+  Console,
+  DateTime,
+  Duration,
+  Effect,
+  FileSystem,
+  Inspectable,
+  Option,
+  Schema,
+} from "effect";
+import { Argument, CliError, Command, Flag } from "effect/unstable/cli";
 import { FetchHttpClient } from "effect/unstable/http";
 
 /**
@@ -340,13 +350,42 @@ const listsRemoveContact = Command.make(
   }),
 ).pipe(Command.withDescription("Remove a contact from a list; repeating it changes nothing"));
 
+const decodeImportFile = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(Schemas.ImportContactsPayload),
+  { onExcessProperty: "error" },
+);
+
+/**
+ * Read and decoded here rather than through `Flag.FileSchema`, whose decode drops keys the contract
+ * does not declare: a misspelled `attributs` would vanish and its contact would be imported without
+ * attributes. Rejecting the key names it before any request is made.
+ */
+const importFile = Flag.File("file", { mustExist: true }).pipe(
+  Flag.withDescription("A JSON file holding the contacts to load"),
+  Flag.mapEffect((path) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+
+      return yield* decodeImportFile(yield* fs.readFileString(path));
+    }).pipe(
+      Effect.mapError(
+        (error) =>
+          new CliError.InvalidValue({
+            option: "file",
+            value: path,
+            expected: error.message,
+            kind: "flag",
+          }),
+      ),
+    ),
+  ),
+);
+
 const listsImport = Command.make(
   "import",
   {
     listId: idArgument("listId"),
-    file: Flag.FileSchema("file", Schemas.ImportContactsPayload, { format: "json" }).pipe(
-      Flag.withDescription("A JSON file holding the contacts to load"),
-    ),
+    file: importFile,
   },
   Effect.fn(function* (input) {
     yield* report(

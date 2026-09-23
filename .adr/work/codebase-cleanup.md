@@ -2,7 +2,7 @@
 
 > **Status:** In progress
 > **Updated:** 2026-09-23
-> **ADRs:** [0019](../0019-whole-project-unused-code-check.md) (T1), [0005](../0005-contact-identity-and-membership-access-paths.md) (amended by T4), [0007](../0007-immutable-recipient-unsubscribe-links.md) (link before claim, T3), [0008](../0008-storage-capabilities-and-error-boundaries.md), [0011](../0011-open-recipient-set-and-paced-dispatch.md). New records are added by T1, T3 and T4.
+> **ADRs:** [0021](../0021-whole-project-unused-code-check.md) (T1), [0005](../0005-contact-identity-and-membership-access-paths.md) (amended by T4), [0007](../0007-immutable-recipient-unsubscribe-links.md) (link before claim, T3), [0008](../0008-storage-capabilities-and-error-boundaries.md), [0011](../0011-open-recipient-set-and-paced-dispatch.md). [0022](../0022-api-contract-rejects-undeclared-fields.md) (T3). T4 adds one more. ADR numbers 0019–0020 are left for untracked proposals in the main checkout.
 
 ## Outcome and boundaries
 
@@ -92,7 +92,7 @@
   - **Un-exported:** about 40 module-private names. Two extras from `ReplayFeedback.ts`, which knip cannot see because it is a script entry. Four HttpApi group classes plus the `AddressStatus`/`EntityKind` schemas in `packages/api`.
   - **Replaced:** the `MemberCursor` alias with `EntityId`, keeping a comment on `memberQuery`. `stacks/sending-identity.ts` names its stack with the shared `sendingIdentityStack` constant (same value, `EmailerSending`).
   - **Check:** `pnpm check` exit 0. 737 unit tests; knip reports nothing.
-  - **ADR:** [0019](../0019-whole-project-unused-code-check.md).
+  - **ADR:** [0021](../0021-whole-project-unused-code-check.md).
 
 ### T2 — Simplify
 
@@ -124,7 +124,7 @@
 
 ### T3 — Correctness and error handling
 
-- **Status:** Pending
+- **Status:** Verified, except T3.2's API-level annotation, which is blocked upstream (below)
 - **Items:**
   - T3.1: log the reason and cause of every `uncertain` submission, without the recipient.
   - T3.2: reject unknown request fields. `HttpApi.ParseOptions` goes on `EmailerApi`, and `lists import --file` decodes strictly. Adds a new ADR.
@@ -132,6 +132,17 @@
   - T3.4: `Max24HourSend: -1` means no daily limit.
 - **Acceptance:** each item has a new test; `pnpm check` is green.
 - **Evidence:**
+  - **T3.1:** `submitClaimed` logs `submission uncertain` with `campaignId`, `sendId`, `reason` and `describeCause(cause)`. Test: "logs why a submission ended uncertain, without the recipient's address". The address sits inside the SDK error's message and appears nowhere in the captured logs.
+  - **T3.3:** the link is minted after the budget check and before the claim. Test: "claims no recipient when the unsubscribe link cannot be minted". It failed on the old order, with one claim recorded.
+  - **T3.4:** a negative `Max24HourSend` means no account limit, so only the ceiling applies. Tests: "is not exhausted when Max24HourSend is -1…" and "exhausts an unlimited quota at the daily ceiling".
+  - **T3.2, CLI:** `lists import --file` reads with `Flag.File` and decodes with `{ onExcessProperty: "error" }`. A typo fails as `Invalid value for flag --file: "<path>". Expected no excess property … at ["contacts"][0]["attributs"]`, before any request. Tests: the typo case (no request reaches the server) and a new well-formed import.
+  - **T3.2, API: blocked upstream.**
+    - `HttpApi.ParseOptions` with `"error"` on `EmailerApi` made 29 `Api.test.ts` cases answer 500. RC117's excess-key check uses `Reflect.ownKeys`, which sees a `Schema.TaggedError`'s non-enumerable `stack`. The standalone repro is `encodeUnknownSync(TaggedError)(instance, { onExcessProperty: "error" })`, which throws at `["stack"]`.
+    - [effect#8423](https://github.com/Effect-TS/effect/pull/8423) fixes it. It was merged on 2026-09-23 and is not in any published RC yet.
+    - Recorded in [ADR-0022](../0022-api-contract-rejects-undeclared-fields.md) and in `wiki/effect/http-cli-and-runtime.md`.
+    - **Follow-up when upgrading to an RC containing #8423:** add the one-line annotation to `EmailerApi`, plus `400` tests for an unknown payload key (`fitler` on campaign create, an extra key on contact create) and an unknown query parameter.
+  - **Review fix L1:** `disableDispatcherMapping` registers its restore before waiting for `Disabled` and for the pollers to stop. Live proof comes in T4.
+  - **Check:** `pnpm check` exit 0, 744 unit tests.
 
 ### T4 — Remove `membershipVersion`
 
@@ -159,8 +170,12 @@
 
 ## Handoff
 
-- **Next action:** T3
+- **Next action:** T4
 - **Reviews:**
+  - **Checkpoint A** (fresh reviewer, commits `c72055b..0f35cd5`, git objects only): no regressions. Dispositions:
+    - **L1:** the probe inside acquire could leave the mapping disabled. Fixed now: the waits moved after `acquireRelease`.
+    - **L2:** ADR-0008 said "Table.ts owns only the resource". Fixed now with an Amended line.
+    - **L3:** ADR number collision with the main checkout's untracked 0019/0020 proposals. Fixed now: this branch's ADRs renumbered to 0021+.
 - **Deviations:**
   - **T1, index slip:** the worker briefly staged and unstaged the `apps/mcp` deletion. The index was back at HEAD before the commit; nothing was lost.
   - **T0, live test fixes:** two integration-test fixes (the alarm-pause assertion, and the probe-based mapping hold). Both correct test races observed live and change no product code.

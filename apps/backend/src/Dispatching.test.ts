@@ -1,3 +1,4 @@
+import { ServiceUnavailable } from "@distilled.cloud/aws/Errors";
 import { NodeCrypto } from "@effect/platform-node";
 import * as Schemas from "@emailer/api/Schemas";
 import {
@@ -5,11 +6,13 @@ import {
   ConfigProvider,
   Duration,
   Effect,
+  Exit,
   Fiber,
   Layer,
   Logger,
   Option,
   Result,
+  Schema,
 } from "effect";
 import { TestClock } from "effect/testing";
 import { RateLimiter } from "effect/unstable/persistence";
@@ -75,9 +78,10 @@ const unsubscribeEnv = {
   EMAILER_UNSUBSCRIBE_SECRET: "8f14e45fceea167a5a36dedd4bea2543a1b2c3d4e5f60718293a4b5c6d7e8f90",
 };
 
-const configuration = Layer.succeed(ConfigProvider.ConfigProvider)(
-  ConfigProvider.fromEnvRecord(unsubscribeEnv),
-);
+const configurationOf = (env: Readonly<Record<string, string>>) =>
+  Layer.succeed(ConfigProvider.ConfigProvider)(ConfigProvider.fromEnvRecord(env));
+
+const configuration = configurationOf(unsubscribeEnv);
 
 interface RecipientRow {
   readonly sendId?: string;
@@ -418,6 +422,7 @@ interface Scenario {
   readonly run?: { accepted: number; bounced: number; complained: number };
   readonly delays?: ReadonlyArray<Duration.Duration>;
   readonly outcomes?: ReadonlyArray<SubmissionOutcome | SubmissionUncertain>;
+  readonly env?: Readonly<Record<string, string>>;
 }
 
 interface Fixture {
@@ -475,7 +480,7 @@ const fixture = (scenario: Scenario = {}): Fixture => {
       limiter.layer,
       Layer.succeed(DispatchGuard)({ current: Effect.succeed(guard) }),
       NodeCrypto.layer,
-      configuration,
+      configurationOf(scenario.env ?? unsubscribeEnv),
     ),
   };
 };
@@ -487,6 +492,28 @@ const runSliceNow = (fix: Fixture, extraDeadline = sliceTimeout) =>
     return yield* Effect.result(
       runSlice({ campaignId, runToken }, now + Duration.toMillis(extraDeadline)),
     ).pipe(Effect.provide(fix.layer));
+  });
+
+interface LogEntry {
+  readonly level: string;
+  readonly message: unknown;
+}
+
+const capturingLogs = (entries: Array<LogEntry>) =>
+  Logger.layer([
+    Logger.make((options) => {
+      entries.push({ level: options.logLevel, message: options.message });
+    }),
+  ]);
+
+const toJson = Schema.encodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
+
+const entriesFor = (entries: ReadonlyArray<LogEntry>, message: string) =>
+  entries.filter((entry) => {
+    // SAFETY: Effect.log*(message, data) reaches a logger as [message, data].
+    const recorded = entry.message as ReadonlyArray<unknown> | string | undefined;
+
+    return Array.isArray(recorded) ? recorded[0] === message : recorded === message;
   });
 
 const onTestClock = <A, E, R>(operation: Effect.Effect<A, E, R>) =>
@@ -652,25 +679,9 @@ describe("runSlice", () => {
       onTestClock(
         Effect.gen(function* () {
           const fix = fixture({ beginOutcome: "stale" });
-          const entries: Array<{ readonly level: string; readonly message: unknown }> = [];
-          const now = yield* Clock.currentTimeMillis;
+          const entries: Array<LogEntry> = [];
 
-          const attempt = yield* Effect.result(
-            runSlice({ campaignId, runToken }, now + Duration.toMillis(sliceTimeout)),
-          ).pipe(
-            Effect.provide(
-              Layer.mergeAll(
-                fix.layer,
-                Logger.layer([
-                  Logger.make((options) => {
-                    entries.push({ level: options.logLevel, message: options.message });
-                  }),
-                ]),
-              ),
-            ),
-          );
-
-          successOf(attempt);
+          successOf(yield* runSliceNow(fix).pipe(Effect.provide(capturingLogs(entries))));
 
           expect(fix.world.claims).toHaveLength(0);
           expect(fix.mailer.submits).toHaveLength(0);
@@ -679,20 +690,11 @@ describe("runSlice", () => {
           expect(fix.world.completed).toBe(0);
           expect(fix.wake.messages).toHaveLength(0);
 
-          const stale = entries.filter((entry) => {
-            // SAFETY: Effect.logInfo(message, data) reaches a logger as [message, data].
-            const recorded = entry.message as ReadonlyArray<unknown> | string | undefined;
-
-            return Array.isArray(recorded)
-              ? recorded[0] === "stale wake discarded"
-              : recorded === "stale wake discarded";
-          });
-
-          expect(stale).toHaveLength(1);
-          expect(stale[0]?.level).toBe("Info");
-          expect(stale[0]?.message).toStrictEqual([
-            "stale wake discarded",
-            { campaignId, runToken, disposition: "stale" },
+          expect(entriesFor(entries, "stale wake discarded")).toStrictEqual([
+            {
+              level: "Info",
+              message: ["stale wake discarded", { campaignId, runToken, disposition: "stale" }],
+            },
           ]);
         }),
       ),
@@ -791,6 +793,28 @@ describe("runSlice", () => {
       ),
     ));
 
+  it("claims no recipient when the unsubscribe link cannot be minted", () =>
+    Effect.runPromise(
+      onTestClock(
+        Effect.gen(function* () {
+          const fix = fixture({
+            env: { EMAILER_UNSUBSCRIBE_SECRET: unsubscribeEnv.EMAILER_UNSUBSCRIBE_SECRET },
+          });
+
+          const now = yield* Clock.currentTimeMillis;
+
+          const exit = yield* Effect.exit(
+            runSlice({ campaignId, runToken }, now + Duration.toMillis(sliceTimeout)),
+          ).pipe(Effect.provide(fix.layer));
+
+          expect(Exit.hasDies(exit)).toBe(true);
+          expect(fix.world.claims).toHaveLength(0);
+          expect(fix.world.rows.size).toBe(0);
+          expect(fix.mailer.submits).toHaveLength(0);
+        }),
+      ),
+    ));
+
   it("enqueues nothing when a checkpoint is lost", () =>
     Effect.runPromise(
       onTestClock(
@@ -859,6 +883,50 @@ describe("runSlice", () => {
           ]);
           expect(fix.wake.messages).toHaveLength(0);
           expect(fix.world.completed).toBe(0);
+        }),
+      ),
+    ));
+
+  it("logs why a submission ended uncertain, without the recipient's address", () =>
+    Effect.runPromise(
+      onTestClock(
+        Effect.gen(function* () {
+          const fix = fixture({
+            outcomes: [
+              new SubmissionUncertain({
+                reason: "transport",
+                cause: new ServiceUnavailable({
+                  message: `Unavailable while sending to ${memberA.email}`,
+                }),
+              }),
+            ],
+          });
+
+          const entries: Array<LogEntry> = [];
+
+          successOf(yield* runSliceNow(fix).pipe(Effect.provide(capturingLogs(entries))));
+
+          const row = fix.world.rows.get(memberA.id);
+
+          expect(row?.state).toBe("uncertain");
+          expect(fix.world.settlements).toStrictEqual([
+            { contactId: memberA.id, settlement: { state: "uncertain" } },
+          ]);
+          expect(entriesFor(entries, "submission uncertain")).toStrictEqual([
+            {
+              level: "Warn",
+              message: [
+                "submission uncertain",
+                {
+                  campaignId,
+                  sendId: row?.sendId,
+                  reason: "transport",
+                  cause: "ServiceUnavailable",
+                },
+              ],
+            },
+          ]);
+          expect(yield* toJson(entries)).not.toContain(memberA.email);
         }),
       ),
     ));

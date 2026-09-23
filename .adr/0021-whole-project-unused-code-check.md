@@ -1,4 +1,4 @@
-# ADR-0019: The check suite finds unused code across the whole project
+# ADR-0021: The check suite finds unused code across the whole project
 
 - Status: Accepted
 - Date: 2026-09-23

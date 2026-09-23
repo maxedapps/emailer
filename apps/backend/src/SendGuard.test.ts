@@ -93,6 +93,39 @@ describe("sendGuard", () => {
       }),
     ));
 
+  it("is not exhausted when Max24HourSend is -1, which SES reports for an unlimited quota", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        expect(
+          yield* sendGuard(
+            account({ MaxSendRate: 10, Max24HourSend: -1, SentLast24Hours: 1_000_000 }),
+            silent,
+            undefined,
+          ),
+        ).toStrictEqual({ limit: 8, dailyExhausted: false, halted: false });
+      }),
+    ));
+
+  it("exhausts an unlimited quota at the daily ceiling", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        expect(
+          yield* sendGuard(
+            account({ MaxSendRate: 10, Max24HourSend: -1, SentLast24Hours: 50 }),
+            silent,
+            50,
+          ),
+        ).toStrictEqual({ limit: 8, dailyExhausted: true, halted: false });
+        expect(
+          yield* sendGuard(
+            account({ MaxSendRate: 10, Max24HourSend: -1, SentLast24Hours: 49 }),
+            silent,
+            50,
+          ),
+        ).toStrictEqual({ limit: 8, dailyExhausted: false, halted: false });
+      }),
+    ));
+
   it("is halted when any of four metric alarms is in ALARM", () =>
     Effect.runPromise(
       Effect.gen(function* () {
