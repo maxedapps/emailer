@@ -27,6 +27,8 @@ This is an illustrative response fragment. Map entries back to their source reco
 
 A direct polling consumer uses `ReceiveMessage`, processes the returned body and calls `DeleteMessage` only when its acknowledgement condition is satisfied. Each receive gives a receipt handle; deletion and visibility changes use that handle rather than the stable message ID. Long polling waits for available work and reduces empty responses; keep the HTTP request timeout longer than the configured long-poll wait. Lambda event-source mappings perform this polling and deletion on the consumer's behalf. [ReceiveMessage](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/APIReference/API_ReceiveMessage.html)
 
+A mapping reporting `State: Disabled` is not yet quiet. Observed live on 2026-09-23 (us-east-1): on a quiet stage a message sent one second after the mapping turned `Disabled` was still received and invoked, while one sent twelve seconds after stayed in the queue; on a stage that had just been busy, the pollers kept invoking for more than twenty seconds, and a draining poller took about five seconds to pick a new message up. Code that holds messages by disabling a mapping needs evidence that the pollers have stopped, such as a probe message still queued a full 20-second long-poll cycle after it was sent. [Lambda SQS event source mappings](https://docs.aws.amazon.com/lambda/latest/dg/services-sqs-configure.html)
+
 ## Queue and worker settings
 
 | Setting | Guidance |

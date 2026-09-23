@@ -6,6 +6,7 @@
 - Superseded in part: [ADR-0008](0008-storage-capabilities-and-error-boundaries.md) replaces the exactly-one-`Storage`-tag choice with four capability services. The single table, its access paths, the `EMAIL#` reservation, the conditional transactions and the accepted cascade race all remain in effect.
 - Superseded in part: [ADR-0011](0011-open-recipient-set-and-paced-dispatch.md) for the two-member audience probe (`readAudience` as a probe for the single-recipient send invariant).
 - Amended: [campaign-listing](work/campaign-listing.md) — campaign META items join the listing index
+- Superseded in part: [ADR-0023](0023-lists-carry-no-membership-version.md) removes `membershipVersion`. Membership writes check that the list exists instead of bumping it, the contact cascade needs no bump-free fallback, the list cascade deletes `META` on its own after the last page, and imports carry no bump. Every other clause here about the version is historical.
 - Authority: The user asked for a contact-management slice to be built in parallel with consent/unsubscribe, and explicitly selected bounded custom attributes and list deletion as additional scope. The user accepted this record on 2026-09-12, after the [slice](work/contact-list.md) was implemented and its decisive checks were confirmed against a live `test` stage.
 - Documentation corrected: 2026-09-15. The GSI migration and partition-splitting statements below are corrected against AWS documentation and the pinned provider. The selected projection and accepted cascade concurrency tradeoff are unchanged.
 

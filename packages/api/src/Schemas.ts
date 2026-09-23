@@ -265,14 +265,7 @@ export const Campaign = Schema.Struct({ ...CampaignSummary.fields, ...CampaignBo
 
 export type Campaign = typeof Campaign.Type;
 
-export const AddressStatus = Schema.Literals([
-  "mailable",
-  "unsubscribed",
-  "suppressed",
-  "bouncing",
-]);
-
-export type AddressStatus = typeof AddressStatus.Type;
+const AddressStatus = Schema.Literals(["mailable", "unsubscribed", "suppressed", "bouncing"]);
 
 /**
  * Account-list presence is always reported: `null` means SES has no entry. Local unsubscribe and
@@ -383,11 +376,6 @@ export const EntityCursor = Schema.String.pipe(
 
 export type EntityCursor = typeof EntityCursor.Type;
 
-/** Member listings page by member sort key, which is the contact's identifier. */
-export const MemberCursor = EntityId;
-
-export type MemberCursor = typeof MemberCursor.Type;
-
 export const page = <Item extends Schema.Top, Cursor extends Schema.Top>(
   item: Item,
   cursor: Cursor,
@@ -433,9 +421,7 @@ export const ImportContactsResult = Schema.Struct({
 
 export type ImportContactsResult = typeof ImportContactsResult.Type;
 
-export const EntityKind = Schema.Literals(["contact", "list", "campaign"]);
-
-export type EntityKind = typeof EntityKind.Type;
+const EntityKind = Schema.Literals(["contact", "list", "campaign"]);
 
 export class NotFound extends Schema.TaggedError<NotFound>()(
   "NotFound",

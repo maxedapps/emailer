@@ -9,7 +9,7 @@ License: [MIT](LICENSE). Oxlint rules in `tools/oxlint/anti-slop` are vendored f
 - Node.js **24.19.0** (see `.node-version`) and pnpm **12.3.4**
 - An AWS account with **SES production access** in the Region you will deploy to (sandbox can only mail verified addresses and the SES mailbox simulator)
 - A domain you control
-- [Alchemy](https://alchemy.run) **2.0.0-beta.77**, pinned in this repo with Effect **4.0.0-rc.112**
+- [Alchemy](https://alchemy.run) **2.0.0-beta.79**, pinned in this repo with Effect **4.0.0-rc.117**
 
 ```sh
 pnpm install --frozen-lockfile
@@ -53,9 +53,9 @@ Copy `.env.example` to an untracked `.env` and fill it in. Alchemy and the CLI r
 | `EMAILER_API_URL`            | CLI      | API Function URL from the `apiUrl` stack output.                                                                                                                                                                                      |
 | `AWS_PROFILE`                | deploy   | AWS CLI/SSO profile. Leave unset if you export credentials into the environment.                                                                                                                                                      |
 
-Do not set `EMAILER_UNSUBSCRIBE_SECRET`. Alchemy mints it, binds it into the functions, and **rotates it when the stage is destroyed**, which invalidates every unsubscribe link already sent.
+Do not set `EMAILER_UNSUBSCRIBE_SECRET` in `.env`. Alchemy mints it, binds it into the functions, and **rotates it when the stage is destroyed**, which invalidates every unsubscribe link already sent.
 
-`.env.example` also lists `EMAILER_TEST_*` keys. Those are for the live integration suite only, not for operating the service.
+`.env.example` also lists `EMAILER_TEST_*`, `EMAILER_UNSUBSCRIBE_URL` and `EMAILER_UNSUBSCRIBE_SECRET`. Those are for the live integration suite only, not for operating the service ([Develop and test](#develop-and-test)).
 
 ## One-time setup
 
@@ -140,6 +140,12 @@ pnpm exec alchemy deploy --config alchemy.run.ts --stage prod --env-file .env --
 
 Do not pass `--detailed`: it prints bound secrets, including `EMAILER_API_TOKEN` and the unsubscribe signing key. Treat a secret you have printed as exposed and replace it.
 
+After a code change, Alchemy can report a Lambda as `noop` and keep the old bundle. Redeploy with `--force`, then confirm each function's `CodeSha256` changed:
+
+```sh
+aws lambda get-function-configuration --function-name emailer-<stage>-<api|dispatcher|feedback|unsubscribe> --query CodeSha256
+```
+
 The stack deploys four Lambdas (API, dispatcher, bounce/complaint consumer, unsubscribe page), one table, the dispatch queue and its dead-letter queue, a scheduler group, feedback wiring, seven alarms and an alert topic. Both Function URLs are public (`authType: NONE`): the API authorizes with the bearer token; unsubscribe authorizes with the signed token in the link.
 
 Outputs: `apiUrl`, `unsubscribeUrl`, `feedbackFunctionArn`, `feedbackFailureQueueUrl`, `alertsTopicArn`. Put `apiUrl` in `EMAILER_API_URL`.
@@ -196,7 +202,7 @@ node --env-file=.env apps/cli/src/main.ts addresses status --email you@example.c
 node --env-file=.env apps/cli/src/main.ts addresses unsuppress --email you@example.com
 ```
 
-`lists import` expects JSON of the form `{ "contacts": [ { "email": "...", "name": "...", "attributes": { "plan": "pro" } } ] }`. `name` and `attributes` are optional.
+`lists import` expects JSON of the form `{ "contacts": [ { "email": "...", "name": "...", "attributes": { "plan": "pro" } } ] }`. `name` and `attributes` are optional. A file with a key the contract does not declare, such as a misspelled `attributs`, is rejected before anything is sent, and the error names the key's path. Importing an address that already has a contact adds the membership but leaves that contact's name and attributes unchanged; use `contacts update` for those.
 
 ### Contracts
 
@@ -205,7 +211,7 @@ node --env-file=.env apps/cli/src/main.ts addresses unsuppress --email you@examp
 - `--filter` keeps members whose attributes equal every `key=value` (AND). Omit it for the whole list. Non-matches are skipped with no send row and are not counted in `skipped`.
 - `lists import` reports converged state, not a delta. Re-running the same file returns the same answer. At most 20 entries per call; one address may not appear twice. Larger imports are a client-side loop.
 - An opt-out holds the address. While opted out, moving the contact onto a different address answers **409** `AddressOptedOut`. Deleting the contact and creating another at the same address does not make it mailable.
-- `addresses unsuppress` clears local suppression and the SES **account** suppression list (one list per account and Region, shared with every other sender there). Pass the exact string the listing returns: SES stores suppression entries case-sensitively. It never clears an opt-out.
+- `addresses unsuppress` clears local suppression and the SES **account** suppression list (one list per account and Region, shared with every other sender there). SES stores suppression entries case-sensitively, so pass the address in the case SES stored it: as the contact holds it (`contacts by-email` shows it) or as `aws sesv2 list-suppressed-destinations` lists it. `addresses status` echoes the address you pass, so another case shows no account entry rather than an error. It never clears an opt-out.
 - Deleting a contact removes it from every list; deleting a list removes every membership in it. Neither deletes the other side. A delete that times out on a large list is safe to repeat.
 - Listings page in created order. `--limit` is 1–100, default 25. A page's `nextCursor` is absent exactly when there is nothing more.
 - `campaigns list` omits the body; `campaigns get` includes it.
@@ -257,7 +263,30 @@ aws sqs start-message-move-task \
 
 Gmail sends no complaint feedback loop to SES. Watch the domain in Google Postmaster Tools, and read DMARC aggregate reports at the `rua` address you published.
 
-The account suppression list survives `alchemy destroy`. A test run can leave `simulator.amazonses.com` entries; remove them with the exact string `addresses status` returns.
+The account suppression list survives `alchemy destroy`. A test run can leave `simulator.amazonses.com` entries; remove them with `addresses unsuppress`, passing each address as `aws sesv2 list-suppressed-destinations` lists it.
+
+## Develop and test
+
+`pnpm check` checks formatting, runs lint (including unused-suppression reporting), knip (unused files, exports and dependencies), typecheck, the unit tests and an import probe.
+
+The live integration suite runs against an ephemeral stage. Automated sends go only to SES mailbox-simulator addresses. One case temporarily disables the stage's dispatcher event-source mapping, so never point the suite at a real stage.
+
+1. Deploy a throwaway stage with `.env.test`, which holds the same deploy keys as `.env` (API token, sender identity, From address, postal address, Region) plus the test keys:
+
+   ```sh
+   pnpm exec alchemy deploy --config alchemy.run.ts --stage test --env-file .env.test --profile emailer --yes --no-input
+   ```
+
+2. Point `.env.test` at that stage's values:
+   - `EMAILER_API_URL` and `EMAILER_UNSUBSCRIBE_URL`: the `apiUrl` and `unsubscribeUrl` outputs.
+   - `EMAILER_UNSUBSCRIBE_SECRET`: read from the unsubscribe function's environment (`aws lambda get-function-configuration --function-name emailer-test-unsubscribe --query Environment.Variables.EMAILER_UNSUBSCRIBE_SECRET --output text`).
+   - `EMAILER_TEST_TABLE_NAME`, `EMAILER_TEST_DISPATCH_FAILURES_QUEUE_URL`, `EMAILER_TEST_DISPATCHER_FUNCTION_NAME` and `EMAILER_TEST_SET_BOUNCE_ALARM`: from the deploy's resource inventory.
+3. Run `pnpm test:integration`. It loads `.env.test` itself.
+4. Destroy the stage:
+
+   ```sh
+   pnpm exec alchemy destroy --config alchemy.run.ts --stage test --env-file .env.test --profile emailer --yes --no-input
+   ```
 
 ## Credits
 

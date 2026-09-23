@@ -1,4 +1,3 @@
-import * as AWS from "alchemy/AWS";
 import { Context, Crypto, Effect, Layer } from "effect";
 
 import { addressReads, addressWrites } from "./Addresses.ts";
@@ -8,7 +7,7 @@ import { membershipOperations } from "./Membership.ts";
 import { allPrimitives } from "./Primitives.ts";
 
 import type { TransactionTokens } from "./Primitives.ts";
-import { dataTable } from "./Table.ts";
+import { AllTableOperationsHttp, allTableOperations } from "./Table.ts";
 
 import type { TableOperations } from "./Items.ts";
 
@@ -41,32 +40,9 @@ export class AudienceStore extends Context.Service<AudienceStore, AudienceOperat
 
 export const AudienceStoreLive = Layer.effect(AudienceStore)(
   Effect.gen(function* () {
-    const table = yield* dataTable;
+    const operations = yield* allTableOperations;
     const crypto = yield* Crypto.Crypto;
 
-    return AudienceStore.of(
-      audienceOperations(
-        {
-          getItem: yield* AWS.DynamoDB.GetItem(table),
-          batchGetItem: yield* AWS.DynamoDB.BatchGetItem(table),
-          putItem: yield* AWS.DynamoDB.PutItem(table),
-          updateItem: yield* AWS.DynamoDB.UpdateItem(table),
-          query: yield* AWS.DynamoDB.Query(table),
-          transactWriteItems: yield* AWS.DynamoDB.TransactWriteItems(table),
-        },
-        Effect.orDie(crypto.randomUUIDv4),
-      ),
-    );
+    return AudienceStore.of(audienceOperations(operations, Effect.orDie(crypto.randomUUIDv4)));
   }),
-).pipe(
-  Layer.provide(
-    Layer.mergeAll(
-      AWS.DynamoDB.GetItemHttp,
-      AWS.DynamoDB.BatchGetItemHttp,
-      AWS.DynamoDB.PutItemHttp,
-      AWS.DynamoDB.UpdateItemHttp,
-      AWS.DynamoDB.QueryHttp,
-      AWS.DynamoDB.TransactWriteItemsHttp,
-    ),
-  ),
-);
+).pipe(Layer.provide(AllTableOperationsHttp));

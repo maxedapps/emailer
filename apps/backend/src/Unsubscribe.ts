@@ -1,9 +1,7 @@
 import * as Schemas from "@emailer/api/Schemas";
 import { Random } from "alchemy";
 import * as AWS from "alchemy/AWS";
-import { Config, Effect, Option, Redacted, Schema } from "effect";
-// oxlint-disable-next-line effecttsgo/node-builtin-import
-import { Buffer } from "node:buffer";
+import { Config, Effect, Encoding, Option, Redacted, Result, Schema } from "effect";
 // oxlint-disable-next-line effecttsgo/node-builtin-import
 import { createHmac } from "node:crypto";
 
@@ -21,7 +19,7 @@ export class UnsubscribeFunction extends AWS.Lambda.Function<UnsubscribeFunction
   "Unsubscribe",
 ) {}
 
-export const unsubscribeSigningKey = Config.redacted("EMAILER_UNSUBSCRIBE_SECRET");
+export const unsubscribeSigningKey = Config.Redacted("EMAILER_UNSUBSCRIBE_SECRET");
 
 /** Unpadded base64url expands three input bytes into four characters, rounding up. */
 const encodedLength = (bytes: number): number => Math.ceil((bytes * 4) / 3);
@@ -42,8 +40,7 @@ const tokenPattern = /^v1\.([A-Za-z0-9_-]+)\.([0-9a-f]{64})$/;
 
 const decodeMailbox = Schema.decodeUnknownOption(Schemas.NormalizedEmailAddress);
 
-const encodePayload = (mailbox: string): string =>
-  Buffer.from(mailbox, "utf8").toString("base64url");
+const encodePayload = (mailbox: string): string => Encoding.encodeBase64Url(mailbox);
 
 const digestFor = (signingKey: Redacted.Redacted<string>, signed: string): string =>
   createHmac("sha256", Redacted.value(signingKey)).update(signed).digest("hex");
@@ -88,26 +85,22 @@ export const verifyToken = (
     return Option.none();
   }
 
-  const mailbox = Buffer.from(payload, "base64url").toString("utf8");
-
-  // base64url decoding is lenient: several encodings, including ones with unused trailing bits set,
-  // decode to the same bytes. Requiring the round trip means exactly one token names any mailbox.
-  if (encodePayload(mailbox) !== payload) {
-    return Option.none();
-  }
-
-  // A valid signature proves we issued the token, not that the key we signed still names a mailbox
-  // this system accepts — the address schema may have tightened since. Canonical form is required
-  // as well, so a signed mixed-case payload cannot address the lowercase consent record.
-  return Option.filter(
-    decodeMailbox(mailbox),
-    (address) => address === Schemas.mailboxKey(address),
+  return Result.getSuccess(Encoding.decodeBase64UrlString(payload)).pipe(
+    // base64url decoding is lenient: several encodings, including ones with unused trailing bits
+    // set, decode to the same bytes. Requiring the round trip means exactly one token names any
+    // mailbox.
+    Option.filter((mailbox) => encodePayload(mailbox) === payload),
+    // A valid signature proves we issued the token, not that the key we signed still names a
+    // mailbox this system accepts — the address schema may have tightened since. Canonical form is
+    // required as well, so a signed mixed-case payload cannot address the lowercase consent record.
+    Option.flatMap(decodeMailbox),
+    Option.filter((address) => address === Schemas.mailboxKey(address)),
   );
 };
 
 export const unsubscribeLink = Effect.fn("Unsubscribe.unsubscribeLink")(function* (email: string) {
   const configured = yield* Config.all({
-    baseUrl: Config.string("EMAILER_UNSUBSCRIBE_URL"),
+    baseUrl: Config.String("EMAILER_UNSUBSCRIBE_URL"),
     signingKey: unsubscribeSigningKey,
   });
 

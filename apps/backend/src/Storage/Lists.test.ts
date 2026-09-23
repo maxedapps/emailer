@@ -18,7 +18,7 @@ const otherListId = "0195f0a0-1111-4222-8333-4444444010ff";
 
 const olderCreatedAt = "2026-09-10T10:00:00.000Z";
 
-const listItem = (id: string, name: string, at: string, membershipVersion = 0) => ({
+const listItem = (id: string, name: string, at: string) => ({
   pk: { S: `LIST#${id}` },
   sk: { S: "META" },
   gsi1pk: { S: "list" },
@@ -27,7 +27,6 @@ const listItem = (id: string, name: string, at: string, membershipVersion = 0) =
   id: { S: id },
   name: { S: name },
   createdAt: { S: at },
-  membershipVersion: { N: String(membershipVersion) },
 });
 
 const withTable = (replies: ScriptedReplies) => {
@@ -37,32 +36,33 @@ const withTable = (replies: ScriptedReplies) => {
 };
 
 describe("createList", () => {
-  it("writes the listing attributes, without which the list is invisible to the index", () =>
+  it("writes the list with the listing attributes, without which it is invisible to the index", () =>
     Effect.runPromise(
       Effect.gen(function* () {
         const { table, operations } = withTable({});
 
         yield* operations.createList({ id: listId, name: "Subscribers", createdAt });
 
-        const item = table.putItemRequests[0]?.Item ?? {};
-
-        expect(item["gsi1pk"]).toStrictEqual({ S: "list" });
-        expect(item["gsi1sk"]).toStrictEqual({ S: `${createdAt}#${listId}` });
+        expect(table.putItemRequests[0]?.Item).toStrictEqual(
+          listItem(listId, "Subscribers", createdAt),
+        );
       }),
     ));
 });
 
 describe("getList", () => {
-  it("reports the stored membership version, which governs the campaign claim", () =>
+  it("reads the list itself, leaving its key and index attributes behind", () =>
     Effect.runPromise(
       Effect.gen(function* () {
         const { operations } = withTable({
-          getItem: [Effect.succeed({ Item: listItem(listId, "Subscribers", createdAt, 7) })],
+          getItem: [Effect.succeed({ Item: listItem(listId, "Subscribers", createdAt) })],
         });
 
-        const found = yield* operations.getList(listId);
-
-        expect(Option.getOrUndefined(found)?.membershipVersion).toBe(7);
+        expect(Option.getOrUndefined(yield* operations.getList(listId))).toStrictEqual({
+          id: listId,
+          name: "Subscribers",
+          createdAt,
+        });
       }),
     ));
 });

@@ -19,7 +19,7 @@ export const alertsTopic = AWS.SNS.Topic("Alerts");
  * Set-level warning before AWS's review ratios; account-level at those ratios because a review
  * hits the whole account. Rates are CloudWatch units (0–1), not percents.
  */
-export const reputationThresholds = {
+const reputationThresholds = {
   set: { bounce: 0.02, complaint: 0.0005 },
   account: { bounce: 0.05, complaint: 0.001 },
 } as const;

@@ -60,13 +60,16 @@ const ignoredComplaintTypes = new Set(["not-spam", "auth-failure"]);
 
 /**
  * A permanent bounce with one of these subtypes never reached a mailbox: SES accepted the send and
- * dropped it because the address was already on the account suppression list.
+ * dropped it without attempting delivery. `OnAccountSuppressionList` means the address is on the
+ * account-level suppression list; `Suppressed` means it is on the SES global suppression list.
+ * Account-level suppression, which this configuration set enables, overrides the global list, so
+ * the second is rare here — but no less an echo.
  */
 const bounceEchoSubtypes = new Set(["OnAccountSuppressionList", "Suppressed"]);
 
 const complaintEchoSubtype = "OnAccountSuppressionList";
 
-export type FeedbackClassification =
+type FeedbackClassification =
   | "permanent-bounce"
   | "suppression-echo"
   | "transient-bounce"
@@ -128,7 +131,7 @@ export interface ClassifiedFeedback extends Decision {
   readonly complaintSubType?: string | undefined;
 }
 
-export interface ClassifiedDelay {
+interface ClassifiedDelay {
   readonly classification: "delay";
   readonly recipients: ReadonlyArray<string>;
   readonly delayType: string;

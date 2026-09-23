@@ -1,10 +1,13 @@
+import type * as sqs from "@distilled.cloud/aws/sqs";
 import { EntityId } from "@emailer/api/Schemas";
 import * as AWS from "alchemy/AWS";
 import { Duration, Effect, Schema } from "effect";
 
+import { unavailable } from "./Storage/Errors.ts";
+
 /**
  * Campaign wake-up queue and message. This module is a leaf: it must not grow a Function class,
- * because the API will import the queue to send and an inline Function would pull the dispatcher
+ * because the API imports the queue to send and an inline Function would pull the dispatcher
  * handler into the API bundle.
  */
 
@@ -104,3 +107,18 @@ export const decodeDispatchMessage = Schema.decodeUnknownEffect(
 export const encodeDispatchMessage = Schema.encodeUnknownEffect(
   Schema.fromJsonString(DispatchMessage),
 );
+
+/** Sends a campaign's wake-up to the dispatch queue: the API's and the dispatcher's `CampaignWake`. */
+export const campaignWake = (
+  sendMessage: (
+    request: AWS.SQS.SendMessageRequest,
+  ) => Effect.Effect<sqs.SendMessageResult, sqs.SendMessageError>,
+) => ({
+  enqueue: (campaignId: string, runToken: string) =>
+    encodeDispatchMessage({ campaignId, runToken }).pipe(
+      Effect.orDie,
+      Effect.flatMap((MessageBody) => sendMessage({ MessageBody })),
+      Effect.mapError(unavailable("dispatch")),
+      Effect.asVoid,
+    ),
+});

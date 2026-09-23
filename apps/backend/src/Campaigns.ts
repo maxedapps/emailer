@@ -244,7 +244,7 @@ export const schedule = Effect.fn("Campaigns.schedule")(function* (
           yield* schedules.remove(runToken);
         }
 
-        if (predecessor !== undefined && predecessor !== runToken) {
+        if (predecessor !== undefined) {
           yield* schedules.remove(predecessor);
         }
       }

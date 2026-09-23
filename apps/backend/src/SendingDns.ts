@@ -16,7 +16,7 @@ import type { Input } from "alchemy";
 
 export type DnsMode = "route53" | "cloudflare";
 
-export const dnsMode = Config.option(Config.literals(["route53", "cloudflare"], "EMAILER_DNS"));
+export const dnsMode = Config.option(Config.Literals(["route53", "cloudflare"], "EMAILER_DNS"));
 
 export class DmarcRequiresDnsMode extends Data.TaggedError("DmarcRequiresDnsMode")<{
   readonly reportEmail: string;

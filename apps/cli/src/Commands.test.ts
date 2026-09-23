@@ -11,7 +11,6 @@ import { randomUUID } from "node:crypto";
 import { writeFile, rm } from "node:fs/promises";
 // oxlint-disable-next-line effecttsgo/node-builtin-import
 import { createServer } from "node:http";
-// oxlint-disable-next-line effecttsgo/node-builtin-import
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 
@@ -1237,6 +1236,57 @@ describe("contact and list management from the command line", () => {
         yield* Effect.promise(() => rm(file, { force: true }));
 
         expect(result.exitCode).not.toBe(0);
+        expect(service.authorizations).toHaveLength(0);
+      }).pipe(Effect.provide(NodeServices.layer)),
+    ));
+
+  it("imports the contacts a well-formed file names", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const service = inMemoryService(token);
+
+        const contents = yield* toJson({
+          contacts: [{ email: "max@example.com", attributes: { plan: "pro" } }],
+        });
+
+        const result = yield* withService(service, (baseUrl) =>
+          Effect.gen(function* () {
+            yield* runCli(baseUrl, token, ["lists", "create", "--name", "Readers"]);
+
+            return yield* withTempFile("json", contents, (file) =>
+              runCli(baseUrl, token, ["lists", "import", listId, "--file", file]),
+            );
+          }),
+        );
+
+        expect(result.exitCode).toBe(0);
+        expect(yield* parseJson(result.stdout)).toMatchObject({
+          contacts: [{ email: "max@example.com", member: true }],
+        });
+      }).pipe(Effect.provide(NodeServices.layer)),
+    ));
+
+  it("rejects an import file with a misspelled entry key, naming it, before any request", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const service = inMemoryService(token);
+
+        const contents = yield* toJson({
+          contacts: [{ email: "max@example.com", attributs: { plan: "pro" } }],
+        });
+
+        const result = yield* withTempFile("json", contents, (file) =>
+          withService(service, (baseUrl) =>
+            runCli(baseUrl, token, ["lists", "import", listId, "--file", file]),
+          ),
+        );
+
+        expect(result.exitCode).not.toBe(0);
+        expect(result.stderr).toContain("Invalid value for flag --file");
+        expect(result.stderr).toContain(
+          'Expected no excess property\n  at ["contacts"][0]["attributs"]',
+        );
+        expect(result.stdout.startsWith("{")).toBe(false);
         expect(service.authorizations).toHaveLength(0);
       }).pipe(Effect.provide(NodeServices.layer)),
     ));

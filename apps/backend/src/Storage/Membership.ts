@@ -25,18 +25,13 @@ import type {
 
 /**
  * How many memberships one list-cascade transaction clears. `TransactWriteItems` allows at most 100
- * actions, and each membership costs two deletes, so 40 leaves room for the list action and
- * headroom besides. The bound is load-bearing rather than tuning: a transaction built from a page
- * of unbounded size would exceed 100 on any list past 49 members and then fail **identically on
- * every retry**, leaving the list permanently undeletable.
+ * actions, and each membership costs two deletes, so a page is 80 actions with headroom besides;
+ * the list itself is deleted in a transaction of its own. The bound is load-bearing rather than
+ * tuning: a transaction built from a page of unbounded size would exceed 100 on any list past 50
+ * members and then fail **identically on every retry**, leaving the list permanently undeletable.
  */
 const cascadePageLimit = 40;
 
-/**
- * Membership rows project one field each. They get schemas too: a row whose `contactId` is the
- * wrong attribute kind used to read as absent, which these loops then reported as corrupt anyway —
- * but a row where it was a number would have read as absent rather than as wrong.
- */
 const MemberEntry = Schema.Struct({ contactId: attributeOf(Schemas.EntityId) });
 
 const MembershipEntry = Schema.Struct({ listId: attributeOf(Schemas.EntityId) });
@@ -58,7 +53,7 @@ const decodeReservationEntry = Schema.decodeUnknownEffect(ReservationEntry);
 
 const decodeMemberCursor = Schema.decodeUnknownEffect(MemberCursor);
 
-export const memberKey = (listId: string, contactId: string) => ({
+const memberKey = (listId: string, contactId: string) => ({
   pk: str(`LIST#${listId}`),
   sk: str(`MEMBER#${contactId}`),
 });
@@ -67,10 +62,10 @@ export const memberKey = (listId: string, contactId: string) => ({
  * The reverse of the membership, and the only contact→lists access path there is: the listing index
  * is sparse over contact and list `META` items, so it covers no member item. It is written in the
  * same transaction as the forward item, which makes the pair strongly consistent — an inverted
- * index would be eventually consistent, and a cascade driven by a stale read would orphan
- * memberships that `Campaigns.send` then reports as a permanent 503.
+ * index would be eventually consistent, and a contact cascade driven by a stale read would miss a
+ * membership written moments before and leave it behind.
  */
-export const memberOfKey = (contactId: string, listId: string) => ({
+const memberOfKey = (contactId: string, listId: string) => ({
   pk: str(`CONTACT#${contactId}`),
   sk: str(`LISTOF#${listId}`),
 });
@@ -86,13 +81,13 @@ export interface ImportCandidate {
   readonly attributes?: Schemas.ContactAttributes | undefined;
 }
 
-export interface ImportedContact {
+interface ImportedContact {
   readonly email: string;
   readonly contactId: string;
   readonly member: boolean;
 }
 
-export type ImportContactsOutcome =
+type ImportContactsOutcome =
   | { readonly outcome: "imported"; readonly contacts: ReadonlyArray<ImportedContact> }
   | { readonly outcome: "list-missing" };
 
@@ -108,11 +103,29 @@ export const membershipOperations = (
     addedAt: str(addedAt),
   });
 
+  const removeMembership = (listId: string, contactId: string) => [
+    { Delete: { Table: tableLogicalId, Key: memberKey(listId, contactId) } },
+    { Delete: { Table: tableLogicalId, Key: memberOfKey(contactId, listId) } },
+  ];
+
   /**
-   * Slot 0 checks the contact, slot 1 bumps the list, slot 2 writes the forward member and slot 3
-   * its reverse. The tests address these positions, so the order is part of the contract. The
-   * list's existence rides on its own `Update`'s condition rather than a separate `ConditionCheck`,
-   * because a transaction may not target one item twice.
+   * Adding to or importing into a list that is gone must write no membership, and removing from one
+   * answers `list-missing`, so each of those transactions carries this check. It targets the list's
+   * `META`, never a member item, so it shares a transaction with the member writes without targeting
+   * any item twice.
+   */
+  const listExists = (listId: string) => ({
+    ConditionCheck: {
+      Table: tableLogicalId,
+      Key: listKey(listId),
+      ConditionExpression: "attribute_exists(pk)",
+    },
+  });
+
+  /**
+   * Slot 0 checks the contact, slot 1 checks the list, slot 2 writes the forward member and slot 3
+   * its reverse. The outcome is read from which slots failed, so the order is part of the contract.
+   * Both member `Put`s are conditional on absence, which is what makes a repeat `already-member`.
    */
   const addMember = Effect.fn("Storage.addMember")(function* (
     listId: string,
@@ -128,15 +141,7 @@ export const membershipOperations = (
             ConditionExpression: "attribute_exists(pk)",
           },
         },
-        {
-          Update: {
-            Table: tableLogicalId,
-            Key: listKey(listId),
-            UpdateExpression: "SET membershipVersion = membershipVersion + :one",
-            ConditionExpression: "attribute_exists(pk)",
-            ExpressionAttributeValues: { ":one": num(1) },
-          },
-        },
+        listExists(listId),
         {
           Put: {
             Table: tableLogicalId,
@@ -170,28 +175,16 @@ export const membershipOperations = (
   });
 
   /**
-   * Both directions go, and `membershipVersion` moves so a concurrent membership change is
-   * visible to any reader of the list. Neither delete is conditioned: removing someone who is not
-   * a member is a no-op, and repeating the request must stay harmless.
+   * Both directions go, and slot 2 checks the list, so removing from a list that is not there
+   * answers `list-missing` rather than a quiet success. Neither delete is conditioned: removing
+   * someone who is not a member is a no-op, and repeating the request must stay harmless.
    */
   const removeMember = Effect.fn("Storage.removeMember")(function* (
     listId: string,
     contactId: string,
   ) {
     const outcome = yield* runTransaction("removeMember", {
-      TransactItems: [
-        { Delete: { Table: tableLogicalId, Key: memberKey(listId, contactId) } },
-        { Delete: { Table: tableLogicalId, Key: memberOfKey(contactId, listId) } },
-        {
-          Update: {
-            Table: tableLogicalId,
-            Key: listKey(listId),
-            UpdateExpression: "SET membershipVersion = membershipVersion + :one",
-            ConditionExpression: "attribute_exists(pk)",
-            ExpressionAttributeValues: { ":one": num(1) },
-          },
-        },
-      ],
+      TransactItems: [...removeMembership(listId, contactId), listExists(listId)],
     });
 
     return outcome.committed ? ("removed" as const) : ("list-missing" as const);
@@ -263,11 +256,6 @@ export const membershipOperations = (
     return Option.some<StoredPage<Schemas.Contact, string>>({ items: contacts, nextCursor });
   });
 
-  const removeMembership = (listId: string, contactId: string) => [
-    { Delete: { Table: tableLogicalId, Key: memberKey(listId, contactId) } },
-    { Delete: { Table: tableLogicalId, Key: memberOfKey(contactId, listId) } },
-  ];
-
   const joinMember = (
     key: dynamodb.AttributeMap,
     listId: string,
@@ -288,16 +276,6 @@ export const membershipOperations = (
     },
   });
 
-  const bumpList = (listId: string) => ({
-    Update: {
-      Table: tableLogicalId,
-      Key: listKey(listId),
-      UpdateExpression: "SET membershipVersion = membershipVersion + :one",
-      ConditionExpression: "attribute_exists(pk)",
-      ExpressionAttributeValues: { ":one": num(1) },
-    },
-  });
-
   /**
    * Deletes a contact, its memberships and its address reservation. `META` goes **last**, which is
    * what makes a repeated `DELETE` resume: while it is still there the contact is discoverable, and
@@ -306,10 +284,9 @@ export const membershipOperations = (
    * Every transaction here is a delete, so a repeat of any of them changes nothing, and the
    * cascade as a whole resumes wherever it stopped.
    *
-   * One transaction per membership, so no page arithmetic applies. A `ConditionalCheckFailed` in
-   * the bump slot means that list was concurrently deleted; the membership is then removed without
-   * a bump, which is what keeps an orphan left by the accepted delete-cascade race from blocking
-   * this contact's deletion forever.
+   * Each membership is removed, both directions together, in a transaction of its own. The removal
+   * carries no list condition, so a membership whose list is already gone is removed like any
+   * other and can never block the contact's deletion.
    */
   const deleteContact = Effect.fn("Storage.deleteContact")(function* (contactId: string) {
     const stored = yield* readItem("deleteContact", contactKey(contactId));
@@ -346,13 +323,11 @@ export const membershipOperations = (
         );
 
         const removal = yield* runTransaction("deleteContact", {
-          TransactItems: [...removeMembership(listId, contactId), bumpList(listId)],
+          TransactItems: removeMembership(listId, contactId),
         });
 
         if (!removal.committed) {
-          yield* runTransaction("deleteContact", {
-            TransactItems: removeMembership(listId, contactId),
-          });
+          return yield* unavailable("deleteContact")(removal.conditionFailures);
         }
       }
 
@@ -386,14 +361,14 @@ export const membershipOperations = (
   });
 
   /**
-   * Deletes a list and every membership in it, `META` last. Each page clears at most
-   * `cascadePageLimit` memberships; the **final** page deletes `LIST#…/META` instead of bumping,
-   * because the bump and the deletion address the same item and a transaction may not target one
-   * item twice — that is a validation error raised before the transaction runs, so it would never
-   * surface as a cancellation and would fail every non-empty list's delete deterministically.
+   * Deletes a list and every membership in it. Each page clears at most `cascadePageLimit`
+   * memberships, both directions of each, in one transaction; `LIST#…/META` goes **last**, on its
+   * own, which is what makes a repeated `DELETE` resume: while it is still there the list is
+   * discoverable, and the moment it is gone every membership write's list check refuses.
    *
-   * Dropping the final bump is safe: the parent is gone, so later membership writes that condition
-   * on its existence fail the same way a bump on a missing list would.
+   * A page can hold no members — an empty list, or the page after one that ended exactly on the
+   * limit — and a transaction with no actions is a validation error that would fail on every
+   * repeat, so such a page writes nothing.
    */
   const deleteList = Effect.fn("Storage.deleteList")(function* (listId: string) {
     const stored = yield* readItem("deleteList", listKey(listId));
@@ -404,7 +379,7 @@ export const membershipOperations = (
 
     let startKey: dynamodb.AttributeMap | undefined;
 
-    for (;;) {
+    do {
       const request = {
         KeyConditionExpression: "pk = :pk AND begins_with(sk, :prefix)",
         ExpressionAttributeValues: { ":pk": str(`LIST#${listId}`), ":prefix": str("MEMBER#") },
@@ -427,24 +402,26 @@ export const membershipOperations = (
         removals.push(...removeMembership(listId, memberId));
       }
 
-      const final = page.LastEvaluatedKey === undefined;
+      if (removals.length > 0) {
+        const outcome = yield* runTransaction("deleteList", { TransactItems: removals });
 
-      const outcome = yield* runTransaction("deleteList", {
-        TransactItems: final
-          ? [...removals, { Delete: { Table: tableLogicalId, Key: listKey(listId) } }]
-          : [...removals, bumpList(listId)],
-      });
-
-      if (!outcome.committed) {
-        return yield* unavailable("deleteList")(outcome.conditionFailures);
-      }
-
-      if (final) {
-        return "deleted" as const;
+        if (!outcome.committed) {
+          return yield* unavailable("deleteList")(outcome.conditionFailures);
+        }
       }
 
       startKey = page.LastEvaluatedKey;
+    } while (startKey !== undefined);
+
+    const outcome = yield* runTransaction("deleteList", {
+      TransactItems: [{ Delete: { Table: tableLogicalId, Key: listKey(listId) } }],
+    });
+
+    if (!outcome.committed) {
+      return yield* unavailable("deleteList")(outcome.conditionFailures);
     }
+
+    return "deleted" as const;
   });
 
   /**
@@ -454,14 +431,11 @@ export const membershipOperations = (
    * so re-importing does not rewrite when somebody joined.
    *
    * The pre-read is advisory only — a strong read still does not make a later write atomic. The
-   * transaction's own conditions are the authority: every existing contact carries a
-   * `ConditionCheck`, so an import racing that contact's deletion fails rather than resurrecting a
-   * membership, and each new address is reserved conditionally, so losing a race to a concurrent
-   * creation fails too. Both resolve on a repeat, whose pre-read then sees the new state.
-   *
-   * The bump is slot 0 and is unconditional in the sense that matters: it does not depend on what
-   * the pre-read said. Making it conditional on that would let a concurrent removal between the
-   * read and the write leave the audience changed while the version stood still.
+   * transaction's own conditions are the authority: slot 0 checks the list, so a missing list is
+   * `list-missing`; every existing contact carries a `ConditionCheck`, so an import racing that
+   * contact's deletion fails rather than resurrecting a membership; and each new address is
+   * reserved conditionally, so losing a race to a concurrent creation fails too. Both races
+   * resolve on a repeat, whose pre-read then sees the new state.
    */
   const importContacts = Effect.fn("Storage.importContacts")(function* (
     listId: string,
@@ -484,7 +458,7 @@ export const membershipOperations = (
     }
 
     const actions: Array<AWS.DynamoDB.TransactWriteItemsRequest["TransactItems"][number]> = [
-      bumpList(listId),
+      listExists(listId),
     ];
 
     const imported: Array<ImportedContact> = [];

@@ -3,20 +3,20 @@ packages:
   - packages/*
 
 catalog:
-  "@distilled.cloud/aws": 1.0.0-rc.9
-  "@effect/platform-node": 4.0.0-rc.112
+  "@distilled.cloud/aws": 1.0.0-rc.12
+  "@effect/platform-node": 4.0.0-rc.117
   "@effect/tsgo": 0.45.0
-  "@modelcontextprotocol/server": 2.0.0
   "@oxlint/plugins": 1.82.0
-  "@types/node": 24.13.4
-  alchemy: 2.0.0-beta.77
-  effect: 4.0.0-rc.112
-  oxfmt: 0.67.0
+  "@types/node": 24.13.6
+  alchemy: 2.0.0-beta.79
+  effect: 4.0.0-rc.117
+  knip: 6.37.0
+  oxfmt: 0.70.0
   oxlint: 1.82.0
   oxlint-tsgolint: 7.0.2001
   typescript: 7.0.2
   vite: 8.3.0
-  vitest: 5.0.0
+  vitest: 5.0.1
 
 saveExact: true
 engineStrict: true
@@ -25,38 +25,23 @@ verifyDepsBeforeRun: error
 # The Effect integration patches local binaries; never modify shared store files.
 packageImportMethod: copy
 
-# Alchemy beta.77 still uses APIs renamed in Effect RC113.
-# Catalogs constrain direct dependencies; these constrain transitive v4 ranges.
+# Alchemy declares open-ended ">=4.0.0-rc.115 || >=4.0.0" Effect ranges.
+# Catalogs constrain direct dependencies; these keep every transitive v4 package on one RC.
 overrides:
-  "effect@>=4.0.0-0": 4.0.0-rc.112
-  "@effect/platform-node@>=4.0.0-0": 4.0.0-rc.112
-  "@effect/platform-node-shared@>=4.0.0-0": 4.0.0-rc.112
-  "@effect/platform-bun@>=4.0.0-0": 4.0.0-rc.112
-  "@effect/sql-d1@>=4.0.0-0": 4.0.0-rc.112
-  "@effect/sql-sqlite-do@>=4.0.0-0": 4.0.0-rc.112
-  "@effect/vitest@>=4.0.0-0": 4.0.0-rc.112
+  "effect@>=4.0.0-0": 4.0.0-rc.117
+  "@effect/platform-node@>=4.0.0-0": 4.0.0-rc.117
+  "@effect/platform-node-shared@>=4.0.0-0": 4.0.0-rc.117
+  "@effect/platform-bun@>=4.0.0-0": 4.0.0-rc.117
+  "@effect/sql-d1@>=4.0.0-0": 4.0.0-rc.117
+  "@effect/sql-sqlite-do@>=4.0.0-0": 4.0.0-rc.117
+  "@effect/vitest@>=4.0.0-0": 4.0.0-rc.117
 
-# Alchemy depends on this adapter. Give it its supported Vitest independently
-# of the application's Vitest 5; do not widen or ignore its peer constraint.
 packageExtensions:
-  "alchemy@2.0.0-beta.77":
-    dependencies:
-      vitest: 4.1.11
   # Alchemy's Cloudflare tooling pulls in capnp-es, whose optional compiler
   # integration uses the pre-native TypeScript API. Isolate that compiler.
-  "@alchemy.run/cloudflare-runtime@2.0.0-beta.77":
+  "@alchemy.run/cloudflare-runtime@2.0.0-beta.79":
     dependencies:
       typescript: 6.0.3
-minimumReleaseAgeExclude:
-  - "@effect/tsgo-darwin-arm64@0.45.0"
-  - "@effect/tsgo-darwin-x64@0.45.0"
-  - "@effect/tsgo-linux-arm64@0.45.0"
-  - "@effect/tsgo-linux-arm@0.45.0"
-  - "@effect/tsgo-linux-x64@0.45.0"
-  - "@effect/tsgo-win32-arm64@0.45.0"
-  - "@effect/tsgo-win32-x64@0.45.0"
-  - "@effect/tsgo@0.45.0"
-  - vite@8.3.0
 allowBuilds:
   msgpackr-extract@3.0.4: true
   workerd@1.20260901.1: true

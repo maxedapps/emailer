@@ -33,7 +33,7 @@ export default Stack(
     const topic = yield* alertsTopic;
     yield* reputationAlarms;
 
-    const alertEmail = yield* Config.option(Config.string("EMAILER_ALERT_EMAIL"));
+    const alertEmail = yield* Config.option(Config.String("EMAILER_ALERT_EMAIL"));
 
     if (Option.isSome(alertEmail)) {
       yield* AWS.SNS.Subscription("AlertsEmail", {
@@ -103,8 +103,10 @@ export default Stack(
       alertsTopicArn: topic.topicArn,
     };
   }).pipe(
-    // The unsubscribe function is declared as a bare tag so Api.ts can reference
-    // its URL; without its .make Layer, planning fails with missingImplementation.
+    // The unsubscribe function is declared as a bare tag so the Dispatcher's props and the stack
+    // output can reference its URL: an inline class builds when yielded, which would run the
+    // function's props and init inside the Dispatcher at every cold start. Without its .make
+    // Layer, planning fails with missingImplementation.
     Effect.provide(UnsubscribePage),
   ),
 );

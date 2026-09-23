@@ -18,8 +18,8 @@ const invocationTimeout = Duration.seconds(30);
 /**
  * Where Lambda puts an event it accepted and could not process after its retries.
  *
- * Without this the event was simply gone: a suppression that failed to persist because the table
- * was briefly unavailable took the bounce with it, and nothing recorded that it had happened. The
+ * Without it the event is simply gone: a suppression that fails to persist because the table is
+ * briefly unavailable takes the bounce with it, and nothing records that it happened. The
  * queue does not repair anything by itself — `ReplayFeedback.ts` is the repair — but it keeps the
  * original event long enough for someone to act on it.
  *
@@ -37,7 +37,7 @@ const configurationSetTag = "ses:configuration-set";
 
 const campaignTag = "campaignId";
 
-export const expectedConfigurationSet = Config.string("EMAILER_CONFIGURATION_SET");
+export const expectedConfigurationSet = Config.String("EMAILER_CONFIGURATION_SET");
 
 const countsOf = (classified: ClassifiedFeedback) => ({
   bounced: classified.classification === "permanent-bounce" ? classified.recipients.length : 0,

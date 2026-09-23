@@ -26,13 +26,13 @@ import {
   mailFromRecords,
   publisherFor,
 } from "../apps/backend/src/SendingDns.ts";
-import { senderLogicalId } from "../apps/backend/src/SendingIdentity.ts";
+import { senderLogicalId, sendingIdentityStack } from "../apps/backend/src/SendingIdentity.ts";
 
 type AwsProviders = Layer.Success<ReturnType<typeof AWS.providers>>;
 
 // `AWS.providers()` is typed with `any` requirements (wiki: version-specific traps); naming what it
 // actually requires here keeps that `any` out of every layer built from it.
-// oxlint-disable-next-line effecttsgo/any-unknown-in-error-context, typescript/no-unsafe-assignment
+// oxlint-disable-next-line typescript/no-unsafe-assignment
 const awsProviders: Layer.Layer<AwsProviders, never, StackServices> = AWS.providers();
 
 const withCloudflare = Layer.merge(awsProviders, Cloudflare.providers());
@@ -57,10 +57,10 @@ const sendingIdentity = (emailIdentity: string, mailFromDomain: Input<string>) =
   }).pipe(RemovalPolicy.retain());
 
 export default Stack(
-  "EmailerSending",
+  sendingIdentityStack,
   { providers, state: AWS.state() },
   Effect.gen(function* () {
-    const emailIdentity = yield* Config.string("EMAILER_SENDER_IDENTITY");
+    const emailIdentity = yield* Config.String("EMAILER_SENDER_IDENTITY");
     const dns = yield* dnsSettings;
     const mailFromDomain = mailFromDomainOf(emailIdentity);
 

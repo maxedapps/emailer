@@ -2,7 +2,7 @@ import * as AWS from "alchemy/AWS";
 
 export const sendingIdentityStack = "EmailerSending";
 
-export const sendingIdentityStage = "shared";
+const sendingIdentityStage = "shared";
 
 export const senderLogicalId = "EmailerSender";
 

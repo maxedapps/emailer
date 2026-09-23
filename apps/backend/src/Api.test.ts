@@ -14,10 +14,9 @@ import { CampaignSchedule, CampaignWake } from "./Campaigns.ts";
 import { AudienceStore } from "./Storage/Audience.ts";
 import { CampaignStore } from "./Storage/Campaigns.ts";
 import { StorageFailure } from "./Storage/Errors.ts";
-import { unusedAudience } from "./Storage/Testing.ts";
+import { unusedAudience, unusedCampaigns } from "./Storage/Testing.ts";
 
 import type { AddressStatus } from "./Storage/Addresses.ts";
-import type { StoredContactList } from "./Storage/Lists.ts";
 
 const token = "3o4Xr7nJ1pQvKzB2sYtLwMhGfDcEaN9uRiVoP0qTzXY";
 
@@ -39,32 +38,11 @@ interface Store {
   readonly sesRequests: Array<string>;
   readonly wakes: Array<{ readonly campaignId: string; readonly runToken: string }>;
   readonly setCampaign: (campaign: Schemas.Campaign, runToken?: string) => void;
-  readonly beforeWrite: (action: () => void) => void;
   readonly failControl: () => void;
   readonly failSesGet: (error: sesv2.GetSuppressedDestinationError) => void;
   readonly listOnAccount: (destination: sesv2.SuppressedDestination) => void;
   readonly failSesDelete: (error: sesv2.DeleteSuppressedDestinationError) => void;
 }
-
-const unusedCampaignStore = {
-  getCampaignBody: () =>
-    Effect.die(new Error("CampaignStore.getCampaignBody is not exercised by this test")),
-  beginRun: () => Effect.die(new Error("CampaignStore.beginRun is not exercised by this test")),
-  claimRecipient: () =>
-    Effect.die(new Error("CampaignStore.claimRecipient is not exercised by this test")),
-  skipRecipient: () =>
-    Effect.die(new Error("CampaignStore.skipRecipient is not exercised by this test")),
-  settleRecipient: () =>
-    Effect.die(new Error("CampaignStore.settleRecipient is not exercised by this test")),
-  checkpoint: () => Effect.die(new Error("CampaignStore.checkpoint is not exercised by this test")),
-  completeRun: () =>
-    Effect.die(new Error("CampaignStore.completeRun is not exercised by this test")),
-  pauseRun: () => Effect.die(new Error("CampaignStore.pauseRun is not exercised by this test")),
-  scheduleCampaign: () =>
-    Effect.die(new Error("CampaignStore.scheduleCampaign is not exercised by this test")),
-  cancelCampaign: () =>
-    Effect.die(new Error("CampaignStore.cancelCampaign is not exercised by this test")),
-};
 
 const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store => {
   const reads: Array<string> = [];
@@ -85,23 +63,11 @@ const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store 
   > = Effect.succeed({});
 
   const contacts = new Map<string, Schemas.Contact>();
-  const lists = new Map<string, StoredContactList>();
+  const lists = new Map<string, Schemas.ContactList>();
   const members = new Map<string, Array<string>>();
   const campaigns = new Map<string, Schemas.Campaign>();
   const runTokens = new Map<string, string>();
-  const startedAtById = new Map<string, string>();
 
-  const history = new Map<
-    string,
-    {
-      readonly queuedAt: string;
-      readonly startedAt: string;
-      readonly progress: Schemas.CampaignProgress;
-      readonly feedback: Schemas.CampaignFeedback;
-    }
-  >();
-
-  let pendingWrite: (() => void) | undefined;
   let controlFailure: StorageFailure | undefined;
 
   const audience = Layer.succeed(AudienceStore)({
@@ -187,21 +153,13 @@ const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store 
     createList: (list) =>
       Effect.sync(() => {
         writes.push("createList");
-        lists.set(list.id, { list, membershipVersion: 0 });
+        lists.set(list.id, list);
       }),
     getList: (id) =>
       Effect.sync(() => {
         reads.push("getList");
 
         return Option.fromUndefinedOr(lists.get(id));
-      }),
-    listLists: (limit) =>
-      Effect.sync(() => {
-        reads.push("listLists");
-
-        const page = [...lists.values()].slice(0, limit).map((stored) => stored.list);
-
-        return { items: page, nextCursor: undefined };
       }),
     renameList: (id, name) =>
       Effect.sync(() => {
@@ -213,9 +171,9 @@ const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store 
           return Option.none<Schemas.ContactList>();
         }
 
-        const renamed = { ...stored.list, name };
+        const renamed = { ...stored, name };
 
-        lists.set(id, { list: renamed, membershipVersion: stored.membershipVersion });
+        lists.set(id, renamed);
 
         return Option.some(renamed);
       }),
@@ -258,9 +216,7 @@ const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store 
       Effect.sync(() => {
         writes.push("removeMember");
 
-        const stored = lists.get(listId);
-
-        if (stored === undefined) {
+        if (!lists.has(listId)) {
           return "list-missing" as const;
         }
 
@@ -268,7 +224,6 @@ const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store 
           listId,
           (members.get(listId) ?? []).filter((id) => id !== contactId),
         );
-        lists.set(listId, { list: stored.list, membershipVersion: stored.membershipVersion + 1 });
 
         return "removed" as const;
       }),
@@ -276,9 +231,7 @@ const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store 
       Effect.sync(() => {
         writes.push("importContacts");
 
-        const stored = lists.get(listId);
-
-        if (stored === undefined) {
+        if (!lists.has(listId)) {
           return { outcome: "list-missing" as const };
         }
 
@@ -307,7 +260,6 @@ const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store 
         });
 
         members.set(listId, joined);
-        lists.set(listId, { list: stored.list, membershipVersion: stored.membershipVersion + 1 });
 
         return { outcome: "imported" as const, contacts: imported };
       }),
@@ -319,9 +271,7 @@ const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store 
           return "contact-missing" as const;
         }
 
-        const stored = lists.get(listId);
-
-        if (stored === undefined) {
+        if (!lists.has(listId)) {
           return "list-missing" as const;
         }
 
@@ -332,11 +282,9 @@ const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store 
         }
 
         members.set(listId, [...current, contactId]);
-        lists.set(listId, { list: stored.list, membershipVersion: stored.membershipVersion + 1 });
 
         return "added" as const;
       }),
-    addressStatus: () => Effect.succeed(addressStatus),
     addressRecord: (email) =>
       Effect.sync(() => {
         reads.push("addressRecord");
@@ -376,7 +324,7 @@ const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store 
   });
 
   const campaignStore = Layer.succeed(CampaignStore)({
-    ...unusedCampaignStore,
+    ...unusedCampaigns,
     createCampaign: (campaign) =>
       Effect.sync(() => {
         writes.push("createCampaign");
@@ -415,8 +363,7 @@ const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store 
         return Option.some({
           state: submission.state,
           runToken: runTokens.get(id),
-          startedAt:
-            startedAtById.get(id) ?? ("startedAt" in submission ? submission.startedAt : undefined),
+          startedAt: "startedAt" in submission ? submission.startedAt : undefined,
           pausedReason: submission.state === "paused" ? submission.reason : undefined,
         });
       }),
@@ -439,30 +386,11 @@ const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store 
 
         return "queued" as const;
       }),
-    scheduleCampaign: (id, expected, newToken, sendAt) =>
-      Effect.sync(() => {
-        writes.push("scheduleCampaign");
-
-        const campaign = campaigns.get(id);
-
-        if (
-          campaign === undefined ||
-          campaign.submission.state !== expected.state ||
-          runTokens.get(id) !== expected.runToken
-        ) {
-          return "conflict" as const;
-        }
-
-        campaigns.set(id, { ...campaign, submission: { state: "scheduled", sendAt } });
-        runTokens.set(id, newToken);
-
-        return "scheduled" as const;
-      }),
+    // Every cancel this suite drives returns to draft; the resume-to-paused rule belongs to
+    // Campaigns.test.ts.
     cancelCampaign: (id, source) =>
       Effect.sync(() => {
         writes.push("cancelCampaign");
-        pendingWrite?.();
-        pendingWrite = undefined;
 
         const campaign = campaigns.get(id);
 
@@ -474,64 +402,9 @@ const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store 
           return "conflict" as const;
         }
 
-        if (source.state === "scheduled") {
-          campaigns.set(id, { ...campaign, submission: { state: "draft" } });
-
-          return "applied" as const;
-        }
-
-        const started =
-          startedAtById.get(id) !== undefined ||
-          ("startedAt" in campaign.submission && campaign.submission.startedAt !== undefined);
-
-        if (started !== source.started) {
-          return "conflict" as const;
-        }
-
-        if (!started) {
-          campaigns.set(id, { ...campaign, submission: { state: "draft" } });
-
-          return "applied" as const;
-        }
-
-        const recorded = history.get(id);
-
-        if (recorded === undefined) {
-          return "conflict" as const;
-        }
-
-        campaigns.set(id, {
-          ...campaign,
-          submission: {
-            state: "paused",
-            queuedAt: recorded.queuedAt,
-            startedAt: recorded.startedAt,
-            progress: recorded.progress,
-            feedback: recorded.feedback,
-            reason: "manual",
-          },
-        });
+        campaigns.set(id, { ...campaign, submission: { state: "draft" } });
 
         return "applied" as const;
-      }),
-    resumeCampaign: (id, expected, newToken, now) =>
-      Effect.sync(() => {
-        writes.push("resumeCampaign");
-
-        const campaign = campaigns.get(id);
-
-        if (
-          campaign === undefined ||
-          campaign.submission.state !== expected.state ||
-          runTokens.get(id) !== expected.runToken
-        ) {
-          return "conflict" as const;
-        }
-
-        campaigns.set(id, { ...campaign, submission: { state: "queued", queuedAt: now } });
-        runTokens.set(id, newToken);
-
-        return "queued" as const;
       }),
   });
 
@@ -561,32 +434,12 @@ const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store 
       }),
   });
 
-  const rememberHistory = (campaign: Schemas.Campaign) => {
-    const submission = campaign.submission;
-
-    if (
-      submission.state === "paused" ||
-      submission.state === "sending" ||
-      submission.state === "completed"
-    ) {
-      startedAtById.set(campaign.id, submission.startedAt);
-      history.set(campaign.id, {
-        queuedAt: submission.queuedAt,
-        startedAt: submission.startedAt,
-        progress: submission.progress,
-        feedback: submission.feedback,
-      });
-    }
-  };
-
   const setCampaign = (campaign: Schemas.Campaign, runToken?: string) => {
     campaigns.set(campaign.id, campaign);
 
     if (runToken !== undefined) {
       runTokens.set(campaign.id, runToken);
     }
-
-    rememberHistory(campaign);
   };
 
   const listOnAccount = (destination: sesv2.SuppressedDestination) => {
@@ -609,9 +462,6 @@ const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store 
     sesRequests,
     wakes,
     setCampaign,
-    beforeWrite: (action: () => void) => {
-      pendingWrite = action;
-    },
     failControl: () => {
       controlFailure = new StorageFailure({
         operationId: "getCampaignControl",
@@ -1302,136 +1152,6 @@ describe("generated client round trip", () => {
     );
   });
 
-  it("resumes a paused campaign onto the same queued contract", () => {
-    const store = inMemory();
-    const handler = webHandler(store);
-
-    const transport: typeof globalThis.fetch = (input, init) => handler(new Request(input, init));
-
-    return Effect.runPromise(
-      Effect.gen(function* () {
-        const client = yield* makeEmailerClient(baseUrl, Redacted.make(token));
-
-        const list = yield* client.lists.create({ payload: { name: "Readers" } });
-
-        const campaign = yield* client.campaigns.create({
-          payload: { listId: list.id, subject: "Release notes", text: "Hello" },
-        });
-
-        store.setCampaign(
-          {
-            ...campaign,
-            submission: {
-              state: "paused",
-              queuedAt: campaign.createdAt,
-              startedAt: campaign.createdAt,
-              progress: { accepted: 0, rejected: 0, uncertain: 0, skipped: 0 },
-              feedback: { bounced: 0, complained: 0 },
-              reason: "rate-limited",
-            },
-          },
-          "0195f0a0-1111-4222-8333-44444444e5d2",
-        );
-
-        const resumed = yield* client.campaigns.resume({ params: { id: campaign.id } });
-
-        expect(resumed.submission.state).toBe("queued");
-        expect(store.wakes).toHaveLength(1);
-        expect(store.wakes[0]?.campaignId).toBe(campaign.id);
-        expect(store.wakes[0]?.runToken).not.toBe("0195f0a0-1111-4222-8333-44444444e5d2");
-
-        // A repeated resume on the now queued campaign changes nothing but re-sends the wake-up
-        // under the same run token: that is the repair for a lost enqueue or a lost response.
-        const repeated = yield* client.campaigns.resume({ params: { id: campaign.id } });
-
-        expect(repeated.submission).toStrictEqual(resumed.submission);
-        expect(store.wakes).toHaveLength(2);
-        expect(store.wakes[1]?.runToken).toBe(store.wakes[0]?.runToken);
-      }).pipe(
-        Effect.provide(
-          Layer.provide(FetchHttpClient.layer, Layer.succeed(FetchHttpClient.Fetch, transport)),
-        ),
-      ),
-    );
-  });
-
-  it("schedules a draft for a future instant", () => {
-    const store = inMemory();
-    const handler = webHandler(store);
-
-    const transport: typeof globalThis.fetch = (input, init) => handler(new Request(input, init));
-
-    return Effect.runPromise(
-      Effect.gen(function* () {
-        const client = yield* makeEmailerClient(baseUrl, Redacted.make(token));
-
-        const list = yield* client.lists.create({ payload: { name: "Readers" } });
-
-        const campaign = yield* client.campaigns.create({
-          payload: { listId: list.id, subject: "Release notes", text: "Hello" },
-        });
-
-        const sendAt = "2099-01-01T00:00:00.000Z";
-
-        const scheduled = yield* client.campaigns.schedule({
-          params: { id: campaign.id },
-          payload: { sendAt },
-        });
-
-        expect(scheduled.submission).toStrictEqual({ state: "scheduled", sendAt });
-      }).pipe(
-        Effect.provide(
-          Layer.provide(FetchHttpClient.layer, Layer.succeed(FetchHttpClient.Fetch, transport)),
-        ),
-      ),
-    );
-  });
-
-  it("cancels a scheduled campaign back to draft", () => {
-    const store = inMemory();
-    const handler = webHandler(store);
-
-    const transport: typeof globalThis.fetch = (input, init) => handler(new Request(input, init));
-
-    return Effect.runPromise(
-      Effect.gen(function* () {
-        const client = yield* makeEmailerClient(baseUrl, Redacted.make(token));
-
-        const list = yield* client.lists.create({ payload: { name: "Readers" } });
-
-        const campaign = yield* client.campaigns.create({
-          payload: { listId: list.id, subject: "Release notes", text: "Hello" },
-        });
-
-        store.setCampaign(
-          {
-            ...campaign,
-            submission: { state: "scheduled", sendAt: "2099-01-01T00:00:00.000Z" },
-          },
-          "0195f0a0-1111-4222-8333-44444444e5d2",
-        );
-
-        const cancelled = yield* client.campaigns.cancel({ params: { id: campaign.id } });
-
-        expect(cancelled.submission).toStrictEqual({ state: "draft" });
-        expect(cancelled).not.toHaveProperty("runToken");
-
-        const response = yield* Effect.promise(() => handler(cancelRequest(campaign.id)));
-
-        expect(response.status).toBe(200);
-
-        const body = yield* Effect.promise(() => response.text());
-
-        expect(body).not.toContain("runToken");
-        expect((yield* campaignFromJson(body)).submission).toStrictEqual({ state: "draft" });
-      }).pipe(
-        Effect.provide(
-          Layer.provide(FetchHttpClient.layer, Layer.succeed(FetchHttpClient.Fetch, transport)),
-        ),
-      ),
-    );
-  });
-
   it("cancels a never-started queued campaign back to draft", () => {
     const store = inMemory();
     const handler = webHandler(store);
@@ -1465,71 +1185,6 @@ describe("generated client round trip", () => {
 
         expect(body).not.toContain("runToken");
         expect((yield* campaignFromJson(body)).submission).toStrictEqual({ state: "draft" });
-      }).pipe(
-        Effect.provide(
-          Layer.provide(FetchHttpClient.layer, Layer.succeed(FetchHttpClient.Fetch, transport)),
-        ),
-      ),
-    );
-  });
-
-  it("cancels a queued resume to paused with reason manual and keeps history", () => {
-    const store = inMemory();
-    const handler = webHandler(store);
-    const runToken = "0195f0a0-1111-4222-8333-44444444e5d2";
-    const queuedAt = "2026-09-11T10:00:01.000Z";
-    const startedAt = "2026-09-11T10:00:02.000Z";
-    const progress = { accepted: 2, rejected: 1, uncertain: 0, skipped: 3 };
-    const feedback = { bounced: 1, complained: 0 };
-
-    const transport: typeof globalThis.fetch = (input, init) => handler(new Request(input, init));
-
-    return Effect.runPromise(
-      Effect.gen(function* () {
-        const client = yield* makeEmailerClient(baseUrl, Redacted.make(token));
-
-        const list = yield* client.lists.create({ payload: { name: "Readers" } });
-
-        const campaign = yield* client.campaigns.create({
-          payload: { listId: list.id, subject: "Release notes", text: "Hello" },
-        });
-
-        store.setCampaign(
-          {
-            ...campaign,
-            submission: {
-              state: "paused",
-              queuedAt,
-              startedAt,
-              progress,
-              feedback,
-              reason: "rate-limited",
-            },
-          },
-          runToken,
-        );
-        store.setCampaign({ ...campaign, submission: { state: "queued", queuedAt } }, runToken);
-
-        const cancelled = yield* client.campaigns.cancel({ params: { id: campaign.id } });
-
-        expect(cancelled.submission).toStrictEqual({
-          state: "paused",
-          queuedAt,
-          startedAt,
-          progress,
-          feedback,
-          reason: "manual",
-        });
-        expect(cancelled).not.toHaveProperty("runToken");
-
-        const response = yield* Effect.promise(() => handler(cancelRequest(campaign.id)));
-
-        expect(response.status).toBe(200);
-
-        const body = yield* Effect.promise(() => response.text());
-
-        expect(body).not.toContain("runToken");
-        expect((yield* campaignFromJson(body)).submission).toStrictEqual(cancelled.submission);
       }).pipe(
         Effect.provide(
           Layer.provide(FetchHttpClient.layer, Layer.succeed(FetchHttpClient.Fetch, transport)),
@@ -1604,85 +1259,6 @@ describe("generated client round trip", () => {
         const fetched = yield* client.campaigns.get({ params: { id: campaign.id } });
 
         expect(fetched).toStrictEqual(current);
-      }).pipe(
-        Effect.provide(
-          Layer.provide(FetchHttpClient.layer, Layer.succeed(FetchHttpClient.Fetch, transport)),
-        ),
-      ),
-    );
-  });
-
-  it("answers 409 when cancel loses to a replacement paused generation", () => {
-    const store = inMemory();
-    const handler = webHandler(store);
-    const scheduledToken = "0195f0a0-1111-4222-8333-44444444e5d2";
-    const replacementToken = "0195f0a0-1111-4222-8333-44444444e5d3";
-    const queuedAt = "2026-09-11T10:00:01.000Z";
-    const startedAt = "2026-09-11T10:00:02.000Z";
-
-    const transport: typeof globalThis.fetch = (input, init) => handler(new Request(input, init));
-
-    return Effect.runPromise(
-      Effect.gen(function* () {
-        const client = yield* makeEmailerClient(baseUrl, Redacted.make(token));
-
-        const list = yield* client.lists.create({ payload: { name: "Readers" } });
-
-        const campaign = yield* client.campaigns.create({
-          payload: { listId: list.id, subject: "Release notes", text: "Hello" },
-        });
-
-        const scheduled: Schemas.Campaign = {
-          ...campaign,
-          submission: { state: "scheduled", sendAt: "2099-01-01T00:00:00.000Z" },
-        };
-
-        const replacement: Schemas.Campaign = {
-          ...campaign,
-          submission: {
-            state: "paused",
-            queuedAt,
-            startedAt,
-            progress: { accepted: 2, rejected: 0, uncertain: 0, skipped: 0 },
-            feedback: { bounced: 0, complained: 0 },
-            reason: "rate-limited",
-          },
-        };
-
-        const loseToReplacement = () => {
-          store.setCampaign(scheduled, scheduledToken);
-          store.beforeWrite(() => {
-            store.setCampaign(replacement, replacementToken);
-          });
-        };
-
-        loseToReplacement();
-
-        const attempt = yield* Effect.result(
-          client.campaigns.cancel({ params: { id: campaign.id } }),
-        );
-
-        expect(Result.isFailure(attempt) ? attempt.failure : undefined).toStrictEqual(
-          new Schemas.CampaignCancellationConflict({ state: "paused" }),
-        );
-        expect(store.sequence).not.toContain("removeSchedule");
-
-        const fetched = yield* client.campaigns.get({ params: { id: campaign.id } });
-
-        expect(fetched).toStrictEqual(replacement);
-
-        loseToReplacement();
-
-        const response = yield* Effect.promise(() => handler(cancelRequest(campaign.id)));
-
-        expect(response.status).toBe(409);
-
-        const body = yield* Effect.promise(() => response.text());
-
-        expect(body).toContain('"CampaignCancellationConflict"');
-        expect(body).toContain('"state":"paused"');
-        expect(body).not.toContain("runToken");
-        expect(store.sequence).not.toContain("removeSchedule");
       }).pipe(
         Effect.provide(
           Layer.provide(FetchHttpClient.layer, Layer.succeed(FetchHttpClient.Fetch, transport)),

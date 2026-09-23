@@ -3,6 +3,7 @@ import { Clock, Context, Data, Duration, Effect, Option, Result } from "effect";
 import { RateLimiter } from "effect/unstable/persistence";
 
 import { CampaignWake } from "./Campaigns.ts";
+import { describeCause } from "./Diagnostics.ts";
 import { newIdentifier, nowIso } from "./Identifiers.ts";
 import { Mailer, submissionTimeout } from "./Mailer.ts";
 import { AudienceStore } from "./Storage/Audience.ts";
@@ -23,7 +24,7 @@ export const memberPageSize = 50;
 /**
  * Per-run bounce and complaint thresholds. Integer arithmetic only.
  */
-export const breaker = {
+const breaker = {
   bounce: { minimumAccepted: 200, percent: 5 },
   complaint: { minimumAccepted: 1000, perMille: 1 },
 } as const;
@@ -109,26 +110,14 @@ export const runSlice = Effect.fn("Dispatching.runSlice")(function* (
   const run = begun.campaign.run;
   const guard = yield* guards.current;
 
-  if (Option.isSome(guard.halted)) {
-    yield* campaigns.pauseRun(
-      message.campaignId,
-      message.runToken,
-      "reputation",
-      previous,
-      yield* nowIso,
-    );
+  if (guard.halted) {
+    yield* campaigns.pauseRun(message.campaignId, message.runToken, "reputation", previous);
 
     return;
   }
 
   if (guard.dailyExhausted) {
-    yield* campaigns.pauseRun(
-      message.campaignId,
-      message.runToken,
-      "daily-quota",
-      previous,
-      yield* nowIso,
-    );
+    yield* campaigns.pauseRun(message.campaignId, message.runToken, "daily-quota", previous);
 
     return;
   }
@@ -139,13 +128,7 @@ export const runSlice = Effect.fn("Dispatching.runSlice")(function* (
     (run.accepted >= breaker.complaint.minimumAccepted &&
       run.complained * 1000 >= run.accepted * breaker.complaint.perMille)
   ) {
-    yield* campaigns.pauseRun(
-      message.campaignId,
-      message.runToken,
-      "feedback",
-      previous,
-      yield* nowIso,
-    );
+    yield* campaigns.pauseRun(message.campaignId, message.runToken, "feedback", previous);
 
     return;
   }
@@ -223,6 +206,10 @@ export const runSlice = Effect.fn("Dispatching.runSlice")(function* (
       return;
     }
 
+    // Minted before the claim: a claimed row is only ever settled by a submission, so a link that
+    // cannot be minted must stop the slice while the member is still unclaimed.
+    const unsubscribeUrl = yield* unsubscribeLink(member.email).pipe(Effect.orDie);
+
     const sendId = yield* newIdentifier;
 
     const claimed = yield* campaigns.claimRecipient(
@@ -242,8 +229,6 @@ export const runSlice = Effect.fn("Dispatching.runSlice")(function* (
       lastProcessed = member.id;
       continue;
     }
-
-    const unsubscribeUrl = yield* unsubscribeLink(member.email).pipe(Effect.orDie);
 
     const outgoing: OutgoingMessage = {
       recipient: member.email,
@@ -301,6 +286,17 @@ const submitClaimed = Effect.fn("Dispatching.submitClaimed")(function* (input: {
     const finishedAt = yield* nowIso;
 
     if (Result.isFailure(attemptResult)) {
+      const uncertain = attemptResult.failure;
+
+      // The row records only that the outcome is unknown; why is kept here, reduced to its
+      // classification so neither the recipient nor an SDK payload reaches the log.
+      yield* Effect.logWarning("submission uncertain", {
+        campaignId: outgoing.campaignId,
+        sendId: outgoing.sendId,
+        reason: uncertain.reason,
+        cause: describeCause(uncertain.cause),
+      });
+
       yield* campaigns.settleRecipient(
         outgoing.campaignId,
         outgoing.sendId,
@@ -337,13 +333,7 @@ const submitClaimed = Effect.fn("Dispatching.submitClaimed")(function* (input: {
           { state: "rejected", rejectionCode: "rate-limited" },
           finishedAt,
         );
-        yield* campaigns.pauseRun(
-          outgoing.campaignId,
-          runToken,
-          "rate-limited",
-          contactId,
-          finishedAt,
-        );
+        yield* campaigns.pauseRun(outgoing.campaignId, runToken, "rate-limited", contactId);
 
         return { kind: "stop" } satisfies ClaimedSubmit;
       }
@@ -361,13 +351,7 @@ const submitClaimed = Effect.fn("Dispatching.submitClaimed")(function* (input: {
     );
 
     if (sent.rejectionCode === "sending-paused") {
-      yield* campaigns.pauseRun(
-        outgoing.campaignId,
-        runToken,
-        "sending-paused",
-        contactId,
-        finishedAt,
-      );
+      yield* campaigns.pauseRun(outgoing.campaignId, runToken, "sending-paused", contactId);
 
       return { kind: "stop" } satisfies ClaimedSubmit;
     }

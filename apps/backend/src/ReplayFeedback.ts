@@ -105,7 +105,7 @@ export interface ReplayOperations {
 }
 
 /** Binds each call to the ambient AWS client once, so the operations themselves need no context. */
-export const awsOperations = Effect.gen(function* () {
+const awsOperations = Effect.gen(function* () {
   const client = yield* Effect.context<AwsClient>();
 
   return {
@@ -226,13 +226,13 @@ export const replay = Effect.fn("ReplayFeedback.replay")(function* (
 const command = Command.make(
   "replay-feedback",
   {
-    queueUrl: Flag.string("queue-url").pipe(
+    queueUrl: Flag.String("queue-url").pipe(
       Flag.withDescription("The failure queue's URL, from the stack's feedbackFailureQueueUrl"),
     ),
-    functionArn: Flag.string("function-arn").pipe(
+    functionArn: Flag.String("function-arn").pipe(
       Flag.withDescription("The feedback function's ARN, from the stack's feedbackFunctionArn"),
     ),
-    maxMessages: Flag.integer("max-messages").pipe(
+    maxMessages: Flag.Int("max-messages").pipe(
       Flag.withDescription("How many messages to replay before stopping"),
       Flag.withDefault(10),
     ),
@@ -267,7 +267,7 @@ export const shouldReport = (cause: Cause.Cause<unknown>): boolean =>
  * The one place a failure becomes operator-visible output, on stderr — stdout carries the replayed
  * message ids and nothing else, so a run that fails halfway still leaves a readable result.
  */
-export const reportCause = (cause: Cause.Cause<unknown>): Effect.Effect<void> =>
+const reportCause = (cause: Cause.Cause<unknown>): Effect.Effect<void> =>
   shouldReport(cause)
     ? Console.error(`emailer: replay stopped — ${renderCause(cause)}`)
     : Effect.void;

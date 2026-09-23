@@ -7,6 +7,7 @@
 - Supersedes in part: [ADR-0001](0001-resource-owning-effect-services.md)'s "immediate plain-text submission to one allowlisted recipient"; [ADR-0002](0002-domain-sending-identity.md)'s reliance on the allowlist and single-recipient rule as the protections behind a domain identity; [ADR-0004](0004-sender-owned-one-click-unsubscribe.md)'s and [ADR-0005](0005-contact-identity-and-membership-access-paths.md)'s "acceptable while the recipient set is a configured allowlist" residuals and the two-member audience probe; [ADR-0008](0008-storage-capabilities-and-error-boundaries.md)'s binding table for `CampaignStore` and the API's use of the mailer.
 - Superseded in part: [ADR-0012](0012-reputation-guardrails.md) for the pause reasons and the deferral of feedback counts; [ADR-0013](0013-repeat-safe-writes.md) for "Conditional writes are single-attempt" and the lost-race reading of a retried write; [ADR-0014](0014-campaign-body-item-and-summaries.md) for the campaign record, whose body now lives in its own `BODY` item and is read by the dispatcher once per slice.
 - Amended: [campaign-segmentation](work/campaign-segmentation.md) — a member a campaign filter excludes is not a recipient; it gets no row and is not counted in `skipped`
+- Amended: [codebase-cleanup](work/codebase-cleanup.md) — SES reports `Max24HourSend` as `-1` for an unlimited quota; the account term then drops out of the daily limit and only `EMAILER_DAILY_SEND_CEILING`, when set, applies
 
 ## Context
 

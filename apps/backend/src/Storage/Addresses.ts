@@ -31,7 +31,7 @@ export const transientKey = (email: string) => ({
   sk: str("TRANSIENT"),
 });
 
-export const transientWindow = { occurrences: 3, days: 30 } as const;
+const transientWindow = { occurrences: 3, days: 30 } as const;
 
 export interface AddressSuppression {
   readonly email: string;

@@ -6,7 +6,6 @@ import {
   attributeOf,
   listingAttributes,
   num,
-  NumberAttribute,
   recordVersion,
   str,
   StoredVersionAttribute,
@@ -20,7 +19,7 @@ import type {
   WritePrimitives,
 } from "./Primitives.ts";
 
-export const listKind = "list";
+const listKind = "list";
 
 export const listKey = (listId: string) => ({ pk: str(`LIST#${listId}`), sk: str("META") });
 
@@ -29,15 +28,9 @@ const StoredList = Schema.Struct({
   id: attributeOf(Schemas.EntityId),
   name: attributeOf(Schemas.EntityName),
   createdAt: attributeOf(Schemas.Timestamp),
-  membershipVersion: NumberAttribute.check(Schema.isInt()),
 });
 
 const decodeStoredList = Schema.decodeUnknownEffect(StoredList);
-
-export interface StoredContactList {
-  readonly list: Schemas.ContactList;
-  readonly membershipVersion: number;
-}
 
 export const listOperations = (
   primitives: ReadPrimitives & WritePrimitives & UpdatePrimitives & PagePrimitives,
@@ -53,7 +46,6 @@ export const listOperations = (
       id: str(list.id),
       name: str(list.name),
       createdAt: str(list.createdAt),
-      membershipVersion: num(0),
     }),
   );
 
@@ -61,16 +53,15 @@ export const listOperations = (
     const response = yield* readItem("getList", listKey(listId));
 
     if (response.Item === undefined) {
-      return Option.none<StoredContactList>();
+      return Option.none<Schemas.ContactList>();
     }
 
-    const item = response.Item;
+    const stored = yield* decodeStoredList(response.Item).pipe(Effect.mapError(corrupt("getList")));
 
-    const stored = yield* decodeStoredList(item).pipe(Effect.mapError(corrupt("getList")));
-
-    return Option.some<StoredContactList>({
-      list: { id: stored.id, name: stored.name, createdAt: stored.createdAt },
-      membershipVersion: stored.membershipVersion,
+    return Option.some<Schemas.ContactList>({
+      id: stored.id,
+      name: stored.name,
+      createdAt: stored.createdAt,
     });
   });
 
@@ -112,7 +103,7 @@ export const listOperations = (
       ExpressionAttributeValues: { ":name": str(name) },
     });
 
-    return Option.some<Schemas.ContactList>({ ...found.value.list, name });
+    return Option.some<Schemas.ContactList>({ ...found.value, name });
   });
 
   return { createList, getList, listLists, renameList } as const;

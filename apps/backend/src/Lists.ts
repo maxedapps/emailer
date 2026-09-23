@@ -25,7 +25,7 @@ export const get = Effect.fn("Lists.get")(function* (listId: string) {
     return yield* new Schemas.NotFound({ entity: "list" });
   }
 
-  return found.value.list;
+  return found.value;
 });
 
 export const list = Effect.fn("Lists.list")(function* (
