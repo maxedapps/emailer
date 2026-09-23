@@ -490,4 +490,88 @@ describe("campaign management from the command line", () => {
       ),
     60_000,
   );
+
+  it(
+    "creates a campaign from --markdown with the rendered layout and a text body free of Markdown",
+    () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const service = inMemoryService(token);
+          const markdown = "# Hello\n\nSome **bold** words and a [link](https://example.com).";
+
+          const result = yield* withService(service, (baseUrl) =>
+            withTempFile("md", markdown, (file) =>
+              runCli(baseUrl, token, [
+                "campaigns",
+                "create",
+                "--list",
+                listId,
+                "--subject",
+                "Release notes",
+                "--markdown",
+                file,
+              ]),
+            ),
+          );
+
+          expect(result.exitCode).toBe(0);
+
+          const created = yield* parseJson(result.stdout);
+
+          expect(created).toMatchObject({
+            subject: "Release notes",
+            text: "HELLO\n\nSome bold words and a link (https://example.com).",
+          });
+          expect(created).toHaveProperty("html", expect.stringContaining("<!doctype html>"));
+          expect(created).toHaveProperty(
+            "html",
+            expect.stringContaining("<title>Release notes</title>"),
+          );
+          expect(created).toHaveProperty(
+            "html",
+            expect.stringContaining(
+              '<strong>bold</strong> words and a <a href="https://example.com"',
+            ),
+          );
+        }).pipe(Effect.provide(NodeServices.layer)),
+      ),
+    60_000,
+  );
+
+  it.each([
+    [["--markdown", "{md}", "--text", "{txt}"], "Pass either --markdown or --text"],
+    [["--markdown", "{md}", "--html", "{txt}"], "Pass either --markdown or --text"],
+    [["--html", "{txt}"], "--html needs --text"],
+    [[], "Pass --markdown, or --text"],
+  ])(
+    "refuses the content flags %j before any request",
+    (flags, message) =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const service = inMemoryService(token);
+
+          const result = yield* withService(service, (baseUrl) =>
+            withTempFile("md", "# Hello", (md) =>
+              withTempFile("txt", textBody, (txt) =>
+                runCli(baseUrl, token, [
+                  "campaigns",
+                  "create",
+                  "--list",
+                  listId,
+                  "--subject",
+                  "Release notes",
+                  ...flags.map((flag) => flag.replace("{md}", md).replace("{txt}", txt)),
+                ]),
+              ),
+            ),
+          );
+
+          expect(result.exitCode).not.toBe(0);
+          expect(result.stdout).toBe("");
+          expect(result.stderr).toContain(message);
+          expect(service.authorizations).toHaveLength(0);
+        }).pipe(Effect.provide(NodeServices.layer)),
+      ),
+    60_000,
+  );
 });

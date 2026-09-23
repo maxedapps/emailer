@@ -1,9 +1,81 @@
 import * as Schemas from "@emailer/api/Schemas";
 import { DateTime, Effect, Option, Schema } from "effect";
-import { Command, Flag } from "effect/unstable/cli";
+import { CliError, Command, Flag } from "effect/unstable/cli";
 
 import { report, withClient } from "../Client.ts";
 import { entityPageFlags, idArgument, pageQuery } from "../Flags.ts";
+import { renderMarkdown } from "../Markdown.ts";
+
+const refuse = (userMessage: string) => new CliError.UserError({ cause: userMessage, userMessage });
+
+/** A campaign body comes from one Markdown file, or from a text file and an optional HTML file. */
+const contentFlags = {
+  markdown: Flag.fileText("markdown").pipe(
+    Flag.withDescription(
+      "Path to a Markdown file; both the text and the HTML body are rendered from it",
+    ),
+    Flag.optional,
+  ),
+  text: Flag.fileText("text").pipe(
+    Flag.withDescription("Path to a file holding the plain-text body"),
+    Flag.withSchema(Schemas.CampaignText),
+    Flag.optional,
+  ),
+  html: Flag.fileText("html").pipe(
+    Flag.withDescription("Path to a file holding the HTML body; needs --text"),
+    Flag.withSchema(Schemas.CampaignHtml),
+    Flag.optional,
+  ),
+};
+
+interface ContentFlags {
+  readonly markdown: Option.Option<string>;
+  readonly text: Option.Option<Schemas.CampaignText>;
+  readonly html: Option.Option<Schemas.CampaignHtml>;
+}
+
+type Content =
+  | { readonly kind: "markdown"; readonly markdown: string }
+  | { readonly kind: "body"; readonly body: Schemas.CampaignBody };
+
+/**
+ * Which body the flags name, checked before any request. None means no content flag was given,
+ * which only `update` accepts.
+ */
+const chooseContent = (
+  flags: ContentFlags,
+): Effect.Effect<Option.Option<Content>, CliError.UserError> => {
+  if (Option.isSome(flags.markdown)) {
+    return Option.isSome(flags.text) || Option.isSome(flags.html)
+      ? Effect.fail(refuse("Pass either --markdown or --text with an optional --html, not both"))
+      : Effect.succeedSome({ kind: "markdown", markdown: flags.markdown.value });
+  }
+
+  if (Option.isNone(flags.text)) {
+    return Option.isSome(flags.html)
+      ? Effect.fail(refuse("--html needs --text: every campaign carries a plain-text body"))
+      : Effect.succeedNone;
+  }
+
+  const text = flags.text.value;
+
+  return Effect.succeedSome({
+    kind: "body",
+    body: Option.isSome(flags.html) ? { text, html: flags.html.value } : { text },
+  });
+};
+
+const decodeBody = Schema.decodeUnknownEffect(Schemas.CampaignBody);
+
+/** The body to send. Markdown renders here, and its output meets the same limits as a file's. */
+const bodyOf = (content: Content, subject: string) =>
+  content.kind === "body"
+    ? Effect.succeed(content.body)
+    : decodeBody(renderMarkdown(content.markdown, subject)).pipe(
+        Effect.mapError(() =>
+          refuse("The rendered Markdown exceeds the service's body size limits"),
+        ),
+      );
 
 const campaignsCreate = Command.make(
   "create",
@@ -16,15 +88,7 @@ const campaignsCreate = Command.make(
       Flag.withDescription("The message subject"),
       Flag.withSchema(Schemas.CampaignSubject),
     ),
-    text: Flag.fileText("text").pipe(
-      Flag.withDescription("Path to a file holding the plain-text body"),
-      Flag.withSchema(Schemas.CampaignText),
-    ),
-    html: Flag.fileText("html").pipe(
-      Flag.withDescription("Path to a file holding the HTML body; the text body is still required"),
-      Flag.withSchema(Schemas.CampaignHtml),
-      Flag.optional,
-    ),
+    ...contentFlags,
     filter: Flag.keyValuePair("filter").pipe(
       Flag.withDescription(
         "Send only to members whose attributes equal every key=value given; repeat the flag per entry",
@@ -34,20 +98,24 @@ const campaignsCreate = Command.make(
     ),
   },
   Effect.fn(function* (input) {
+    const content = yield* chooseContent(input);
+
+    if (Option.isNone(content)) {
+      return yield* refuse("Pass --markdown, or --text with an optional --html");
+    }
+
     const payload = {
       listId: input.list,
       subject: input.subject,
-      text: input.text,
+      ...(yield* bodyOf(content.value, input.subject)),
     };
-
-    const withHtml = Option.isSome(input.html) ? { ...payload, html: input.html.value } : payload;
 
     yield* report(
       yield* withClient((client) =>
         client.campaigns.create({
           payload: Option.isSome(input.filter)
-            ? { ...withHtml, filter: input.filter.value }
-            : withHtml,
+            ? { ...payload, filter: input.filter.value }
+            : payload,
         }),
       ),
     );
@@ -55,6 +123,11 @@ const campaignsCreate = Command.make(
 ).pipe(
   Command.withDescription("Create a draft campaign"),
   Command.withExamples([
+    {
+      command:
+        'emailer campaigns create --list 0195f0a0-1111-4222-8333-44444444109e --subject "Release notes" --markdown newsletter.md',
+      description: "Create a draft whose text and HTML bodies are rendered from one Markdown file",
+    },
     {
       command:
         'emailer campaigns create --list 0195f0a0-1111-4222-8333-44444444109e --subject "Release notes" --text newsletter.txt --html newsletter.html',
