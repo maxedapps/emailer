@@ -872,16 +872,16 @@ describe("PauseReason", () => {
     ));
 });
 
-describe("CampaignCancellationConflict", () => {
+describe("CampaignStateConflict", () => {
   it.each(["draft", "scheduled", "queued", "sending", "paused", "completed"] as const)(
     "encodes with state %s",
     (state) =>
       Effect.runPromise(
         Effect.gen(function* () {
-          const error = new Schemas.CampaignCancellationConflict({ state });
-          const encoded = yield* Schema.encodeEffect(Schemas.CampaignCancellationConflict)(error);
+          const error = new Schemas.CampaignStateConflict({ state });
+          const encoded = yield* Schema.encodeEffect(Schemas.CampaignStateConflict)(error);
 
-          expect(encoded._tag).toBe("CampaignCancellationConflict");
+          expect(encoded._tag).toBe("CampaignStateConflict");
           expect(encoded.state).toBe(state);
           expect("runToken" in encoded).toBe(false);
         }),
@@ -895,7 +895,7 @@ describe("public error statuses", () => {
     [Schemas.EmailAlreadyUsed, 409],
     [Schemas.AddressOptedOut, 409],
     [Schemas.SendAtNotInFuture, 409],
-    [Schemas.CampaignCancellationConflict, 409],
+    [Schemas.CampaignStateConflict, 409],
     [Schemas.PayloadTooLarge, 413],
     [Schemas.StorageUnavailable, 503],
   ] as const;

@@ -211,7 +211,7 @@ node --env-file=.env apps/cli/src/main.ts addresses unsuppress --email you@examp
 - `campaigns list` omits the body; `campaigns get` includes it.
 - `campaigns send` exits zero when the campaign is **queued**. Poll `campaigns get` for `progress`, `feedback` (`bounced`, `complained`) and a `paused` reason.
 - `campaigns schedule` exits zero when the campaign is `scheduled`. `--at` is an ISO date (`YYYY-MM-DD`) or date-time with minute precision; no zone means UTC. Past instants are **409**. Scheduler fires with 60-second precision. `campaigns send` on a scheduled campaign sends now.
-- `campaigns cancel` withdraws a pending run. `scheduled`, or a `queued` first send that never started, returns to `draft`. A `queued` resume returns to `paused` with reason `manual`. `sending`, `completed`, and a conflicting replacement generation are **409**. Cancel does not stop in-flight SES submissions or recall mail.
+- `campaigns cancel` withdraws a pending run. `scheduled`, or a `queued` first send that never started, returns to `draft`. A `queued` resume returns to `paused` with reason `manual`. `sending`, `completed`, and a conflicting replacement generation are **409** `CampaignStateConflict`. Cancel does not stop in-flight SES submissions or recall mail.
 - An individual recipient is never retried automatically. A lost SES response stays `uncertain`.
 
 Every message gets a postal footer, `List-Unsubscribe` and one-click `List-Unsubscribe-Post`. Open/click tracking is off.

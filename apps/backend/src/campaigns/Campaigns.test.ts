@@ -1215,7 +1215,7 @@ describe("cancel", () => {
         const attempt = yield* runWith(fix, Campaigns.cancel(campaignId));
 
         expect(failureOf(attempt)).toStrictEqual(
-          new Schemas.CampaignCancellationConflict({ state: campaign.submission.state }),
+          new Schemas.CampaignStateConflict({ state: campaign.submission.state }),
         );
         expect(storedCampaign(fix)).toStrictEqual(campaign);
         expect(fix.schedules.removed).toHaveLength(0);
@@ -1244,7 +1244,7 @@ describe("cancel", () => {
           const attempt = yield* runWith(fix, Campaigns.cancel(campaignId));
 
           expect(failureOf(attempt)).toStrictEqual(
-            new Schemas.CampaignCancellationConflict({ state: replacement.submission.state }),
+            new Schemas.CampaignStateConflict({ state: replacement.submission.state }),
           );
           expect(storedCampaign(fix)).toStrictEqual(replacement);
           expect(fix.world.runTokens.get(campaignId)).toBe(replacementToken);
@@ -1316,7 +1316,7 @@ describe("cancel", () => {
         const attempt = yield* runWith(fix, Campaigns.cancel(campaignId));
 
         expect(failureOf(attempt)).toStrictEqual(
-          new Schemas.CampaignCancellationConflict({ state: "paused" }),
+          new Schemas.CampaignStateConflict({ state: "paused" }),
         );
         expect(storedCampaign(fix).submission).toStrictEqual({
           state: "paused",
@@ -1355,7 +1355,7 @@ describe("cancel", () => {
         const attempt = yield* runWith(fix, Campaigns.cancel(campaignId));
 
         expect(failureOf(attempt)).toStrictEqual(
-          new Schemas.CampaignCancellationConflict({ state: "paused" }),
+          new Schemas.CampaignStateConflict({ state: "paused" }),
         );
         expect(storedCampaign(fix).submission).toStrictEqual({
           state: "paused",
@@ -1388,7 +1388,7 @@ describe("cancel", () => {
         const attempt = yield* runWith(fix, Campaigns.cancel(campaignId));
 
         expect(failureOf(attempt)).toStrictEqual(
-          new Schemas.CampaignCancellationConflict({ state: "sending" }),
+          new Schemas.CampaignStateConflict({ state: "sending" }),
         );
         expect(storedCampaign(fix).submission.state).toBe("sending");
         expect(fix.schedules.removed).toHaveLength(0);

@@ -203,7 +203,7 @@ export class CampaignsGroup extends HttpApiGroup.make("campaigns")
       error: [
         HttpApiError.BadRequestNoContent,
         Schemas.NotFound,
-        Schemas.CampaignCancellationConflict,
+        Schemas.CampaignStateConflict,
         Schemas.StorageUnavailable,
       ],
     }),

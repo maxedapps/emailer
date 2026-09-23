@@ -353,7 +353,7 @@ export const inMemoryService = (
           switch (found.submission.state) {
             case "sending":
             case "completed":
-              return yield* new Schemas.CampaignCancellationConflict({
+              return yield* new Schemas.CampaignStateConflict({
                 state: found.submission.state,
               });
             case "draft":

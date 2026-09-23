@@ -1587,7 +1587,7 @@ describe("generated client round trip", () => {
         );
 
         expect(Result.isFailure(attempt) ? attempt.failure : undefined).toStrictEqual(
-          new Schemas.CampaignCancellationConflict({ state: submission.state }),
+          new Schemas.CampaignStateConflict({ state: submission.state }),
         );
 
         const response = yield* Effect.promise(() => handler(cancelRequest(campaign.id)));
@@ -1596,7 +1596,7 @@ describe("generated client round trip", () => {
 
         const body = yield* Effect.promise(() => response.text());
 
-        expect(body).toContain('"CampaignCancellationConflict"');
+        expect(body).toContain('"CampaignStateConflict"');
         expect(body).toContain(`"state":"${submission.state}"`);
         expect(body).not.toContain("runToken");
         expect(store.writes).not.toContain("cancelCampaign");
@@ -1664,7 +1664,7 @@ describe("generated client round trip", () => {
         );
 
         expect(Result.isFailure(attempt) ? attempt.failure : undefined).toStrictEqual(
-          new Schemas.CampaignCancellationConflict({ state: "paused" }),
+          new Schemas.CampaignStateConflict({ state: "paused" }),
         );
         expect(store.sequence).not.toContain("removeSchedule");
 
@@ -1680,7 +1680,7 @@ describe("generated client round trip", () => {
 
         const body = yield* Effect.promise(() => response.text());
 
-        expect(body).toContain('"CampaignCancellationConflict"');
+        expect(body).toContain('"CampaignStateConflict"');
         expect(body).toContain('"state":"paused"');
         expect(body).not.toContain("runToken");
         expect(store.sequence).not.toContain("removeSchedule");

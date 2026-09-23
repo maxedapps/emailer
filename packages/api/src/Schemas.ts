@@ -462,8 +462,12 @@ export class SendAtNotInFuture extends Schema.TaggedError<SendAtNotInFuture>()(
   { httpApiStatus: 409 },
 ) {}
 
-export class CampaignCancellationConflict extends Schema.TaggedError<CampaignCancellationConflict>()(
-  "CampaignCancellationConflict",
+/**
+ * The campaign is in a state the operation does not apply to: cancelling one that is sending, or
+ * editing, deleting or previewing one that is no longer a draft. `state` is what it was found in.
+ */
+export class CampaignStateConflict extends Schema.TaggedError<CampaignStateConflict>()(
+  "CampaignStateConflict",
   {
     state: Schema.Literals(["draft", "scheduled", "queued", "sending", "paused", "completed"]),
   },

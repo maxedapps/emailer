@@ -269,7 +269,7 @@ export const cancel = Effect.fn("Campaigns.cancel")(function* (campaignId: strin
 
     case "sending":
     case "completed":
-      return yield* new Schemas.CampaignCancellationConflict({ state: control.state });
+      return yield* new Schemas.CampaignStateConflict({ state: control.state });
 
     case "scheduled":
     case "queued": {
@@ -300,7 +300,7 @@ export const cancel = Effect.fn("Campaigns.cancel")(function* (campaignId: strin
       }
 
       if (!cancellationReachedDestination(control, current.value)) {
-        return yield* new Schemas.CampaignCancellationConflict({
+        return yield* new Schemas.CampaignStateConflict({
           state: current.value.state,
         });
       }

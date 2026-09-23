@@ -276,7 +276,7 @@ describe("campaign management from the command line", () => {
 
           expect(result.exitCode).not.toBe(0);
           expect(result.stdout).toBe("");
-          expect(result.stderr).toContain("CampaignCancellationConflict");
+          expect(result.stderr).toContain("CampaignStateConflict");
           expect(service.campaigns.get(campaignId)).toStrictEqual(sending);
         }).pipe(Effect.provide(NodeServices.layer)),
       ),
