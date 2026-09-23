@@ -18,7 +18,7 @@ import {
   tableLogicalId,
   withOptional,
 } from "./Items.ts";
-import { allPrimitives } from "./Primitives.ts";
+import { allPrimitives, readPrimitives } from "./Primitives.ts";
 
 import type { TransactionTokens } from "./Primitives.ts";
 import { dataTable } from "./Table.ts";
@@ -198,6 +198,8 @@ const stateName = { "#state": "state" };
 
 const stateAndCursorNames = { "#state": "state", "#cursor": "cursor" };
 
+const draftNames = { "#state": "state", "#filter": "filter" };
+
 const observedTokenCondition = (runToken: string | undefined) =>
   runToken === undefined ? "attribute_not_exists(runToken)" : "runToken = :expected";
 
@@ -238,6 +240,45 @@ const settlementWrite = (settlement: RecipientSettlement) => {
   }
 };
 
+/** The two reads a campaign's content needs, and all the public preview function may do. */
+export const campaignReads = (primitives: ReadPrimitives) => {
+  const { readItem } = primitives;
+
+  // No absent case: every caller holds a META that proves the campaign exists, so a missing body
+  // is corrupt, which decoding an undefined item reports.
+  const getCampaignBody = Effect.fn("Storage.getCampaignBody")(function* (campaignId: string) {
+    const response = yield* readItem("getCampaignBody", bodyKey(campaignId));
+
+    const stored = yield* decodeStoredCampaignBody(response.Item).pipe(
+      Effect.mapError(corrupt("getCampaignBody")),
+    );
+
+    const body: Schemas.CampaignBody =
+      stored.html === undefined ? { text: stored.text } : { text: stored.text, html: stored.html };
+
+    return body;
+  });
+
+  const getCampaign = Effect.fn("Storage.getCampaign")(function* (campaignId: string) {
+    const response = yield* readItem("getCampaign", campaignKey(campaignId));
+
+    if (response.Item === undefined) {
+      return Option.none<Schemas.Campaign>();
+    }
+
+    const stored = yield* decodeStoredCampaign(response.Item).pipe(
+      Effect.mapError(corrupt("getCampaign")),
+    );
+
+    const summary = yield* summaryOf(stored).pipe(Effect.mapError(corrupt("getCampaign")));
+    const body = yield* getCampaignBody(campaignId);
+
+    return Option.some<Schemas.Campaign>({ ...summary, ...body });
+  });
+
+  return { getCampaignBody, getCampaign } as const;
+};
+
 export const campaignOperations = (
   primitives: ReadPrimitives &
     WritePrimitives &
@@ -246,6 +287,7 @@ export const campaignOperations = (
     PagePrimitives,
 ) => {
   const { readEntityPage, readItem, recordOnce, runTransaction, updateIf } = primitives;
+  const { getCampaignBody, getCampaign } = campaignReads(primitives);
 
   // Both keys are fresh identifiers, so an item already there can only be this request landing
   // again after a lost response: `recordOnce` reports that as done, which it is. BODY goes first
@@ -291,38 +333,6 @@ export const campaignOperations = (
       "createCampaign",
       campaign.filter === undefined ? item : { ...item, filter: strMap(campaign.filter) },
     );
-  });
-
-  // No absent case: every caller holds a META that proves the campaign exists, so a missing body
-  // is corrupt, which decoding an undefined item reports.
-  const getCampaignBody = Effect.fn("Storage.getCampaignBody")(function* (campaignId: string) {
-    const response = yield* readItem("getCampaignBody", bodyKey(campaignId));
-
-    const stored = yield* decodeStoredCampaignBody(response.Item).pipe(
-      Effect.mapError(corrupt("getCampaignBody")),
-    );
-
-    const body: Schemas.CampaignBody =
-      stored.html === undefined ? { text: stored.text } : { text: stored.text, html: stored.html };
-
-    return body;
-  });
-
-  const getCampaign = Effect.fn("Storage.getCampaign")(function* (campaignId: string) {
-    const response = yield* readItem("getCampaign", campaignKey(campaignId));
-
-    if (response.Item === undefined) {
-      return Option.none<Schemas.Campaign>();
-    }
-
-    const stored = yield* decodeStoredCampaign(response.Item).pipe(
-      Effect.mapError(corrupt("getCampaign")),
-    );
-
-    const summary = yield* summaryOf(stored).pipe(Effect.mapError(corrupt("getCampaign")));
-    const body = yield* getCampaignBody(campaignId);
-
-    return Option.some<Schemas.Campaign>({ ...summary, ...body });
   });
 
   const listCampaigns = Effect.fn("Storage.listCampaigns")(function* (
@@ -745,7 +755,6 @@ export const campaignOperations = (
     runToken: string,
     reason: Schemas.PauseReason,
     cursor: string | undefined,
-    _now: string,
   ) {
     const outcome = yield* updateIf(
       "pauseRun",
@@ -778,6 +787,66 @@ export const campaignOperations = (
     return outcome.applied ? ("paused" as const) : ("stale" as const);
   });
 
+  const bodyItem = (campaign: Schemas.Campaign) =>
+    withOptional({ ...bodyKey(campaign.id), v: num(recordVersion), text: str(campaign.text) }, [
+      ["html", campaign.html],
+    ]);
+
+  // One fixed shape: the caller merges the change into the whole draft, so META's editable fields
+  // and BODY are rewritten together, and only while the campaign is still a draft. A campaign
+  // deleted meanwhile fails the same condition, since its state no longer exists.
+  const updateDraft = Effect.fn("Storage.updateDraft")(function* (campaign: Schemas.Campaign) {
+    const values = {
+      ":subject": str(campaign.subject),
+      ":listId": str(campaign.listId),
+      ":draft": str("draft"),
+    };
+
+    const outcome = yield* runTransaction("updateDraft", {
+      TransactItems: [
+        {
+          Update: {
+            Table: tableLogicalId,
+            Key: campaignKey(campaign.id),
+            ConditionExpression: "#state = :draft",
+            ExpressionAttributeNames: draftNames,
+            ...(campaign.filter === undefined
+              ? {
+                  UpdateExpression: "SET subject = :subject, listId = :listId REMOVE #filter",
+                  ExpressionAttributeValues: values,
+                }
+              : {
+                  UpdateExpression: "SET subject = :subject, listId = :listId, #filter = :filter",
+                  ExpressionAttributeValues: { ...values, ":filter": strMap(campaign.filter) },
+                }),
+          },
+        },
+        { Put: { Table: tableLogicalId, Item: bodyItem(campaign) } },
+      ],
+    });
+
+    return outcome.committed ? ("updated" as const) : ("conflict" as const);
+  });
+
+  const deleteDraft = Effect.fn("Storage.deleteDraft")(function* (id: string) {
+    const outcome = yield* runTransaction("deleteDraft", {
+      TransactItems: [
+        {
+          Delete: {
+            Table: tableLogicalId,
+            Key: campaignKey(id),
+            ConditionExpression: "#state = :draft",
+            ExpressionAttributeNames: stateName,
+            ExpressionAttributeValues: { ":draft": str("draft") },
+          },
+        },
+        { Delete: { Table: tableLogicalId, Key: bodyKey(id) } },
+      ],
+    });
+
+    return outcome.committed ? ("deleted" as const) : ("conflict" as const);
+  });
+
   return {
     createCampaign,
     getCampaignBody,
@@ -795,6 +864,8 @@ export const campaignOperations = (
     checkpoint,
     completeRun,
     pauseRun,
+    updateDraft,
+    deleteDraft,
   } as const;
 };
 
@@ -812,6 +883,26 @@ export type CampaignStoreOperations = ReturnType<typeof campaignStoreOperations>
 export class CampaignStore extends Context.Service<CampaignStore, CampaignStoreOperations>()(
   "emailer/backend/CampaignStore",
 ) {}
+
+/**
+ * Read-only access to one campaign by id. The public preview function holds this and `GetItem`
+ * alone, so a leaked preview link can at most read the campaign it names.
+ */
+export type CampaignReads = ReturnType<typeof campaignReads>;
+
+export class CampaignReader extends Context.Service<CampaignReader, CampaignReads>()(
+  "emailer/backend/CampaignReader",
+) {}
+
+export const CampaignReaderLive = Layer.effect(CampaignReader)(
+  Effect.gen(function* () {
+    const table = yield* dataTable;
+
+    return CampaignReader.of(
+      campaignReads(readPrimitives({ getItem: yield* AWS.DynamoDB.GetItem(table) })),
+    );
+  }),
+).pipe(Layer.provide(AWS.DynamoDB.GetItemHttp));
 
 export const CampaignStoreLive = Layer.effect(CampaignStore)(
   Effect.gen(function* () {

@@ -389,6 +389,30 @@ const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store 
 
         return Option.fromUndefinedOr(campaigns.get(id));
       }),
+    updateDraft: (campaign) =>
+      Effect.sync(() => {
+        writes.push("updateDraft");
+
+        if (campaigns.get(campaign.id)?.submission.state !== "draft") {
+          return "conflict" as const;
+        }
+
+        campaigns.set(campaign.id, campaign);
+
+        return "updated" as const;
+      }),
+    deleteDraft: (id) =>
+      Effect.sync(() => {
+        writes.push("deleteDraft");
+
+        if (campaigns.get(id)?.submission.state !== "draft") {
+          return "conflict" as const;
+        }
+
+        campaigns.delete(id);
+
+        return "deleted" as const;
+      }),
     listCampaigns: (limit) =>
       Effect.sync(() => {
         reads.push("listCampaigns");
@@ -2050,6 +2074,126 @@ describe("list management", () => {
           expect(store.writes).toHaveLength(0);
         });
       },
+    );
+  });
+});
+
+describe("draft editing", () => {
+  const clientLayer = (store: Store) => {
+    const handler = webHandler(store);
+    const transport: typeof globalThis.fetch = (input, init) => handler(new Request(input, init));
+
+    return {
+      handler,
+      layer: Layer.provide(FetchHttpClient.layer, Layer.succeed(FetchHttpClient.Fetch, transport)),
+    };
+  };
+
+  it("edits a draft, removing its html and filter with null, and reads the edit back", () => {
+    const store = inMemory();
+    const { layer } = clientLayer(store);
+
+    return Effect.runPromise(
+      Effect.gen(function* () {
+        const client = yield* makeEmailerClient(baseUrl, Redacted.make(token));
+        const list = yield* client.lists.create({ payload: { name: "Readers" } });
+
+        const campaign = yield* client.campaigns.create({
+          payload: {
+            listId: list.id,
+            subject: "Release notes",
+            text: "Hello",
+            html: "<p>Hello</p>",
+            filter: { plan: "pro" },
+          },
+        });
+
+        const updated = yield* client.campaigns.update({
+          params: { id: campaign.id },
+          payload: { subject: "New notes", text: "Hi", html: null, filter: null },
+        });
+
+        expect(updated).toStrictEqual({
+          id: campaign.id,
+          listId: list.id,
+          subject: "New notes",
+          text: "Hi",
+          createdAt: campaign.createdAt,
+          submission: { state: "draft" },
+        });
+        expect(yield* client.campaigns.get({ params: { id: campaign.id } })).toStrictEqual(updated);
+      }).pipe(Effect.provide(layer)),
+    );
+  });
+
+  it("deletes a draft with 204, after which it is not found", () => {
+    const store = inMemory();
+    const { handler, layer } = clientLayer(store);
+
+    return Effect.runPromise(
+      Effect.gen(function* () {
+        const client = yield* makeEmailerClient(baseUrl, Redacted.make(token));
+        const list = yield* client.lists.create({ payload: { name: "Readers" } });
+
+        const campaign = yield* client.campaigns.create({
+          payload: { listId: list.id, subject: "Release notes", text: "Hello" },
+        });
+
+        const response = yield* Effect.promise(() =>
+          handler(
+            new Request(`${baseUrl}/campaigns/${campaign.id}`, {
+              method: "DELETE",
+              headers: authorized(),
+            }),
+          ),
+        );
+
+        expect(response.status).toBe(204);
+
+        const attempt = yield* Effect.result(client.campaigns.get({ params: { id: campaign.id } }));
+
+        expect(Result.isFailure(attempt) ? attempt.failure : undefined).toStrictEqual(
+          new Schemas.NotFound({ entity: "campaign" }),
+        );
+      }).pipe(Effect.provide(layer)),
+    );
+  });
+
+  it("answers 409 with the state to editing or deleting a queued campaign", () => {
+    const store = inMemory();
+    const { layer } = clientLayer(store);
+
+    return Effect.runPromise(
+      Effect.gen(function* () {
+        const client = yield* makeEmailerClient(baseUrl, Redacted.make(token));
+        const list = yield* client.lists.create({ payload: { name: "Readers" } });
+
+        const campaign = yield* client.campaigns.create({
+          payload: { listId: list.id, subject: "Release notes", text: "Hello" },
+        });
+
+        const queued: Schemas.Campaign = {
+          ...campaign,
+          submission: { state: "queued", queuedAt: "2026-09-11T10:00:01.000Z" },
+        };
+
+        store.setCampaign(queued, "0195f0a0-1111-4222-8333-44444444e5d2");
+
+        const edit = yield* Effect.result(
+          client.campaigns.update({ params: { id: campaign.id }, payload: { subject: "x" } }),
+        );
+
+        const removal = yield* Effect.result(
+          client.campaigns.remove({ params: { id: campaign.id } }),
+        );
+
+        const conflict = new Schemas.CampaignStateConflict({ state: "queued" });
+
+        expect(Result.isFailure(edit) ? edit.failure : undefined).toStrictEqual(conflict);
+        expect(Result.isFailure(removal) ? removal.failure : undefined).toStrictEqual(conflict);
+
+        expect(yield* client.campaigns.get({ params: { id: campaign.id } })).toStrictEqual(queued);
+      }).pipe(Effect.provide(layer)),
     );
   });
 });

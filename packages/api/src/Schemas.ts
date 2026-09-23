@@ -344,6 +344,20 @@ export const UpdateContactPayload = Schema.Struct({
 
 export type UpdateContactPayload = typeof UpdateContactPayload.Type;
 
+/**
+ * A draft edit, with `UpdateContactPayload`'s convention: absent leaves a field alone, and null
+ * removes an optional one — the HTML body, or the filter so the campaign goes to the whole list.
+ */
+export const UpdateCampaignPayload = Schema.Struct({
+  listId: Schema.optionalKey(EntityId),
+  subject: Schema.optionalKey(CampaignSubject),
+  text: Schema.optionalKey(CampaignText),
+  html: Schema.optionalKey(Schema.NullOr(CampaignHtml)),
+  filter: Schema.optionalKey(Schema.NullOr(ContactAttributes)),
+});
+
+export type UpdateCampaignPayload = typeof UpdateCampaignPayload.Type;
+
 export const UpdateListPayload = Schema.Struct({
   name: EntityName,
 });

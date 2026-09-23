@@ -79,25 +79,13 @@ export const runSlice = Effect.fn("Dispatching.runSlice")(function* (
   const guard = yield* guards.current;
 
   if (Option.isSome(guard.halted)) {
-    yield* campaigns.pauseRun(
-      message.campaignId,
-      message.runToken,
-      "reputation",
-      previous,
-      yield* nowIso,
-    );
+    yield* campaigns.pauseRun(message.campaignId, message.runToken, "reputation", previous);
 
     return;
   }
 
   if (guard.dailyExhausted) {
-    yield* campaigns.pauseRun(
-      message.campaignId,
-      message.runToken,
-      "daily-quota",
-      previous,
-      yield* nowIso,
-    );
+    yield* campaigns.pauseRun(message.campaignId, message.runToken, "daily-quota", previous);
 
     return;
   }
@@ -108,13 +96,7 @@ export const runSlice = Effect.fn("Dispatching.runSlice")(function* (
     (run.accepted >= breaker.complaint.minimumAccepted &&
       run.complained * 1000 >= run.accepted * breaker.complaint.perMille)
   ) {
-    yield* campaigns.pauseRun(
-      message.campaignId,
-      message.runToken,
-      "feedback",
-      previous,
-      yield* nowIso,
-    );
+    yield* campaigns.pauseRun(message.campaignId, message.runToken, "feedback", previous);
 
     return;
   }
@@ -302,7 +284,7 @@ const submitClaimed = Effect.fn("Dispatching.submitClaimed")(function* (input: {
           { state: "rejected", rejectionCode: "rate-limited" },
           finishedAt,
         );
-        yield* campaigns.pauseRun(campaignId, runToken, "rate-limited", contactId, finishedAt);
+        yield* campaigns.pauseRun(campaignId, runToken, "rate-limited", contactId);
 
         return { kind: "stop" } satisfies ClaimedSubmit;
       }
@@ -320,7 +302,7 @@ const submitClaimed = Effect.fn("Dispatching.submitClaimed")(function* (input: {
     );
 
     if (sent.rejectionCode === "sending-paused") {
-      yield* campaigns.pauseRun(campaignId, runToken, "sending-paused", contactId, finishedAt);
+      yield* campaigns.pauseRun(campaignId, runToken, "sending-paused", contactId);
 
       return { kind: "stop" } satisfies ClaimedSubmit;
     }

@@ -904,3 +904,32 @@ describe("public error statuses", () => {
     expect(error.ast.annotations?.httpApiStatus).toBe(status);
   });
 });
+
+describe("UpdateCampaignPayload", () => {
+  const decode = Schema.decodeUnknownEffect(Schemas.UpdateCampaignPayload);
+
+  it("keeps an absent field absent and an explicit null as null", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        expect(yield* decode({})).toStrictEqual({});
+        expect(yield* decode({ html: null, filter: null })).toStrictEqual({
+          html: null,
+          filter: null,
+        });
+        expect(yield* decode({ subject: "New", filter: { plan: "pro" } })).toStrictEqual({
+          subject: "New",
+          filter: { plan: "pro" },
+        });
+      }),
+    ));
+
+  it.each([{ text: null }, { subject: null }, { listId: null }, { html: "" }, { text: "" }])(
+    "refuses %j",
+    (payload) =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          expect(Result.isFailure(yield* Effect.result(decode(payload)))).toBe(true);
+        }),
+      ),
+  );
+});

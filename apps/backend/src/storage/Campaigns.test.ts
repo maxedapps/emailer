@@ -651,6 +651,118 @@ describe("createCampaign", () => {
     ));
 });
 
+describe("updateDraft", () => {
+  const draft: Schemas.Campaign = {
+    id: campaignId,
+    listId,
+    subject: "Release",
+    text: "Body",
+    createdAt,
+    submission: { state: "draft" },
+  };
+
+  const metaKey = { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } };
+
+  it("rewrites the editable META fields and BODY in one draft-only transaction", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const { table, storage } = withStorage({});
+
+        expect(
+          yield* storage.updateDraft({ ...draft, html: "<p>Body</p>", filter: { plan: "pro" } }),
+        ).toBe("updated");
+        expect(table.transactionRequests).toHaveLength(1);
+        expect(table.transactionRequests[0]?.TransactItems).toStrictEqual([
+          {
+            Update: {
+              Table: tableLogicalId,
+              Key: metaKey,
+              ConditionExpression: "#state = :draft",
+              ExpressionAttributeNames: { "#state": "state", "#filter": "filter" },
+              UpdateExpression: "SET subject = :subject, listId = :listId, #filter = :filter",
+              ExpressionAttributeValues: {
+                ":subject": { S: "Release" },
+                ":listId": { S: listId },
+                ":draft": { S: "draft" },
+                ":filter": { M: { plan: { S: "pro" } } },
+              },
+            },
+          },
+          { Put: { Table: tableLogicalId, Item: body("<p>Body</p>") } },
+        ]);
+        expectAliasedReservedNames(table);
+      }),
+    ));
+
+  it("removes the filter and writes a BODY without html when the draft has neither", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const { table, storage } = withStorage({});
+
+        yield* storage.updateDraft(draft);
+
+        const [update, put] = table.transactionRequests[0]?.TransactItems ?? [];
+
+        expect(update?.Update?.UpdateExpression).toBe(
+          "SET subject = :subject, listId = :listId REMOVE #filter",
+        );
+        expect(update?.Update?.ExpressionAttributeValues).not.toHaveProperty(":filter");
+        expect(put?.Put?.Item).toStrictEqual(body());
+        expectAliasedReservedNames(table);
+      }),
+    ));
+
+  it("reports conflict when the campaign is no longer a draft", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const { storage } = withStorage({
+          transactWriteItems: [cancelled("ConditionalCheckFailed", "None")],
+        });
+
+        expect(yield* storage.updateDraft(draft)).toBe("conflict");
+      }),
+    ));
+});
+
+describe("deleteDraft", () => {
+  it("deletes META, only while a draft, together with BODY", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const { table, storage } = withStorage({});
+
+        expect(yield* storage.deleteDraft(campaignId)).toBe("deleted");
+        expect(table.transactionRequests[0]?.TransactItems).toStrictEqual([
+          {
+            Delete: {
+              Table: tableLogicalId,
+              Key: { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } },
+              ConditionExpression: "#state = :draft",
+              ExpressionAttributeNames: { "#state": "state" },
+              ExpressionAttributeValues: { ":draft": { S: "draft" } },
+            },
+          },
+          {
+            Delete: {
+              Table: tableLogicalId,
+              Key: { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "BODY" } },
+            },
+          },
+        ]);
+      }),
+    ));
+
+  it("reports conflict when the campaign is no longer a draft", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const { storage } = withStorage({
+          transactWriteItems: [cancelled("ConditionalCheckFailed", "None")],
+        });
+
+        expect(yield* storage.deleteDraft(campaignId)).toBe("conflict");
+      }),
+    ));
+});
+
 describe("listCampaigns", () => {
   const listingItem = (id: string, at: string, fields: StoredCampaignFields) => ({
     ...meta(fields),
@@ -1647,7 +1759,7 @@ describe("pauseRun", () => {
       Effect.gen(function* () {
         const { table, storage } = withStorage({});
 
-        expect(yield* storage.pauseRun(campaignId, runToken, "daily-quota", contactId, now)).toBe(
+        expect(yield* storage.pauseRun(campaignId, runToken, "daily-quota", contactId)).toBe(
           "paused",
         );
         expect(table.updateItemRequests[0]).toStrictEqual({
@@ -1672,9 +1784,9 @@ describe("pauseRun", () => {
       Effect.gen(function* () {
         const { table, storage } = withStorage({});
 
-        expect(
-          yield* storage.pauseRun(campaignId, runToken, "sending-paused", undefined, now),
-        ).toBe("paused");
+        expect(yield* storage.pauseRun(campaignId, runToken, "sending-paused", undefined)).toBe(
+          "paused",
+        );
         expect(table.updateItemRequests[0]?.UpdateExpression).toBe(
           "SET #state = :paused, pausedReason = :reason REMOVE #cursor",
         );
@@ -1690,7 +1802,7 @@ describe("pauseRun", () => {
       Effect.gen(function* () {
         const { table, storage } = withStorage({ updateItem: [conditionFailed] });
 
-        expect(yield* storage.pauseRun(campaignId, runToken, "rate-limited", contactId, now)).toBe(
+        expect(yield* storage.pauseRun(campaignId, runToken, "rate-limited", contactId)).toBe(
           "stale",
         );
         expectAliasedReservedNames(table);

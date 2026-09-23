@@ -176,6 +176,28 @@ export class CampaignsGroup extends HttpApiGroup.make("campaigns")
       success: Schemas.Campaign,
       error: [HttpApiError.BadRequestNoContent, Schemas.NotFound, Schemas.StorageUnavailable],
     }),
+    HttpApiEndpoint.patch("update", "/:id", {
+      params: { id: Schemas.EntityId },
+      payload: Schemas.UpdateCampaignPayload,
+      success: Schemas.Campaign,
+      error: [
+        HttpApiError.BadRequestNoContent,
+        Schemas.NotFound,
+        Schemas.CampaignStateConflict,
+        Schemas.PayloadTooLarge,
+        Schemas.StorageUnavailable,
+      ],
+    }),
+    HttpApiEndpoint.delete("remove", "/:id", {
+      params: { id: Schemas.EntityId },
+      success: HttpApiSchema.NoContent,
+      error: [
+        HttpApiError.BadRequestNoContent,
+        Schemas.NotFound,
+        Schemas.CampaignStateConflict,
+        Schemas.StorageUnavailable,
+      ],
+    }),
     HttpApiEndpoint.post("send", "/:id/send", {
       params: { id: Schemas.EntityId },
       success: Schemas.Campaign,

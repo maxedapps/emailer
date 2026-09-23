@@ -574,4 +574,126 @@ describe("campaign management from the command line", () => {
       ),
     60_000,
   );
+
+  const storedDraft: Schemas.Campaign = {
+    id: campaignId,
+    listId,
+    subject: "Release notes",
+    text: "Old text",
+    html: "<p>Old</p>",
+    createdAt,
+    submission: { state: "draft" },
+    filter: { plan: "pro" },
+  };
+
+  it(
+    "updates a draft from --text alone, clearing the old html and, with --clear-filter, the filter",
+    () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const service = inMemoryService(token);
+
+          service.campaigns.set(campaignId, storedDraft);
+
+          const result = yield* withService(service, (baseUrl) =>
+            withTempFile("txt", textBody, (text) =>
+              runCli(baseUrl, token, [
+                "campaigns",
+                "update",
+                campaignId,
+                "--text",
+                text,
+                "--clear-filter",
+              ]),
+            ),
+          );
+
+          expect(result.exitCode).toBe(0);
+          expect(service.campaignUpdates).toStrictEqual([
+            { text: textBody, html: null, filter: null },
+          ]);
+          expect(yield* parseJson(result.stdout)).toStrictEqual({
+            id: campaignId,
+            listId,
+            subject: "Release notes",
+            text: textBody,
+            createdAt,
+            submission: { state: "draft" },
+          });
+        }).pipe(Effect.provide(NodeServices.layer)),
+      ),
+    60_000,
+  );
+
+  it(
+    "renders an updated --markdown body under the draft's own subject when --subject is absent",
+    () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const service = inMemoryService(token);
+
+          service.campaigns.set(campaignId, storedDraft);
+
+          const result = yield* withService(service, (baseUrl) =>
+            withTempFile("md", "# Fresh", (file) =>
+              runCli(baseUrl, token, ["campaigns", "update", campaignId, "--markdown", file]),
+            ),
+          );
+
+          expect(result.exitCode).toBe(0);
+
+          const [change] = service.campaignUpdates;
+
+          expect(change).not.toHaveProperty("subject");
+          expect(change).not.toHaveProperty("filter");
+          expect(change?.text).toBe("FRESH");
+          expect(change?.html).toContain("<title>Release notes</title>");
+        }).pipe(Effect.provide(NodeServices.layer)),
+      ),
+    60_000,
+  );
+
+  it(
+    "deletes a draft and reports it",
+    () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const service = inMemoryService(token);
+
+          service.campaigns.set(campaignId, storedDraft);
+
+          const result = yield* withService(service, (baseUrl) =>
+            runCli(baseUrl, token, ["campaigns", "delete", campaignId]),
+          );
+
+          expect(result.exitCode).toBe(0);
+          expect(yield* parseJson(result.stdout)).toStrictEqual({ id: campaignId, deleted: true });
+          expect(service.campaigns.has(campaignId)).toBe(false);
+        }).pipe(Effect.provide(NodeServices.layer)),
+      ),
+    60_000,
+  );
+
+  it(
+    "reports the state conflict when deleting a campaign that is no longer a draft",
+    () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const service = inMemoryService(token);
+
+          service.campaigns.set(campaignId, { ...storedDraft, submission: pausedSubmission });
+
+          const result = yield* withService(service, (baseUrl) =>
+            runCli(baseUrl, token, ["campaigns", "delete", campaignId]),
+          );
+
+          expect(result.exitCode).not.toBe(0);
+          expect(result.stdout).toBe("");
+          expect(result.stderr).toContain("CampaignStateConflict");
+          expect(result.stderr).toContain("paused");
+          expect(service.campaigns.has(campaignId)).toBe(true);
+        }).pipe(Effect.provide(NodeServices.layer)),
+      ),
+    60_000,
+  );
 });

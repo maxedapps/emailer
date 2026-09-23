@@ -31,6 +31,7 @@ interface Service {
   readonly authorizations: Array<string>;
   readonly updates: Array<Schemas.ContactAttributes>;
   readonly campaigns: Map<string, Schemas.Campaign>;
+  readonly campaignUpdates: Array<Schemas.UpdateCampaignPayload>;
   readonly startedAt: Map<string, string>;
 }
 
@@ -58,6 +59,7 @@ export const inMemoryService = (
   const lists = new Map<string, Schemas.ContactList>();
   const members = new Map<string, Array<string>>();
   const campaigns = new Map<string, Schemas.Campaign>();
+  const campaignUpdates: Array<Schemas.UpdateCampaignPayload> = [];
   const startedAt = new Map<string, string>();
 
   const authorization = Layer.succeed(Authorization)(
@@ -281,6 +283,55 @@ export const inMemoryService = (
             ? Effect.fail(new Schemas.NotFound({ entity: "campaign" }))
             : Effect.succeed(found);
         }),
+      update: (request) =>
+        Effect.gen(function* () {
+          const found = campaigns.get(request.params.id);
+
+          if (found === undefined) {
+            return yield* new Schemas.NotFound({ entity: "campaign" });
+          }
+
+          if (found.submission.state !== "draft") {
+            return yield* new Schemas.CampaignStateConflict({ state: found.submission.state });
+          }
+
+          campaignUpdates.push(request.payload);
+
+          const { html, filter, ...rest } = found;
+          const change = request.payload;
+
+          const campaign = {
+            ...rest,
+            listId: change.listId ?? found.listId,
+            subject: change.subject ?? found.subject,
+            text: change.text ?? found.text,
+          };
+
+          const nextHtml = change.html === undefined ? html : (change.html ?? undefined);
+          const nextFilter = change.filter === undefined ? filter : (change.filter ?? undefined);
+          const withHtml = nextHtml === undefined ? campaign : { ...campaign, html: nextHtml };
+
+          const updated: Schemas.Campaign =
+            nextFilter === undefined ? withHtml : { ...withHtml, filter: nextFilter };
+
+          campaigns.set(updated.id, updated);
+
+          return updated;
+        }),
+      remove: (request) =>
+        Effect.gen(function* () {
+          const found = campaigns.get(request.params.id);
+
+          if (found === undefined) {
+            return yield* new Schemas.NotFound({ entity: "campaign" });
+          }
+
+          if (found.submission.state !== "draft") {
+            return yield* new Schemas.CampaignStateConflict({ state: found.submission.state });
+          }
+
+          campaigns.delete(found.id);
+        }),
       send: (request) =>
         Effect.gen(function* () {
           const found = campaigns.get(request.params.id);
@@ -430,7 +481,7 @@ export const inMemoryService = (
     Layer.provide(HttpServer.layerServices),
   );
 
-  return { routes, authorizations, updates, campaigns, startedAt };
+  return { routes, authorizations, updates, campaigns, campaignUpdates, startedAt };
 };
 
 interface CliResult {

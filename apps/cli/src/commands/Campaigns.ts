@@ -67,13 +67,18 @@ const chooseContent = (
 
 const decodeBody = Schema.decodeUnknownEffect(Schemas.CampaignBody);
 
-/** The body to send. Markdown renders here, and its output meets the same limits as a file's. */
-const bodyOf = (content: Content, subject: string) =>
+/**
+ * The body to send. Markdown renders here, titled by the subject, and its output meets the same
+ * limits as a file's. The subject is only read when a Markdown body needs it.
+ */
+const bodyOf = <E>(content: Content, subject: Effect.Effect<string, E>) =>
   content.kind === "body"
     ? Effect.succeed(content.body)
-    : decodeBody(renderMarkdown(content.markdown, subject)).pipe(
-        Effect.mapError(() =>
-          refuse("The rendered Markdown exceeds the service's body size limits"),
+    : Effect.flatMap(subject, (title) =>
+        decodeBody(renderMarkdown(content.markdown, title)).pipe(
+          Effect.mapError(() =>
+            refuse("The rendered Markdown exceeds the service's body size limits"),
+          ),
         ),
       );
 
@@ -107,7 +112,7 @@ const campaignsCreate = Command.make(
     const payload = {
       listId: input.list,
       subject: input.subject,
-      ...(yield* bodyOf(content.value, input.subject)),
+      ...(yield* bodyOf(content.value, Effect.succeed(input.subject))),
     };
 
     yield* report(
@@ -140,6 +145,103 @@ const campaignsCreate = Command.make(
     },
   ]),
 );
+
+interface CampaignChange {
+  listId?: string;
+  subject?: string;
+  text?: string;
+  html?: string | null;
+  filter?: Schemas.ContactAttributes | null;
+}
+
+const campaignsUpdate = Command.make(
+  "update",
+  {
+    id: idArgument("id"),
+    list: Flag.string("list").pipe(
+      Flag.withDescription("Move the draft to another list"),
+      Flag.withSchema(Schemas.EntityId),
+      Flag.optional,
+    ),
+    subject: Flag.string("subject").pipe(
+      Flag.withDescription("A new subject"),
+      Flag.withSchema(Schemas.CampaignSubject),
+      Flag.optional,
+    ),
+    ...contentFlags,
+    filter: Flag.keyValuePair("filter").pipe(
+      Flag.withDescription("Replace the filter, as repeated key=value pairs"),
+      Flag.withSchema(Schemas.ContactAttributes),
+      Flag.optional,
+    ),
+    clearFilter: Flag.boolean("clear-filter").pipe(
+      Flag.withDescription("Remove the filter, so the draft goes to the whole list"),
+      Flag.withDefault(false),
+    ),
+  },
+  Effect.fn(function* (input) {
+    const content = yield* chooseContent(input);
+
+    yield* report(
+      yield* withClient((client) =>
+        Effect.gen(function* () {
+          const change: CampaignChange = {};
+
+          if (Option.isSome(input.list)) {
+            change.listId = input.list.value;
+          }
+
+          if (Option.isSome(input.subject)) {
+            change.subject = input.subject.value;
+          }
+
+          // Content flags replace the whole body, so a text file alone drops an earlier HTML body.
+          if (Option.isSome(content)) {
+            const subject = Option.isSome(input.subject)
+              ? Effect.succeed(input.subject.value)
+              : Effect.map(client.campaigns.get({ params: { id: input.id } }), (c) => c.subject);
+
+            const body = yield* bodyOf(content.value, subject);
+
+            change.text = body.text;
+            change.html = body.html ?? null;
+          }
+
+          if (input.clearFilter) {
+            change.filter = null;
+          } else if (Option.isSome(input.filter)) {
+            change.filter = input.filter.value;
+          }
+
+          return yield* client.campaigns.update({ params: { id: input.id }, payload: change });
+        }),
+      ),
+    );
+  }),
+).pipe(
+  Command.withDescription("Change a draft campaign; an omitted field is left alone"),
+  Command.withExamples([
+    {
+      command:
+        "emailer campaigns update 0195f0a0-1111-4222-8333-4444444ca409 --markdown newsletter.md",
+      description: "Replace the draft's text and HTML bodies with a fresh rendering",
+    },
+    {
+      command: "emailer campaigns update 0195f0a0-1111-4222-8333-4444444ca409 --clear-filter",
+      description: "Send the draft to the whole list again",
+    },
+  ]),
+);
+
+const campaignsDelete = Command.make(
+  "delete",
+  { id: idArgument("id") },
+  Effect.fn(function* (input) {
+    yield* withClient((client) => client.campaigns.remove({ params: { id: input.id } }));
+
+    yield* report({ id: input.id, deleted: true });
+  }),
+).pipe(Command.withDescription("Delete a draft campaign"));
 
 const campaignsGet = Command.make(
   "get",
@@ -279,6 +381,8 @@ export const campaigns = Command.make("campaigns").pipe(
   Command.withDescription("Work with campaigns"),
   Command.withSubcommands([
     campaignsCreate,
+    campaignsUpdate,
+    campaignsDelete,
     campaignsGet,
     campaignsSend,
     campaignsResume,

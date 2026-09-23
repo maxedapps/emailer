@@ -80,6 +80,78 @@ const readControl = Effect.fn("Campaigns.readControl")(function* (campaignId: st
   return control.value;
 });
 
+/** A draft write whose condition failed: the campaign left draft, or was deleted, meanwhile. */
+const draftConflict = Effect.fn("Campaigns.draftConflict")(function* (campaignId: string) {
+  const control = yield* readControl(campaignId);
+
+  return yield* new Schemas.CampaignStateConflict({ state: control.state });
+});
+
+/** Absent fields keep their value; null removes the HTML body or the filter. */
+const edited = (
+  current: Schemas.Campaign,
+  change: Schemas.UpdateCampaignPayload,
+): Schemas.Campaign => {
+  const { html, filter, ...rest } = current;
+
+  const campaign = {
+    ...rest,
+    listId: change.listId ?? current.listId,
+    subject: change.subject ?? current.subject,
+    text: change.text ?? current.text,
+  };
+
+  const nextHtml = change.html === undefined ? html : (change.html ?? undefined);
+  const nextFilter = change.filter === undefined ? filter : (change.filter ?? undefined);
+  const withHtml = nextHtml === undefined ? campaign : { ...campaign, html: nextHtml };
+
+  return nextFilter === undefined ? withHtml : { ...withHtml, filter: nextFilter };
+};
+
+/** Edits a draft. The whole merged campaign is written, and only while it is still a draft. */
+export const update = Effect.fn("Campaigns.update")(function* (
+  campaignId: string,
+  change: Schemas.UpdateCampaignPayload,
+) {
+  const audience = yield* AudienceStore;
+  const campaigns = yield* CampaignStore;
+  const current = yield* get(campaignId);
+
+  if (current.submission.state !== "draft") {
+    return yield* new Schemas.CampaignStateConflict({ state: current.submission.state });
+  }
+
+  if (change.listId !== undefined && Option.isNone(yield* audience.getList(change.listId))) {
+    return yield* new Schemas.NotFound({ entity: "list" });
+  }
+
+  const next = edited(current, change);
+
+  if ((yield* campaigns.updateDraft(next)) === "conflict") {
+    return yield* draftConflict(campaignId);
+  }
+
+  return next;
+});
+
+/**
+ * Deletes a draft and its body together. A schedule left behind by an earlier cancel is not
+ * chased: if it fires, its wake finds no campaign, is discarded as stale, and the schedule deletes
+ * itself.
+ */
+export const remove = Effect.fn("Campaigns.remove")(function* (campaignId: string) {
+  const campaigns = yield* CampaignStore;
+  const control = yield* readControl(campaignId);
+
+  if (control.state !== "draft") {
+    return yield* new Schemas.CampaignStateConflict({ state: control.state });
+  }
+
+  if ((yield* campaigns.deleteDraft(campaignId)) === "conflict") {
+    return yield* draftConflict(campaignId);
+  }
+});
+
 const requireRunToken = (control: CampaignControl) => {
   if (control.runToken === undefined) {
     return corrupt("getCampaignControl")(`${control.state} campaign has no run token`);

@@ -164,6 +164,8 @@ const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> 
       getCampaignBody: () =>
         Effect.succeed(world.html === undefined ? { text } : { text, html: world.html }),
       getCampaign: () => notExercised("getCampaign"),
+      updateDraft: () => notExercised("updateDraft"),
+      deleteDraft: () => notExercised("deleteDraft"),
       listCampaigns: () => notExercised("listCampaigns"),
       getCampaignControl: () => notExercised("getCampaignControl"),
       enqueueCampaign: () => notExercised("enqueueCampaign"),

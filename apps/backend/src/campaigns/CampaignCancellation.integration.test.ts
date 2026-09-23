@@ -240,15 +240,9 @@ describe("queued campaign cancellation", () => {
           expect(
             yield* storage.checkpoint(campaign.id, seedToken, sliceId, undefined, historic.id),
           ).toBe("updated");
-          expect(
-            yield* storage.pauseRun(
-              campaign.id,
-              seedToken,
-              "daily-quota",
-              historic.id,
-              yield* nowIso,
-            ),
-          ).toBe("paused");
+          expect(yield* storage.pauseRun(campaign.id, seedToken, "daily-quota", historic.id)).toBe(
+            "paused",
+          );
 
           const seededMeta = yield* campaignMeta(campaign.id);
           const seededRows = yield* sendRows(campaign.id);
@@ -513,15 +507,9 @@ describe("queued campaign cancellation", () => {
             claimedAt,
           ),
         ).toBe("settled");
-        expect(
-          yield* ordinary.pauseRun(
-            campaign.id,
-            seedToken,
-            "daily-quota",
-            historic.id,
-            yield* nowIso,
-          ),
-        ).toBe("paused");
+        expect(yield* ordinary.pauseRun(campaign.id, seedToken, "daily-quota", historic.id)).toBe(
+          "paused",
+        );
 
         const resumeToken = yield* newIdentifier;
 

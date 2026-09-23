@@ -312,6 +312,28 @@ const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> 
       checkpoint: () => notExercised("checkpoint"),
       completeRun: () => notExercised("completeRun"),
       pauseRun: () => notExercised("pauseRun"),
+      updateDraft: (campaign) =>
+        afterWrite(world, () => {
+          if (world.campaigns.get(campaign.id)?.submission.state !== "draft") {
+            return "conflict" as const;
+          }
+
+          world.order.push("updateDraft");
+          world.campaigns.set(campaign.id, campaign);
+
+          return "updated" as const;
+        }),
+      deleteDraft: (id) =>
+        afterWrite(world, () => {
+          if (world.campaigns.get(id)?.submission.state !== "draft") {
+            return "conflict" as const;
+          }
+
+          world.order.push("deleteDraft");
+          world.campaigns.delete(id);
+
+          return "deleted" as const;
+        }),
     }),
   );
 
@@ -702,6 +724,167 @@ describe("send", () => {
         expect(fix.wake.messages).toHaveLength(0);
         expect(fix.schedules.removed).toHaveLength(0);
         expect(fix.world.order).toHaveLength(0);
+      }),
+    ));
+});
+
+describe("update", () => {
+  const filtered: Schemas.Campaign = {
+    ...draftCampaign,
+    html: "<p>Hello there</p>",
+    filter: { plan: "pro" },
+  };
+
+  it("merges the change: absent fields stay, null removes the html and the filter", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const fix = fixture({ campaign: filtered });
+
+        const attempt = yield* runWith(
+          fix,
+          Campaigns.update(campaignId, { subject: "New subject", html: null, filter: null }),
+        );
+
+        const expected: Schemas.Campaign = { ...draftCampaign, subject: "New subject" };
+
+        expect(Result.isSuccess(attempt) && attempt.success).toStrictEqual(expected);
+        expect(storedCampaign(fix)).toStrictEqual(expected);
+      }),
+    ));
+
+  it("replaces the body and the filter it is given, keeping the rest", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const fix = fixture({ campaign: filtered });
+
+        yield* runWith(
+          fix,
+          Campaigns.update(campaignId, { text: "New text", html: "<p>New</p>", filter: {} }),
+        );
+
+        expect(storedCampaign(fix)).toStrictEqual({
+          ...filtered,
+          text: "New text",
+          html: "<p>New</p>",
+          filter: {},
+        });
+      }),
+    ));
+
+  it("moves the draft to another list only when that list exists", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const fix = fixture();
+        const otherList = "0195f0a0-1111-4222-8333-44444444109f";
+
+        const missing = yield* runWith(fix, Campaigns.update(campaignId, { listId: otherList }));
+
+        expect(failureOf(missing)).toStrictEqual(new Schemas.NotFound({ entity: "list" }));
+        expect(fix.world.order).toHaveLength(0);
+
+        fix.world.lists.set(otherList, {
+          list: { id: otherList, name: "Others", createdAt: "2026-09-11T09:00:00.000Z" },
+          membershipVersion: 1,
+        });
+
+        yield* runWith(fix, Campaigns.update(campaignId, { listId: otherList }));
+
+        expect(storedCampaign(fix).listId).toBe(otherList);
+      }),
+    ));
+
+  it("answers NotFound for a campaign that does not exist", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const fix = fixture();
+
+        fix.world.campaigns.clear();
+
+        const attempt = yield* runWith(fix, Campaigns.update(campaignId, { subject: "x" }));
+
+        expect(failureOf(attempt)).toStrictEqual(new Schemas.NotFound({ entity: "campaign" }));
+      }),
+    ));
+
+  it.each([scheduledCampaign, queuedCampaign, sendingCampaign, pausedCampaign, completedCampaign])(
+    "refuses to edit a $submission.state campaign",
+    (campaign) =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const fix = fixture({ campaign });
+
+          const attempt = yield* runWith(fix, Campaigns.update(campaignId, { subject: "x" }));
+
+          expect(failureOf(attempt)).toStrictEqual(
+            new Schemas.CampaignStateConflict({ state: campaign.submission.state }),
+          );
+          expect(storedCampaign(fix)).toStrictEqual(campaign);
+        }),
+      ),
+  );
+
+  it("reports the state a concurrent send left when the write loses", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const fix = fixture();
+
+        fix.world.beforeWrite = Effect.sync(() => {
+          fix.world.campaigns.set(campaignId, queuedCampaign);
+        });
+
+        const attempt = yield* runWith(fix, Campaigns.update(campaignId, { subject: "x" }));
+
+        expect(failureOf(attempt)).toStrictEqual(
+          new Schemas.CampaignStateConflict({ state: "queued" }),
+        );
+        expect(storedCampaign(fix)).toStrictEqual(queuedCampaign);
+      }),
+    ));
+});
+
+describe("remove", () => {
+  it("deletes a draft", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const fix = fixture();
+
+        const attempt = yield* runWith(fix, Campaigns.remove(campaignId));
+
+        expect(Result.isSuccess(attempt)).toBe(true);
+        expect(fix.world.campaigns.has(campaignId)).toBe(false);
+        expect(fix.schedules.removed).toHaveLength(0);
+      }),
+    ));
+
+  it.each([scheduledCampaign, queuedCampaign, sendingCampaign, pausedCampaign, completedCampaign])(
+    "refuses to delete a $submission.state campaign",
+    (campaign) =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const fix = fixture({ campaign, runToken: existingRunToken });
+
+          const attempt = yield* runWith(fix, Campaigns.remove(campaignId));
+
+          expect(failureOf(attempt)).toStrictEqual(
+            new Schemas.CampaignStateConflict({ state: campaign.submission.state }),
+          );
+          expect(storedCampaign(fix)).toStrictEqual(campaign);
+        }),
+      ),
+  );
+
+  it("answers NotFound when a concurrent delete removed the draft first", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const fix = fixture();
+
+        fix.world.beforeWrite = Effect.sync(() => {
+          fix.world.campaigns.delete(campaignId);
+        });
+
+        const attempt = yield* runWith(fix, Campaigns.remove(campaignId));
+
+        expect(failureOf(attempt)).toStrictEqual(new Schemas.NotFound({ entity: "campaign" }));
       }),
     ));
 });
