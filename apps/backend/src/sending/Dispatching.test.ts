@@ -1,10 +1,22 @@
 import { NodeCrypto } from "@effect/platform-node";
 import * as Schemas from "@emailer/api/Schemas";
-import { Clock, Duration, Effect, Fiber, Layer, Logger, Option, Result } from "effect";
+import {
+  Clock,
+  ConfigProvider,
+  Duration,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Logger,
+  Option,
+  Result,
+} from "effect";
 import { TestClock } from "effect/testing";
 import { RateLimiter } from "effect/unstable/persistence";
 import { describe, expect, it } from "vitest";
 
+import { unsubscribeLink } from "../consent/Unsubscribe.ts";
 import { memberPageSize, runSlice, SliceOverrun } from "./Dispatching.ts";
 import { CampaignWake } from "./Dispatch.ts";
 import { Mailer, SubmissionUncertain } from "./Mailer.ts";
@@ -61,6 +73,14 @@ const defaultGuard: SendAllowance = {
 const zeros = { accepted: 0, bounced: 0, complained: 0 };
 
 const sliceTimeout = Duration.minutes(5);
+
+const unsubscribeEnv = {
+  EMAILER_UNSUBSCRIBE_URL: "https://unsubscribe.example.com/",
+  EMAILER_UNSUBSCRIBE_SECRET: "8f14e45fceea167a5a36dedd4bea2543a1b2c3d4e5f60718293a4b5c6d7e8f90",
+};
+
+const configurationOf = (env: Readonly<Record<string, string>>) =>
+  Layer.succeed(ConfigProvider.ConfigProvider)(ConfigProvider.fromEnvRecord(env));
 
 interface RecipientRow {
   readonly sendId?: string;
@@ -330,6 +350,7 @@ const limiterDouble = (delays: ReadonlyArray<Duration.Duration> = []): LimiterDo
 
 interface SentMessage extends MessageContent {
   readonly recipient: string;
+  readonly unsubscribeUrl: string;
   readonly purpose: SendPurpose;
 }
 
@@ -345,9 +366,9 @@ const mailerDouble = (
   const remaining = [...outcomes];
 
   const layer = Layer.succeed(Mailer)({
-    send: (recipient, content, purpose) =>
+    send: (recipient, content, unsubscribeUrl, purpose) =>
       Effect.gen(function* () {
-        sent.push({ recipient, ...content, purpose });
+        sent.push({ recipient, ...content, unsubscribeUrl, purpose });
 
         const next = remaining.shift();
 
@@ -381,6 +402,7 @@ const wakeDouble = (): WakeDouble => {
 };
 
 interface Scenario {
+  readonly env?: Readonly<Record<string, string>>;
   readonly members?: ReadonlyArray<Schemas.Contact>;
   readonly nextCursor?: string;
   readonly cursor?: string;
@@ -452,6 +474,7 @@ const fixture = (scenario: Scenario = {}): Fixture => {
       limiter.layer,
       Layer.succeed(SendGuard)({ current: Effect.succeed(guard) }),
       NodeCrypto.layer,
+      configurationOf(scenario.env ?? unsubscribeEnv),
     ),
   };
 };
@@ -545,6 +568,11 @@ describe("runSlice", () => {
             { kind: "campaign", campaignId, sendId: fix.world.rows.get(memberA.id)?.sendId },
           ]);
           expect(fix.mailer.sent[0]?.subject).toBe(subject);
+          expect(fix.mailer.sent[0]?.unsubscribeUrl).toBe(
+            yield* unsubscribeLink(memberA.email).pipe(
+              Effect.provide(configurationOf(unsubscribeEnv)),
+            ),
+          );
         }),
       ),
     ));
@@ -777,6 +805,28 @@ describe("runSlice", () => {
           expect(fix.mailer.sent).toHaveLength(0);
           expect(fix.world.checkpoints).toHaveLength(0);
           expect(fix.wake.messages).toHaveLength(0);
+        }),
+      ),
+    ));
+
+  it("claims no recipient when the unsubscribe link cannot be minted", () =>
+    Effect.runPromise(
+      onTestClock(
+        Effect.gen(function* () {
+          const fix = fixture({
+            env: { EMAILER_UNSUBSCRIBE_SECRET: unsubscribeEnv.EMAILER_UNSUBSCRIBE_SECRET },
+          });
+
+          const now = yield* Clock.currentTimeMillis;
+
+          const exit = yield* Effect.exit(
+            runSlice({ campaignId, runToken }, now + Duration.toMillis(sliceTimeout)),
+          ).pipe(Effect.provide(fix.layer));
+
+          expect(Exit.hasDies(exit)).toBe(true);
+          expect(fix.world.claims).toHaveLength(0);
+          expect(fix.world.rows.size).toBe(0);
+          expect(fix.mailer.sent).toHaveLength(0);
         }),
       ),
     ));

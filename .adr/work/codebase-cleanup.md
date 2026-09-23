@@ -1,6 +1,6 @@
 # Codebase cleanup and dependency upgrade
 
-> **Status:** Partial. Every task is verified and merged with main's drafting slice (see [Sync with main](#sync-with-main)). Two deviations await the user's approval: T3.2's API-level annotation, which waits for the Effect RC that ships effect#8423 (ADR-0022), and T3.3, descoped in the sync.
+> **Status:** Partial. Every task is verified and merged with main's drafting slice (see [Sync with main](#sync-with-main)), except T3.2's API-level annotation, which waits for the Effect RC that ships effect#8423 (ADR-0022). On 2026-09-23 rc.117 was still the newest RC.
 > **Updated:** 2026-09-23
 > **ADRs:** [0021](../0021-whole-project-unused-code-check.md) (T1), [0005](../0005-contact-identity-and-membership-access-paths.md) (amended by T4), [0004](../0004-sender-owned-one-click-unsubscribe.md) (who mints the links, T2 and the sync), [0008](../0008-storage-capabilities-and-error-boundaries.md), [0011](../0011-open-recipient-set-and-paced-dispatch.md). [0022](../0022-api-contract-rejects-undeclared-fields.md) (T3), [0023](../0023-lists-carry-no-membership-version.md) (T4). ADR numbers 0019–0020 belong to the drafting slice merged from main.
 
@@ -124,7 +124,7 @@
 
 ### T3 — Correctness and error handling
 
-- **Status:** Verified, except T3.2's API-level annotation, which is blocked upstream (below), and T3.3, descoped in the [sync with main](#sync-with-main) pending approval
+- **Status:** Verified, except T3.2's API-level annotation, which is blocked upstream (below). T3.3 was restored after the [sync with main](#sync-with-main).
 - **Items:**
   - T3.1: log the reason and cause of every `uncertain` submission, without the recipient.
   - T3.2: reject unknown request fields. `HttpApi.ParseOptions` goes on `EmailerApi`, and `lists import --file` decodes strictly. Adds a new ADR.
@@ -213,7 +213,10 @@ On 2026-09-23 the drafting slice (ADR-0019, ADR-0020) landed on `origin/main` fr
   - **T2.2:** reverted. Test sends go out from the API, so the API again carries the unsubscribe URL and secret, plus the preview pair. ADR-0004's minting line now names the mailer.
   - **T2.4:** main's `CampaignWakeLive` layer replaces `campaignWake(sendMessage)`.
   - **Poller probe:** both branches fixed the stale-wake hold. Main's canary stays: a 25-second window that also requires no in-flight receive. This plan's 20-second probe is dropped.
-- **Descoped, pending approval — T3.3:** main mints the link inside `Mailer.send`, after the claim. The link settings are env the function's props pin. Alchemy captures a constructor `Config` read on the deploy machine at plan time, so the Mailer cannot read them once at construction ([wiki](../../wiki/alchemy/runtime-and-bindings.md)). Keeping the old order would mean changing the Mailer's contract or reading the config twice. The read can only fail on a deploy missing its own env; every send then fails identically and the live suite catches it at the first send. The ordering test is removed, and `makeSend`'s comment now gives the real reason for the per-send read.
+- **Restored — T3.3:** main minted the link inside `Mailer.send`, after the claim. The sync first dropped T3.3, but the user asked for the plan in full, so it came back in main's layout.
+  - **Why the Mailer can't mint once:** the link settings are env pinned from the functions' props. Alchemy captures a constructor `Config` read on the deploy machine at plan time, so the Mailer cannot read them when it is built ([wiki](../../wiki/alchemy/runtime-and-bindings.md)).
+  - **The design:** each sender mints with `unsubscribeLink` before it changes any state. The dispatcher mints after the budget check and before the claim; `sendTest` mints before taking a pacing slot. `Mailer.send` takes the link and only composes and submits. That mirrors the preview, which passes its placeholder to the same composer. ADR-0020 and ADR-0004 are amended.
+  - **Tests:** "claims no recipient when the unsubscribe link cannot be minted" is back in `sending/Dispatching.test.ts`. With the mint moved below the claim it failed with one claim recorded, and it passes on the restored order. The dispatcher and test-send doubles now record the link, and a test checks it is the recipient's own.
 - **Found by the new checks in main's code:** seven exports used only in their own module (knip), and three stale lint suppressions.
 - **Merge drop check:** the merged tree was compared with `origin/main` and with `public`, line by line. One line of main's was silently lost: the `addressStatus` override in `Api.test.ts`'s fake, next to a removed `membershipVersion` line. It is restored.
 - **Merge review** (fresh reviewer, `origin/main..1a2e548`): no high or medium findings, and the line-by-line drop check was confirmed independently. Both low findings were fixed:
@@ -230,7 +233,7 @@ On 2026-09-23 the drafting slice (ADR-0019, ADR-0020) landed on `origin/main` fr
 
 ## Handoff
 
-- **Next action:** the user reviews the PR and decides on the T3.2 and T3.3 deviations. Follow-ups:
+- **Next action:** the user reviews the PR and decides on the T3.2 deviation. Follow-ups:
   - prod runs the old code until it is redeployed with `--force` (then check `CodeSha256`);
   - add the `EmailerApi` `HttpApi.ParseOptions` annotation on the Effect RC containing effect#8423;
   - upgrade oxlint when `@effect/tsgo` supports a version newer than 1.82.

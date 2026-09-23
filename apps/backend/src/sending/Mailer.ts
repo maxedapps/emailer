@@ -4,7 +4,6 @@ import * as Schemas from "@emailer/api/Schemas";
 import * as AWS from "alchemy/AWS";
 import { Context, Data, Duration, Effect, Layer } from "effect";
 
-import { unsubscribeLink } from "../consent/Unsubscribe.ts";
 import { describeCause } from "../Diagnostics.ts";
 import { sendingIdentity } from "../identity/SendingIdentity.ts";
 import { compose, senderSettings } from "./Message.ts";
@@ -57,6 +56,7 @@ export class Mailer extends Context.Service<
     readonly send: (
       recipient: string,
       content: MessageContent,
+      unsubscribeUrl: string,
       purpose: SendPurpose,
     ) => Effect.Effect<SubmissionOutcome, SubmissionUncertain>;
   }
@@ -91,12 +91,10 @@ export const makeSend =
   (
     recipient: string,
     content: MessageContent,
+    unsubscribeUrl: string,
     purpose: SendPurpose,
   ): Effect.Effect<SubmissionOutcome, SubmissionUncertain> =>
     Effect.gen(function* () {
-      // Read per message, not at construction: the URL and key are env pinned from the function's
-      // props, which a constructor read would look for on the deploy machine at plan time.
-      const unsubscribeUrl = yield* unsubscribeLink(recipient).pipe(Effect.orDie);
       const message = compose(content, unsubscribeUrl, postal);
       const text = { Text: { Data: message.text, Charset: "UTF-8" } };
 

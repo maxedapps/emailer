@@ -1,6 +1,7 @@
 import * as Schemas from "@emailer/api/Schemas";
 import { Effect, Option, Result } from "effect";
 
+import { unsubscribeLink } from "../consent/Unsubscribe.ts";
 import { Mailer } from "../sending/Mailer.ts";
 import { consumeSlot, SendGuard } from "../sending/SendGuard.ts";
 import { AudienceStore } from "../storage/Audience.ts";
@@ -84,12 +85,16 @@ export const sendTest = Effect.fn("TestSends.sendTest")(function* (
       continue;
     }
 
+    const unsubscribeUrl = yield* unsubscribeLink(email).pipe(Effect.orDie);
     const delay = yield* consumeSlot(allowance.limit).pipe(Effect.mapError(unavailable("pacing")));
 
     yield* Effect.sleep(delay);
 
     outcomes.push(
-      outcomeOf(email, yield* Effect.result(mailer.send(email, content, { kind: "test" }))),
+      outcomeOf(
+        email,
+        yield* Effect.result(mailer.send(email, content, unsubscribeUrl, { kind: "test" })),
+      ),
     );
   }
 

@@ -111,7 +111,7 @@ const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store 
 
   const sending = Layer.mergeAll(
     Layer.succeed(Mailer)({
-      send: (recipient, content, purpose) =>
+      send: (recipient, content, _unsubscribeUrl, purpose) =>
         Effect.sync(() => {
           mailed.push({ recipient, subject: content.subject, purpose });
 
@@ -1832,7 +1832,19 @@ describe("draft editing", () => {
 
 describe("test sends", () => {
   const clientLayer = (store: Store) => {
-    const handler = webHandler(store);
+    const handler = HttpEffect.toWebHandler(
+      builtHandler(store).pipe(
+        Effect.provideService(
+          ConfigProvider.ConfigProvider,
+          ConfigProvider.fromEnvRecord({
+            EMAILER_UNSUBSCRIBE_URL: "https://unsubscribe.example/",
+            EMAILER_UNSUBSCRIBE_SECRET:
+              "8f14e45fceea167a5a36dedd4bea2543a1b2c3d4e5f60718293a4b5c6d7e8f90",
+          }),
+        ),
+      ),
+    );
+
     const transport: typeof globalThis.fetch = (input, init) => handler(new Request(input, init));
 
     return {

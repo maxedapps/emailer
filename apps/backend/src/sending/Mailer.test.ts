@@ -1,7 +1,7 @@
 import * as Retry from "@distilled.cloud/aws/Retry";
 import * as AWS from "alchemy/AWS";
 import { fromCredentials } from "alchemy/AWS/Credentials";
-import { ConfigProvider, Effect, Layer, Logger, Redacted, Result, Schema } from "effect";
+import { Effect, Layer, Logger, Redacted, Result, Schema } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 import { describe, expect, it } from "vitest";
 
@@ -115,18 +115,9 @@ const sending = (
     const send = yield* AWS.SES.SendEmail(identity, configurationSet);
 
     return yield* Effect.result(
-      makeSend(send, "news@example.com", postalAddress)(recipient, sent, purpose),
+      makeSend(send, "news@example.com", postalAddress)(recipient, sent, unsubscribeUrl, purpose),
     );
-  }).pipe(
-    Effect.provide(sendEmailLayer(transport)),
-    Effect.provideService(
-      ConfigProvider.ConfigProvider,
-      ConfigProvider.fromEnvRecord({
-        EMAILER_UNSUBSCRIBE_URL: `${unsubscribeBase}/`,
-        EMAILER_UNSUBSCRIBE_SECRET: unsubscribeSecret,
-      }),
-    ),
-  );
+  }).pipe(Effect.provide(sendEmailLayer(transport)));
 
 const acceptedBody = JSON.stringify({ MessageId: "0100018f-deadbeef" });
 

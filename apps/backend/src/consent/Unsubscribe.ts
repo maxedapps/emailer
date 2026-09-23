@@ -58,6 +58,11 @@ export const verifyToken = (
     ([payload = ""]) => mailboxOf(payload),
   );
 
+/**
+ * Read per call, not at construction: the URL and key are env pinned from the function's props,
+ * which a constructor read would look for on the deploy machine at plan time. A sender mints before
+ * it changes any state, so a link that cannot be minted stops it with nothing to undo.
+ */
 export const unsubscribeLink = Effect.fn("Unsubscribe.unsubscribeLink")(function* (email: string) {
   const configured = yield* Config.all({
     baseUrl: Config.String("EMAILER_UNSUBSCRIBE_URL"),
