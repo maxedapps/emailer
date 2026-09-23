@@ -7,7 +7,8 @@
  *
  * Automated sends go only to SES mailbox-simulator addresses. `submitToSimulatorList` is the
  * test-side guard: it pages a list and refuses to run the submit if any member is not a simulator
- * address. `sendToSimulatorList` is the send form of that guard.
+ * address. `sendToSimulatorList` is the send form of that guard, and `testToSimulators` the form
+ * for test sends, which also checks explicit addresses.
  */
 import { NodeCrypto } from "@effect/platform-node";
 import { fromChain } from "@distilled.cloud/aws/Credentials";
@@ -321,6 +322,33 @@ export const sendToSimulatorList = (client: EmailerClient, listId: string, campa
     campaignId,
     client.campaigns.send({ params: { id: campaignId } }),
   );
+
+/** A test send, refused before any request unless every recipient is a simulator address. */
+export const testToSimulators = (
+  client: EmailerClient,
+  campaignId: string,
+  recipients: { readonly to: ReadonlyArray<string> } | { readonly listId: string },
+) =>
+  Effect.gen(function* () {
+    const addresses =
+      "to" in recipients
+        ? recipients.to
+        : (yield* listAllMembers(client, recipients.listId)).map((member) => member.email);
+
+    for (const address of addresses) {
+      if (!address.endsWith(simulatorHost)) {
+        throw new Error(
+          `refusing to test-send campaign ${campaignId}: ${address} is not a simulator address`,
+        );
+      }
+    }
+
+    const params = { id: campaignId };
+
+    return yield* "to" in recipients
+      ? client.campaigns.test({ params, payload: { to: recipients.to } })
+      : client.campaigns.test({ params, payload: { listId: recipients.listId } });
+  });
 
 export const accountSendQuota = Effect.gen(function* () {
   const getAccount = yield* sesv2.getAccount;
