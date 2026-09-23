@@ -32,6 +32,23 @@ Alchemy's Lambda invocation Scope is settled before the response returns. There 
 
 The generated native handler provides `AWS.Lambda.HandlerContext` — the Lambda `context` object — per invocation, for HTTP and queue handlers alike (`Function.ts` succeeds the service with the native `context` before running the effect). It is **not** in `FunctionServices` and is not present during planning or cold-start construction. A deadline that must be testable with `TestClock` can use the Effect `Clock` plus the configured timeout instead of `getRemainingTimeInMillis`. [HandlerContext](https://unpkg.com/alchemy@2.0.0-beta.77/src/AWS/Lambda/Function.ts)
 
+### Build a function's services once
+
+A function constructor can build its whole service graph once and hand the built context to every invocation:
+
+```typescript
+const services = yield* Layer.build(ApiLive);
+const handle = yield* makeApiHandler(token);
+
+return { fetch: Effect.provideContext(handle, services) };
+```
+
+`ApiLive` merges each service's own `*Live` Layer. Each Live declares its bindings and provides its `*Http` implementation, and the merge ends in `Layer.provideMerge(NodeCrypto.layer)`, so the handlers get `Crypto` too. The bindings, and with them the IAM grants, are registered while the Layer builds, so the constructor still declares the function's permissions. Queue and event consumers take the same context with `Effect.provideContext(services)` on the batch Effect.
+
+Two shortcuts go wrong:
+- **Re-wrapping:** yielding each service and then re-providing it with `Layer.succeed` duplicates the wiring, and a service implemented inline in two functions drifts apart.
+- **`Effect.context()` in the constructor:** it captures the whole constructor context, including its `Scope`. Providing that to a request hands the invocation the instance's scope, so request finalizers attach to the wrong lifetime. `Layer.build` returns only the services the Layer produces.
+
 ## Deploy-time secrets
 
 `Alchemy.Random` mints a secret once and then keeps it. `Random("Id", { bytes: 32 })` — 32 is the default — resolves to `{ text: Redacted<string> }` holding hex-encoded random bytes, and `makeRandom` maps straight to that value. The provider has no remote counterpart: it returns the stored output when one exists and generates a value only when none does, so the secret is stable across deploys and changes only when the resource is replaced or its state entry goes away. It is registered in `AWS.providers()`, and Alchemy uses it for its own shared credentials, such as the Cloudflare state-store token.

@@ -7,6 +7,7 @@
 - Supersedes: ADR-0005's exactly-one-Storage-tag choice; preserves ADR-0001's resource-owning capabilities and the single-table access paths.
 - Superseded in part: [ADR-0011](0011-open-recipient-set-and-paced-dispatch.md) for the `CampaignStore` binding table (claims/finalization without `UpdateItem`) and the API's use of the mailer.
 - Superseded in part: [ADR-0012](0012-reputation-guardrails.md) for the `FeedbackStore` and `AudienceStore` capability rows.
+- Amended: [ADR-0020](0020-drafts-previews-and-test-sends.md) — a sixth capability, `CampaignReader` (`GetItem` only), for the public preview function; the rate limiter's store is the fifth.
 - Amended: [campaign-listing](work/campaign-listing.md) — CampaignStore binds all six table operations
 
 ## Context

@@ -1,6 +1,6 @@
 # Deliverability and sender reputation
 
-[AWS](aws.md) · [Engagement tracking](ses-engagement-tracking.md) · [DNS and certificates](route53-and-acm.md)
+[AWS](aws.md) · [Engagement tracking](ses-engagement-tracking.md) · [DNS and certificates](route53-and-acm.md) · [HTML email](../email/html-email.md)
 
 Deliverability is a feedback-controlled operation: valid authentication, wanted content, healthy recipients and prompt suppression all matter. SES acceptance alone says nothing about inbox placement. Separate marketing traffic and reputation from unrelated transactional/user mail where practical.
 
