@@ -17,18 +17,15 @@ import type { AudienceOperations } from "./Audience.ts";
 import type { TableOperations } from "./Items.ts";
 import type { StorageFailure } from "./Errors.ts";
 
-export type GetItemReply = Effect.Effect<dynamodb.GetItemOutput, dynamodb.GetItemError>;
+type GetItemReply = Effect.Effect<dynamodb.GetItemOutput, dynamodb.GetItemError>;
 
-export type BatchGetItemReply = Effect.Effect<
-  dynamodb.BatchGetItemOutput,
-  dynamodb.BatchGetItemError
->;
+type BatchGetItemReply = Effect.Effect<dynamodb.BatchGetItemOutput, dynamodb.BatchGetItemError>;
 
-export type PutItemReply = Effect.Effect<dynamodb.PutItemOutput, dynamodb.PutItemError>;
+type PutItemReply = Effect.Effect<dynamodb.PutItemOutput, dynamodb.PutItemError>;
 
-export type UpdateItemReply = Effect.Effect<dynamodb.UpdateItemOutput, dynamodb.UpdateItemError>;
+type UpdateItemReply = Effect.Effect<dynamodb.UpdateItemOutput, dynamodb.UpdateItemError>;
 
-export type QueryReply = Effect.Effect<dynamodb.QueryOutput, dynamodb.QueryError>;
+type QueryReply = Effect.Effect<dynamodb.QueryOutput, dynamodb.QueryError>;
 
 export type TransactionReply = Effect.Effect<
   dynamodb.TransactWriteItemsOutput,

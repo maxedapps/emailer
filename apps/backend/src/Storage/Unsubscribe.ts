@@ -12,7 +12,7 @@ import type { TableOperations } from "./Items.ts";
  * address-keyed item. It constructs `PutItem` and nothing else, so the one surface that accepts
  * unauthenticated requests holds no permission to read, query, update or delete anything.
  */
-export const unsubscribeStoreOperations = (operations: Pick<TableOperations, "putItem">) =>
+const unsubscribeStoreOperations = (operations: Pick<TableOperations, "putItem">) =>
   unsubscribeWrites(writePrimitives(operations));
 
 export type UnsubscribeOperations = ReturnType<typeof unsubscribeStoreOperations>;

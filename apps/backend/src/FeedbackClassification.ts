@@ -66,7 +66,7 @@ const bounceEchoSubtypes = new Set(["OnAccountSuppressionList", "Suppressed"]);
 
 const complaintEchoSubtype = "OnAccountSuppressionList";
 
-export type FeedbackClassification =
+type FeedbackClassification =
   | "permanent-bounce"
   | "suppression-echo"
   | "transient-bounce"
@@ -128,7 +128,7 @@ export interface ClassifiedFeedback extends Decision {
   readonly complaintSubType?: string | undefined;
 }
 
-export interface ClassifiedDelay {
+interface ClassifiedDelay {
   readonly classification: "delay";
   readonly recipients: ReadonlyArray<string>;
   readonly delayType: string;

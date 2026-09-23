@@ -31,7 +31,7 @@ export const describeCause = (cause: unknown): string =>
       }),
   });
 
-export const reportStorageFailure = (failure: StorageFailure) =>
+const reportStorageFailure = (failure: StorageFailure) =>
   Effect.logError("storage operation failed", {
     operationId: failure.operationId,
     reason: failure.reason,

@@ -4,7 +4,7 @@ import { Config, Data, Effect, Layer, Redacted } from "effect";
 // oxlint-disable-next-line effecttsgo/node-builtin-import
 import { timingSafeEqual } from "node:crypto";
 
-export const tokenPattern = /^[A-Za-z0-9_-]{43}$/;
+const tokenPattern = /^[A-Za-z0-9_-]{43}$/;
 
 export class MalformedApiToken extends Data.TaggedError("MalformedApiToken")<{
   readonly reason: "absent" | "wrong-format";

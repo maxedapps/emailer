@@ -105,7 +105,7 @@ const responseItems = (response: dynamodb.BatchGetItemOutput): Array<dynamodb.At
  * constructs `Query` never receives `dynamodb:Query` — which is the point of splitting these at
  * all. Composed primitives take other primitives, never raw operations.
  */
-export const readPrimitives = (operations: Pick<TableOperations, "getItem">) => {
+const readPrimitives = (operations: Pick<TableOperations, "getItem">) => {
   const readItem = (operationId: string, key: AWS.DynamoDB.GetItemRequest["Key"]) =>
     operations
       .getItem({ Key: key, ConsistentRead: true })
@@ -185,7 +185,7 @@ export const updatePrimitives = (operations: Pick<TableOperations, "updateItem">
 
 export type UpdatePrimitives = ReturnType<typeof updatePrimitives>;
 
-export const queryPrimitives = (operations: Pick<TableOperations, "query">) => {
+const queryPrimitives = (operations: Pick<TableOperations, "query">) => {
   /**
    * `ConsistentRead` is invalid on a global secondary index and fails at runtime, not at compile
    * time — the SDK types let `IndexName` and `ConsistentRead` coexist. The request type therefore
@@ -218,7 +218,7 @@ class IncompleteBatch extends Data.TaggedError("IncompleteBatch")<{
   readonly pending: dynamodb.KeysAndAttributes;
 }> {}
 
-export const batchPrimitives = (operations: Pick<TableOperations, "batchGetItem">) => {
+const batchPrimitives = (operations: Pick<TableOperations, "batchGetItem">) => {
   /**
    * `BatchGetItem` requests are keyed by the table's logical ID, which the binding rewrites to the
    * physical name; AWS then echoes both `Responses` and `UnprocessedKeys` under that **physical**
@@ -308,7 +308,7 @@ export const batchPrimitives = (operations: Pick<TableOperations, "batchGetItem"
 
 export type BatchPrimitives = ReturnType<typeof batchPrimitives>;
 
-export const pagePrimitives = (primitives: QueryPrimitives & BatchPrimitives) => {
+const pagePrimitives = (primitives: QueryPrimitives & BatchPrimitives) => {
   const { readItems, runQuery } = primitives;
 
   /**
@@ -480,5 +480,3 @@ export const allPrimitives = (operations: TableOperations, tokens: TransactionTo
     ...transactionPrimitives(operations, tokens),
   } as const;
 };
-
-export type AllPrimitives = ReturnType<typeof allPrimitives>;

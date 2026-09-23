@@ -45,9 +45,9 @@ const simulatorHost = "@simulator.amazonses.com";
 
 const campaignWaitFloorSeconds = 180;
 
-export const mappingReadyTimeout = Duration.minutes(5);
+const mappingReadyTimeout = Duration.minutes(5);
 
-export const staleWakeLogTimeout = Duration.minutes(5);
+const staleWakeLogTimeout = Duration.minutes(5);
 
 const mappingPoll = Schedule.spaced("3 seconds");
 
@@ -80,9 +80,9 @@ const decodeRateLimitWindow = Schema.decodeUnknownEffect(RateLimitWindow);
 
 export type SimulatorKind = "success" | "bounce" | "complaint";
 
-export type SendRow = typeof StoredSendRow.Type;
+type SendRow = typeof StoredSendRow.Type;
 
-export type RateLimitWindow = typeof RateLimitWindow.Type;
+type RateLimitWindow = typeof RateLimitWindow.Type;
 
 /**
  * Labelled mailbox-simulator addresses, unique per run. `n` indexes success and bounce addresses.
@@ -117,7 +117,7 @@ export const unsubscribeSettings = Effect.gen(function* () {
   return { baseUrl: baseUrl.replace(/\/+$/, ""), signingKey };
 });
 
-export const awsClient = Layer.mergeAll(FetchHttpClient.layer, fromChain(), NodeCrypto.layer);
+const awsClient = Layer.mergeAll(FetchHttpClient.layer, fromChain(), NodeCrypto.layer);
 
 /**
  * Runs `effect` on the first execution and is a no-op after that, including when the first
@@ -744,7 +744,7 @@ export type LiveStorage = ReturnType<typeof audienceOperations> &
   ReturnType<typeof unsubscribeWrites> &
   ReturnType<typeof feedbackWrites>;
 
-export const statusDeadline = "60 seconds";
+const statusDeadline = "60 seconds";
 
 export const awaitAddressStatus = (storage: LiveStorage, email: string, expected: AddressStatus) =>
   storage.addressStatus(email).pipe(

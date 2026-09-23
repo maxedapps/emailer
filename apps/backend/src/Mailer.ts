@@ -6,9 +6,9 @@ import { Config, Context, Data, Duration, Effect, Layer, Schema } from "effect";
 
 import { sendingIdentity } from "./SendingIdentity.ts";
 
-export const configurationSetLogicalId = "EmailerMail";
+const configurationSetLogicalId = "EmailerMail";
 
-export const eventDestinationLogicalId = "EmailerMailFeedback";
+const eventDestinationLogicalId = "EmailerMailFeedback";
 
 export const configurationSet = AWS.SES.ConfigurationSet(configurationSetLogicalId, {
   suppressedReasons: ["BOUNCE", "COMPLAINT"],
@@ -70,7 +70,7 @@ export const belongsToIdentity = (sender: string, identity: string): boolean => 
   return domain === identity || domain.endsWith(`.${identity}`);
 };
 
-export const postalAddress = Config.schema(
+const postalAddress = Config.schema(
   Schema.Trim.check(Schema.isNonEmpty()),
   "EMAILER_POSTAL_ADDRESS",
 );

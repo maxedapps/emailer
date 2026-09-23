@@ -58,7 +58,7 @@ const decodeReservationEntry = Schema.decodeUnknownEffect(ReservationEntry);
 
 const decodeMemberCursor = Schema.decodeUnknownEffect(MemberCursor);
 
-export const memberKey = (listId: string, contactId: string) => ({
+const memberKey = (listId: string, contactId: string) => ({
   pk: str(`LIST#${listId}`),
   sk: str(`MEMBER#${contactId}`),
 });
@@ -70,7 +70,7 @@ export const memberKey = (listId: string, contactId: string) => ({
  * index would be eventually consistent, and a cascade driven by a stale read would orphan
  * memberships that `Campaigns.send` then reports as a permanent 503.
  */
-export const memberOfKey = (contactId: string, listId: string) => ({
+const memberOfKey = (contactId: string, listId: string) => ({
   pk: str(`CONTACT#${contactId}`),
   sk: str(`LISTOF#${listId}`),
 });
@@ -86,13 +86,13 @@ export interface ImportCandidate {
   readonly attributes?: Schemas.ContactAttributes | undefined;
 }
 
-export interface ImportedContact {
+interface ImportedContact {
   readonly email: string;
   readonly contactId: string;
   readonly member: boolean;
 }
 
-export type ImportContactsOutcome =
+type ImportContactsOutcome =
   | { readonly outcome: "imported"; readonly contacts: ReadonlyArray<ImportedContact> }
   | { readonly outcome: "list-missing" };
 

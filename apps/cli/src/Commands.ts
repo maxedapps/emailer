@@ -21,7 +21,7 @@ import { FetchHttpClient } from "effect/unstable/http";
  * answered by the service rather than abandoned by the caller, which would leave the outcome
  * unknown to the operator while the send completed anyway.
  */
-export const requestTimeout = Duration.seconds(70);
+const requestTimeout = Duration.seconds(70);
 
 const emailerClient = Effect.gen(function* () {
   const url = yield* Config.String("EMAILER_API_URL");
@@ -99,7 +99,7 @@ const entityPageFlags = {
 
 const memberPageFlags = {
   limit: limitFlag,
-  cursor: cursorFlag.pipe(Flag.withSchema(Schemas.MemberCursor), Flag.optional),
+  cursor: cursorFlag.pipe(Flag.withSchema(Schemas.EntityId), Flag.optional),
 };
 
 interface PageQuery<Cursor> {

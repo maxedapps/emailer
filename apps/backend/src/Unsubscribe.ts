@@ -2,7 +2,6 @@ import * as Schemas from "@emailer/api/Schemas";
 import { Random } from "alchemy";
 import * as AWS from "alchemy/AWS";
 import { Config, Effect, Option, Redacted, Schema } from "effect";
-// oxlint-disable-next-line effecttsgo/node-builtin-import
 import { Buffer } from "node:buffer";
 // oxlint-disable-next-line effecttsgo/node-builtin-import
 import { createHmac } from "node:crypto";

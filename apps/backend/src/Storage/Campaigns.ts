@@ -33,9 +33,9 @@ import type {
   WritePrimitives,
 } from "./Primitives.ts";
 
-export const campaignKind = "campaign";
+const campaignKind = "campaign";
 
-export const sendKey = (campaignId: string, contactId: string) => ({
+const sendKey = (campaignId: string, contactId: string) => ({
   pk: str(`CAMPAIGN#${campaignId}`),
   sk: str(`SEND#${contactId}`),
 });
@@ -92,7 +92,7 @@ export type RecipientSettlement =
   | { readonly state: "rejected"; readonly rejectionCode: Schemas.RejectionCode }
   | { readonly state: "uncertain" };
 
-export interface CampaignRun {
+interface CampaignRun {
   readonly listId: string;
   readonly subject: string;
   readonly cursor: string | undefined;

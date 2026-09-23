@@ -15,7 +15,7 @@ import type { StorageFailure } from "./Errors.ts";
  * Shared send-pacing counter. One item per limiter key; the live Layer binds
  * `UpdateItem` alone. Delay-mode `fixedWindow` is the only implemented algorithm.
  */
-export const rateLimitKey = (key: string) => ({
+const rateLimitKey = (key: string) => ({
   pk: str(`RATELIMIT#${key}`),
   sk: str("RATELIMIT"),
 });
@@ -131,7 +131,7 @@ export const rateLimitOperations = (primitives: Pick<UpdatePrimitives, "updateIf
   });
 };
 
-export const rateLimitStore = (updateItem: TableOperations["updateItem"]) =>
+const rateLimitStore = (updateItem: TableOperations["updateItem"]) =>
   rateLimitOperations(updatePrimitives({ updateItem }));
 
 export const RateLimitStoreLive = Layer.effect(RateLimiter.RateLimiterStore)(

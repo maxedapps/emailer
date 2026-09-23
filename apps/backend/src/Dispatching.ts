@@ -23,7 +23,7 @@ export const memberPageSize = 50;
 /**
  * Per-run bounce and complaint thresholds. Integer arithmetic only.
  */
-export const breaker = {
+const breaker = {
   bounce: { minimumAccepted: 200, percent: 5 },
   complaint: { minimumAccepted: 1000, perMille: 1 },
 } as const;

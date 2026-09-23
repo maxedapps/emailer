@@ -20,7 +20,7 @@ import type {
   WritePrimitives,
 } from "./Primitives.ts";
 
-export const listKind = "list";
+const listKind = "list";
 
 export const listKey = (listId: string) => ({ pk: str(`LIST#${listId}`), sk: str("META") });
 

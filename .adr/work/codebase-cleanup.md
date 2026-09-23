@@ -2,7 +2,7 @@
 
 > **Status:** In progress
 > **Updated:** 2026-09-23
-> **ADRs:** [0005](../0005-contact-identity-and-membership-access-paths.md) (amended by T4), [0007](../0007-immutable-recipient-unsubscribe-links.md) (link before claim, T3), [0008](../0008-storage-capabilities-and-error-boundaries.md), [0011](../0011-open-recipient-set-and-paced-dispatch.md). New records are added by T1, T3 and T4.
+> **ADRs:** [0019](../0019-whole-project-unused-code-check.md) (T1), [0005](../0005-contact-identity-and-membership-access-paths.md) (amended by T4), [0007](../0007-immutable-recipient-unsubscribe-links.md) (link before claim, T3), [0008](../0008-storage-capabilities-and-error-boundaries.md), [0011](../0011-open-recipient-set-and-paced-dispatch.md). New records are added by T1, T3 and T4.
 
 ## Outcome and boundaries
 
@@ -68,7 +68,7 @@
 
 ### T1 — Tooling that catches leftovers, and clearing what it finds
 
-- **Status:** Pending
+- **Status:** Verified
 - **Items:**
   - T1.1: knip dev dependency, `knip.config.ts` and a `knip` script, all in `pnpm check`.
   - T1.2: `--report-unused-disable-directives` on the lint script.
@@ -80,6 +80,19 @@
   - T1.8: new ADR for the whole-project unused-code gate.
 - **Acceptance:** `pnpm check`, including knip, is green with zero findings.
 - **Evidence:**
+  - **Tooling:**
+    - knip 6.37.0 runs in `pnpm check` after lint. `knip.config.ts` names the two stack entry points, the vendored lint rules, the tsgo plugin key, and `includeEntryExports` for `packages/api`.
+    - Lint runs with `--report-unused-disable-directives`, which found a third stale directive, in `stacks/sending-identity.ts`.
+    - A temporary unused export failed knip with exit 1.
+  - **Deleted:**
+    - `apps/mcp` and the MCP SDK catalog entry;
+    - `CreateContactOutcome`, `AllPrimitives`, `StoredFeedback`/`StoredFeedbackRecord`, and the unused `AddressStatus`/`EntityKind` type aliases;
+    - three stale disable directives.
+    - `FeedbackKind`/`FeedbackOutcome` are now plain unions.
+  - **Un-exported:** about 40 module-private names. Two extras from `ReplayFeedback.ts`, which knip cannot see because it is a script entry. Four HttpApi group classes plus the `AddressStatus`/`EntityKind` schemas in `packages/api`.
+  - **Replaced:** the `MemberCursor` alias with `EntityId`, keeping a comment on `memberQuery`. `stacks/sending-identity.ts` names its stack with the shared `sendingIdentityStack` constant (same value, `EmailerSending`).
+  - **Check:** `pnpm check` exit 0. 737 unit tests; knip reports nothing.
+  - **ADR:** [0019](../0019-whole-project-unused-code-check.md).
 
 ### T2 — Simplify
 
@@ -136,9 +149,10 @@
 
 ## Handoff
 
-- **Next action:** T1
+- **Next action:** T2
 - **Reviews:**
 - **Deviations:**
+  - **T1, index slip:** the worker briefly staged and unstaged the `apps/mcp` deletion. The index was back at HEAD before the commit; nothing was lost.
   - **T0, live test fixes:** two integration-test fixes (the alarm-pause assertion, and the probe-based mapping hold). Both correct test races observed live and change no product code.
 - **Resources:**
   - the worktree and branch above;
