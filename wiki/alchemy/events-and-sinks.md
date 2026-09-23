@@ -2,7 +2,7 @@
 
 [Alchemy](alchemy.md)
 
-API examples target Alchemy `2.0.0-beta.77` with Effect `4.0.0-rc.112`.
+API examples target Alchemy `2.0.0-beta.79` with Effect `4.0.0-rc.117`.
 
 Related: [SQS behavior](../aws/sqs.md)
 
@@ -12,7 +12,7 @@ An event source combines trigger configuration, permissions and runtime dispatch
 
 `AWS.SQS.consumeQueueMessages(queue, props, process)` receives a `Stream<SQSRecord>`. Provide `AWS.Lambda.QueueEventSource` on the Lambda constructor. The layer grants receive/delete/get-attributes permissions and declares a mapping. This is appropriate for simple whole-batch processing, provided every externally visible action tolerates redelivery.
 
-**Beta.77 limitation:** the Lambda adapter forwards only batch size and batching window, sets the mapping enabled, and expects `process` to return `Effect<void, never, ...>`. It does not produce an SQS `batchItemFailures` response. The lower-level mapping provider defaults `ReportBatchItemFailures`, but that setting alone does not implement record-level recovery. A thrown/defect failure still fails the invocation; swallowing a failure can acknowledge lost work. [Queue adapter source](https://unpkg.com/alchemy@2.0.0-beta.77/src/AWS/Lambda/QueueEventSource.ts), [Mapping source](https://unpkg.com/alchemy@2.0.0-beta.77/src/AWS/Lambda/EventSourceMapping.ts)
+**Beta.79 limitation:** the Lambda adapter forwards only batch size and batching window, sets the mapping enabled, and expects `process` to return `Effect<void, never, ...>`. It does not produce an SQS `batchItemFailures` response. The lower-level mapping provider defaults `ReportBatchItemFailures`, but that setting alone does not implement record-level recovery. A thrown/defect failure still fails the invocation; swallowing a failure can acknowledge lost work. [Queue adapter source](https://unpkg.com/alchemy@2.0.0-beta.79/src/AWS/Lambda/QueueEventSource.ts), [Mapping source](https://unpkg.com/alchemy@2.0.0-beta.79/src/AWS/Lambda/EventSourceMapping.ts)
 
 Choose a consumer according to its required failure granularity:
 
@@ -25,7 +25,7 @@ The explicit mapping exposes `functionResponseTypes`, `scalingConfig`, `enabled`
 
 ## Sink data shape and loss behavior
 
-The live documentation contains string-stream examples. **The published beta.77 `QueueSink` accepts message entry objects**, specifically `SendMessageBatchRequestEntry` without its per-batch `Id`. Supply `{ MessageBody, MessageGroupId?, MessageDeduplicationId?, ... }`. [QueueSink contract](https://unpkg.com/alchemy@2.0.0-beta.77/src/AWS/SQS/QueueSink.ts)
+The live documentation contains string-stream examples. **The published beta.79 `QueueSink` accepts message entry objects**, specifically `SendMessageBatchRequestEntry` without its per-batch `Id`. Supply `{ MessageBody, MessageGroupId?, MessageDeduplicationId?, ... }`. [QueueSink contract](https://unpkg.com/alchemy@2.0.0-beta.79/src/AWS/SQS/QueueSink.ts)
 
 ```typescript
 import * as AWS from "alchemy/AWS";
@@ -43,7 +43,7 @@ export const makePublisher = Effect.gen(function* () {
 ));
 ```
 
-This is a composition example, **not a lossless outbox publisher**. Beta.77 groups up to ten entries with a 256 KiB packing target. Transient failed entries are retried on a bounded schedule; exhausted entries fail with `BatchRetryExhaustedError`. Permanently rejected entries (`SenderFault: true`) are warned about and dropped by the default shared sink implementation. Success of the sink therefore does not certify that every input reached SQS. [QueueSinkHttp](https://unpkg.com/alchemy@2.0.0-beta.77/src/AWS/SQS/QueueSinkHttp.ts), [BatchedSink implementation](https://unpkg.com/alchemy@2.0.0-beta.77/src/AWS/internal/BatchedSink.ts)
+This is a composition example, **not a lossless outbox publisher**. Beta.79 groups up to ten entries with a 256 KiB packing target. Transient failed entries are retried on a bounded schedule; exhausted entries fail with `BatchRetryExhaustedError`. Permanently rejected entries (`SenderFault: true`) are warned about and dropped by the default shared sink implementation. Success of the sink therefore does not certify that every input reached SQS. [QueueSinkHttp](https://unpkg.com/alchemy@2.0.0-beta.79/src/AWS/SQS/QueueSinkHttp.ts), [BatchedSink implementation](https://unpkg.com/alchemy@2.0.0-beta.79/src/AWS/internal/BatchedSink.ts)
 
 For a lossless publication boundary, inspect explicit `SendMessageBatch` responses. Record each successful entry, retain retryable entries, and durably quarantine permanent failures. Only mark an intent dispatched after its entry is known to have succeeded. Do not mark an entire outbox page dispatched because a generic sink completed.
 

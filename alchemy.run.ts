@@ -37,7 +37,7 @@ export default Stack(
     const topic = yield* alertsTopic;
     yield* reputationAlarms;
 
-    const alertEmail = yield* Config.option(Config.string("EMAILER_ALERT_EMAIL"));
+    const alertEmail = yield* Config.option(Config.String("EMAILER_ALERT_EMAIL"));
 
     if (Option.isSome(alertEmail)) {
       yield* AWS.SNS.Subscription("AlertsEmail", {
@@ -108,8 +108,8 @@ export default Stack(
       alertsTopicArn: topic.topicArn,
     };
   }).pipe(
-    // The public functions are declared as bare tags so Api.ts can reference their
-    // URLs; without their .make Layers, planning fails with missingImplementation.
+    // The public functions are declared as bare tags so the API's and the Dispatcher's props can
+    // reference their URLs; without their .make Layers, planning fails with missingImplementation.
     Effect.provide(Layer.mergeAll(UnsubscribePage, PreviewPage)),
   ),
 );

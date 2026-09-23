@@ -3,7 +3,7 @@ import { Config, Data, Effect, Layer, Redacted } from "effect";
 
 import { tokensMatch } from "../SignedToken.ts";
 
-export const tokenPattern = /^[A-Za-z0-9_-]{43}$/;
+const tokenPattern = /^[A-Za-z0-9_-]{43}$/;
 
 export class MalformedApiToken extends Data.TaggedError("MalformedApiToken")<{
   readonly reason: "absent" | "wrong-format";
@@ -15,7 +15,7 @@ export class MalformedApiToken extends Data.TaggedError("MalformedApiToken")<{
  * can put it in a log line, an error or a stack frame by accident.
  */
 export const apiToken = Effect.gen(function* () {
-  const configured = yield* Config.redacted("EMAILER_API_TOKEN").pipe(
+  const configured = yield* Config.Redacted("EMAILER_API_TOKEN").pipe(
     Effect.mapError(() => new MalformedApiToken({ reason: "absent" })),
   );
 

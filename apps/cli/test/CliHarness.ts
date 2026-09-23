@@ -11,7 +11,6 @@ import { randomUUID } from "node:crypto";
 import { writeFile, rm } from "node:fs/promises";
 // oxlint-disable-next-line effecttsgo/node-builtin-import
 import { createServer } from "node:http";
-// oxlint-disable-next-line effecttsgo/node-builtin-import
 import { tmpdir } from "node:os";
 
 export const token = "3o4Xr7nJ1pQvKzB2sYtLwMhGfDcEaN9uRiVoP0qTzXY";

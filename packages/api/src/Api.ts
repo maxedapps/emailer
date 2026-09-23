@@ -31,12 +31,13 @@ const listingQuery = {
   limit: Schema.optional(Schemas.PageSize),
 };
 
+/** Member listings page by member sort key, which is the contact's identifier. */
 const memberQuery = {
-  cursor: Schema.optional(Schemas.MemberCursor),
+  cursor: Schema.optional(Schemas.EntityId),
   limit: Schema.optional(Schemas.PageSize),
 };
 
-export class ContactsGroup extends HttpApiGroup.make("contacts")
+class ContactsGroup extends HttpApiGroup.make("contacts")
   .add(
     HttpApiEndpoint.post("create", "/", {
       payload: Schemas.CreateContactPayload,
@@ -86,7 +87,7 @@ export class ContactsGroup extends HttpApiGroup.make("contacts")
   .middleware(Authorization)
   .prefix("/contacts") {}
 
-export class ListsGroup extends HttpApiGroup.make("lists")
+class ListsGroup extends HttpApiGroup.make("lists")
   .add(
     HttpApiEndpoint.post("create", "/", {
       payload: Schemas.CreateListPayload,
@@ -126,7 +127,7 @@ export class ListsGroup extends HttpApiGroup.make("lists")
     HttpApiEndpoint.get("listMembers", "/:listId/members", {
       params: { listId: Schemas.EntityId },
       query: memberQuery,
-      success: Schemas.page(Schemas.Contact, Schemas.MemberCursor),
+      success: Schemas.page(Schemas.Contact, Schemas.EntityId),
       error: [HttpApiError.BadRequestNoContent, Schemas.NotFound, Schemas.StorageUnavailable],
     }),
     HttpApiEndpoint.put("addContact", "/:listId/members/:contactId", {
@@ -154,7 +155,7 @@ export class ListsGroup extends HttpApiGroup.make("lists")
   .middleware(Authorization)
   .prefix("/lists") {}
 
-export class CampaignsGroup extends HttpApiGroup.make("campaigns")
+class CampaignsGroup extends HttpApiGroup.make("campaigns")
   .add(
     HttpApiEndpoint.post("create", "/", {
       payload: Schemas.CreateCampaignPayload,
@@ -251,7 +252,7 @@ export class CampaignsGroup extends HttpApiGroup.make("campaigns")
   .middleware(Authorization)
   .prefix("/campaigns") {}
 
-export class AddressesGroup extends HttpApiGroup.make("addresses")
+class AddressesGroup extends HttpApiGroup.make("addresses")
   .add(
     HttpApiEndpoint.get("status", "/status", {
       query: { email: Schemas.ListedEmailAddress },

@@ -44,11 +44,14 @@ import type { TableOperations } from "../src/storage/Items.ts";
 
 const simulatorHost = "@simulator.amazonses.com";
 
+/** States a send response can carry: the API re-reads after enqueue, so the dispatcher may be ahead. */
+export const submitted: ReadonlyArray<string> = ["queued", "sending", "completed"];
+
 const campaignWaitFloorSeconds = 180;
 
-export const mappingReadyTimeout = Duration.minutes(5);
+const mappingReadyTimeout = Duration.minutes(5);
 
-export const staleWakeLogTimeout = Duration.minutes(5);
+const staleWakeLogTimeout = Duration.minutes(5);
 
 const mappingPoll = Schedule.spaced("3 seconds");
 
@@ -78,9 +81,9 @@ const decodeRateLimitWindow = Schema.decodeUnknownEffect(RateLimitWindow);
 
 export type SimulatorKind = "success" | "bounce" | "complaint";
 
-export type SendRow = typeof StoredSendRow.Type;
+type SendRow = typeof StoredSendRow.Type;
 
-export type RateLimitWindow = typeof RateLimitWindow.Type;
+type RateLimitWindow = typeof RateLimitWindow.Type;
 
 /**
  * Labelled mailbox-simulator addresses, unique per run. `n` indexes success and bounce addresses.
@@ -98,10 +101,10 @@ export const simulator = (kind: SimulatorKind, runId: string, n = 0): string => 
 };
 
 export const configuration = Effect.gen(function* () {
-  const apiUrl = yield* Config.string("EMAILER_API_URL");
-  const token = yield* Config.redacted("EMAILER_API_TOKEN");
-  const tableName = yield* Config.string("EMAILER_TEST_TABLE_NAME");
-  const dispatchFailuresQueueUrl = yield* Config.string("EMAILER_TEST_DISPATCH_FAILURES_QUEUE_URL");
+  const apiUrl = yield* Config.String("EMAILER_API_URL");
+  const token = yield* Config.Redacted("EMAILER_API_TOKEN");
+  const tableName = yield* Config.String("EMAILER_TEST_TABLE_NAME");
+  const dispatchFailuresQueueUrl = yield* Config.String("EMAILER_TEST_DISPATCH_FAILURES_QUEUE_URL");
 
   return { apiUrl, token, tableName, dispatchFailuresQueueUrl };
 });
@@ -109,13 +112,13 @@ export const configuration = Effect.gen(function* () {
 // Read only where it is needed: both keys are copied out of the deployment, so a
 // run that exercises nothing else should not require them.
 export const unsubscribeSettings = Effect.gen(function* () {
-  const baseUrl = yield* Config.string("EMAILER_UNSUBSCRIBE_URL");
+  const baseUrl = yield* Config.String("EMAILER_UNSUBSCRIBE_URL");
   const signingKey = yield* unsubscribeSigningKey;
 
   return { baseUrl: baseUrl.replace(/\/+$/, ""), signingKey };
 });
 
-export const awsClient = Layer.mergeAll(FetchHttpClient.layer, fromChain(), NodeCrypto.layer);
+const awsClient = Layer.mergeAll(FetchHttpClient.layer, fromChain(), NodeCrypto.layer);
 
 /**
  * Runs `effect` on the first execution and is a no-op after that, including when the first
@@ -233,8 +236,8 @@ export const liveStorage = (
       },
     };
 
-    // The suite drives every capability against one live table, so it composes all
-    // four rather than depending on a service the application no longer has.
+    // The suite drives every capability against one live table, so it composes all four stores'
+    // operations over it rather than any one function's service.
     const crypto = yield* Crypto.Crypto;
     const tokens = Effect.orDie(crypto.randomUUIDv4);
     const writes = writePrimitives(operations);
@@ -504,7 +507,7 @@ export const awaitCampaignFeedback = (
 
 export const sendRows = (campaignId: string) =>
   Effect.gen(function* () {
-    const tableName = yield* Config.string("EMAILER_TEST_TABLE_NAME");
+    const tableName = yield* Config.String("EMAILER_TEST_TABLE_NAME");
     const query = yield* dynamodb.query;
     const rows: Array<SendRow> = [];
     let startKey: dynamodb.AttributeMap | undefined;
@@ -536,7 +539,7 @@ export const sendRows = (campaignId: string) =>
 
 export const campaignMeta = (campaignId: string) =>
   Effect.gen(function* () {
-    const tableName = yield* Config.string("EMAILER_TEST_TABLE_NAME");
+    const tableName = yield* Config.String("EMAILER_TEST_TABLE_NAME");
     const getItem = yield* dynamodb.getItem;
 
     const response = yield* getItem({
@@ -559,7 +562,7 @@ export const replayTransactWrite = (request: dynamodb.TransactWriteItemsInput) =
     return yield* transactWriteItems(request);
   });
 
-const dispatcherFunctionName = Config.string("EMAILER_TEST_DISPATCHER_FUNCTION_NAME");
+const dispatcherFunctionName = Config.String("EMAILER_TEST_DISPATCHER_FUNCTION_NAME");
 
 const dispatcherLogGroup = (functionName: string) => `/aws/lambda/${functionName}`;
 
@@ -676,18 +679,22 @@ export const disableDispatcherMapping = Effect.acquireRelease(
 
     if (mapping.state !== "Disabled") {
       yield* setMappingEnabled(mapping.uuid, false);
-      yield* awaitMappingState(mapping.uuid, "Disabled");
     }
 
-    yield* awaitPollersStopped(mapping.queueArn);
-
-    return { uuid: mapping.uuid, originalEnabled };
+    return { uuid: mapping.uuid, queueArn: mapping.queueArn, originalEnabled };
   }),
   (acquired) =>
     Effect.gen(function* () {
       yield* setMappingEnabled(acquired.uuid, acquired.originalEnabled);
       yield* awaitMappingState(acquired.uuid, acquired.originalEnabled ? "Enabled" : "Disabled");
     }).pipe(Effect.orDie),
+).pipe(
+  // The waits run once the restore is registered, so a wait that fails still re-enables the mapping.
+  Effect.tap((acquired) =>
+    awaitMappingState(acquired.uuid, "Disabled").pipe(
+      Effect.andThen(awaitPollersStopped(acquired.queueArn)),
+    ),
+  ),
 );
 
 const staleWakeLogged = (blob: string, campaignId: string, runToken: string) =>
@@ -725,7 +732,7 @@ export const awaitStaleWakeLog = (campaignId: string, runToken: string, sinceMs:
   });
 
 export const rateLimitItem = Effect.gen(function* () {
-  const tableName = yield* Config.string("EMAILER_TEST_TABLE_NAME");
+  const tableName = yield* Config.String("EMAILER_TEST_TABLE_NAME");
   const getItem = yield* dynamodb.getItem;
 
   const response = yield* getItem({
@@ -742,7 +749,7 @@ export const rateLimitItem = Effect.gen(function* () {
 });
 
 export const dispatchFailureCount = Effect.gen(function* () {
-  const queueUrl = yield* Config.string("EMAILER_TEST_DISPATCH_FAILURES_QUEUE_URL");
+  const queueUrl = yield* Config.String("EMAILER_TEST_DISPATCH_FAILURES_QUEUE_URL");
   const getQueueAttributes = yield* sqs.getQueueAttributes;
 
   const result = yield* getQueueAttributes({
@@ -766,7 +773,7 @@ export type LiveStorage = ReturnType<typeof audienceOperations> &
   ReturnType<typeof unsubscribeWrites> &
   ReturnType<typeof feedbackWrites>;
 
-export const statusDeadline = "60 seconds";
+const statusDeadline = "60 seconds";
 
 export const awaitAddressStatus = (storage: LiveStorage, email: string, expected: AddressStatus) =>
   storage.addressStatus(email).pipe(

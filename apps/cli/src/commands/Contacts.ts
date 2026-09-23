@@ -8,11 +8,11 @@ import { entityPageFlags, idArgument, pageQuery } from "../Flags.ts";
 const contactsCreate = Command.make(
   "create",
   {
-    email: Flag.string("email").pipe(
+    email: Flag.String("email").pipe(
       Flag.withDescription("The contact's email address"),
       Flag.withSchema(Schemas.EmailAddress),
     ),
-    name: Flag.string("name").pipe(
+    name: Flag.String("name").pipe(
       Flag.withDescription("The contact's display name"),
       Flag.withSchema(Schemas.EntityName),
       Flag.optional,
@@ -86,7 +86,7 @@ const contactsList = Command.make(
 const contactsByEmail = Command.make(
   "by-email",
   {
-    email: Flag.string("email").pipe(
+    email: Flag.String("email").pipe(
       Flag.withDescription("The address to look up"),
       Flag.withSchema(Schemas.EmailAddress),
     ),
@@ -102,21 +102,21 @@ const contactsUpdate = Command.make(
   "update",
   {
     id: idArgument("id"),
-    email: Flag.string("email").pipe(
+    email: Flag.String("email").pipe(
       Flag.withDescription("A new address for the contact"),
       Flag.withSchema(Schemas.EmailAddress),
       Flag.optional,
     ),
-    name: Flag.string("name").pipe(
+    name: Flag.String("name").pipe(
       Flag.withDescription("A new display name"),
       Flag.withSchema(Schemas.EntityName),
       Flag.optional,
     ),
-    clearName: Flag.boolean("clear-name").pipe(
+    clearName: Flag.Boolean("clear-name").pipe(
       Flag.withDescription("Remove the display name"),
       Flag.withDefault(false),
     ),
-    attr: Flag.keyValuePair("attr").pipe(
+    attr: Flag.KeyValuePair("attr").pipe(
       Flag.withDescription("Replace the whole attribute map, as repeated key=value pairs"),
       // The same bounds the service enforces, applied at parsing: too many entries or an
       // oversized key is refused here with a usable message rather than as a 400 after a round

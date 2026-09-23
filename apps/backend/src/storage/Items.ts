@@ -109,7 +109,7 @@ export const withOptional = (
   return merged;
 };
 
-export const StoredVersion = Schema.Literal(recordVersion);
+const StoredVersion = Schema.Literal(recordVersion);
 
 /** Every item carries the record version this code knows how to read; a different one is corrupt. */
 export const StoredVersionAttribute = Schema.Struct({

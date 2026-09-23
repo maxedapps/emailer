@@ -1,9 +1,10 @@
 import * as Schemas from "@emailer/api/Schemas";
-import { Duration, Effect, Layer, Option, Result } from "effect";
+import { ConfigProvider, Duration, Effect, Layer, Option, Result } from "effect";
 import { RateLimiter } from "effect/unstable/persistence";
 import { describe, expect, it } from "vitest";
 
 import { sendTest } from "./TestSends.ts";
+import { unsubscribeLink } from "../consent/Unsubscribe.ts";
 import { Mailer, SubmissionUncertain } from "../sending/Mailer.ts";
 import { SendGuard } from "../sending/SendGuard.ts";
 import { AudienceStore } from "../storage/Audience.ts";
@@ -29,7 +30,14 @@ const campaign: Schemas.Campaign = {
   submission: { state: "draft" },
 };
 
-const healthy: SendAllowance = { limit: 3, dailyExhausted: false, halted: Option.none() };
+const healthy: SendAllowance = { limit: 3, dailyExhausted: false, halted: false };
+
+const configuration = Layer.succeed(ConfigProvider.ConfigProvider)(
+  ConfigProvider.fromEnvRecord({
+    EMAILER_UNSUBSCRIBE_URL: "https://unsubscribe.example.com/",
+    EMAILER_UNSUBSCRIBE_SECRET: "8f14e45fceea167a5a36dedd4bea2543a1b2c3d4e5f60718293a4b5c6d7e8f90",
+  }),
+);
 
 const member = (n: number): Schemas.Contact => ({
   id: `0195f0a0-1111-4222-8333-4444444c${String(n).padStart(4, "0")}`,
@@ -52,6 +60,7 @@ interface Scenario {
 interface Sent {
   readonly recipient: string;
   readonly content: MessageContent;
+  readonly unsubscribeUrl: string;
   readonly purpose: SendPurpose;
 }
 
@@ -63,6 +72,7 @@ const fixture = (scenario: Scenario = {}) => {
   const statuses = new Map(scenario.statuses ?? []);
 
   const layer = Layer.mergeAll(
+    configuration,
     Layer.succeed(AudienceStore)({
       ...unusedAudience,
       listMembers: (_listId, limit) =>
@@ -97,9 +107,9 @@ const fixture = (scenario: Scenario = {}) => {
       deleteDraft: () => written("deleteDraft"),
     }),
     Layer.succeed(Mailer)({
-      send: (recipient, content, purpose) =>
+      send: (recipient, content, unsubscribeUrl, purpose) =>
         Effect.gen(function* () {
-          sent.push({ recipient, content, purpose });
+          sent.push({ recipient, content, unsubscribeUrl, purpose });
 
           const next = outcomes.shift();
 
@@ -157,10 +167,17 @@ describe("sendTest", () => {
             { email: "a@example.com", outcome: "accepted", messageId: "message-2" },
           ],
         });
+        const recipients = ["b@example.com", "a@example.com"];
+
+        const links = yield* Effect.forEach(recipients, (recipient) =>
+          unsubscribeLink(recipient).pipe(Effect.provide(configuration)),
+        );
+
         expect(fix.sent).toStrictEqual(
-          ["b@example.com", "a@example.com"].map((recipient) => ({
+          recipients.map((recipient, index) => ({
             recipient,
             content: { subject: "[Test] Release notes", text: campaign.text, html: campaign.html },
+            unsubscribeUrl: links[index],
             purpose: { kind: "test" },
           })),
         );
@@ -270,21 +287,8 @@ describe("sendTest", () => {
     ));
 
   it.each([
-    [
-      "a reputation halt",
-      { limit: 3, dailyExhausted: false, halted: Option.some("alarm" as const) },
-      "reputation",
-    ],
-    [
-      "an enforcement halt",
-      { limit: 3, dailyExhausted: false, halted: Option.some("enforcement" as const) },
-      "reputation",
-    ],
-    [
-      "a spent daily budget",
-      { limit: 3, dailyExhausted: true, halted: Option.none() },
-      "daily-quota",
-    ],
+    ["a reputation halt", { limit: 3, dailyExhausted: false, halted: true }, "reputation"],
+    ["a spent daily budget", { limit: 3, dailyExhausted: true, halted: false }, "daily-quota"],
   ] as const)("refuses to send during %s", (_label, allowance, reason) =>
     Effect.runPromise(
       Effect.gen(function* () {

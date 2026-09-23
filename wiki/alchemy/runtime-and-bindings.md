@@ -2,7 +2,7 @@
 
 [Alchemy](alchemy.md)
 
-API examples target Alchemy `2.0.0-beta.77` with Effect `4.0.0-rc.112`.
+API examples target Alchemy `2.0.0-beta.79` with Effect `4.0.0-rc.117`.
 
 Related: [Effect Layers](../effect/services-and-layers.md)
 
@@ -22,15 +22,15 @@ The outer Effect in an Alchemy Lambda declaration runs during planning and again
 
 **A `Config` read inside a Function is a deploy-time capture, not a runtime lookup.** Alchemy wraps the Function's `ConfigProvider` (`Platform.ts`): during planning it loads each requested path from the **deploy machine's** environment and binds the resolved value into the function's runtime context, which materializes as a Lambda environment variable; at runtime the same read returns that stored value rather than consulting the ambient provider. Two consequences follow.
 
-First, **the outer constructor can only read configuration that exists where the deploy runs.** A value you pin into `env` from the props effect — a generated physical name, say — has nothing to capture at plan time, so `yield* Config.string("MY_PINNED_VALUE")` in the constructor fails **at plan** with `ConfigError: Expected string at ["MY_PINNED_VALUE"]`. Read such values inside the handler or the event-source callback, which run only per invocation. A value that exists on the deploy machine as well — an API token, a sender address — is the ordinary case: the constructor read works in both phases precisely because the deploy process supplies it too. The stage itself needs no `Config` read at all: `Stack` is provided in both phases, at deploy time by the CLI and at cold start by the bootstrap from the `ALCHEMY_STACK_NAME`/`ALCHEMY_STAGE` variables the Function injects.
+First, **the outer constructor can only read configuration that exists where the deploy runs.** A value you pin into `env` from the props effect — a generated physical name, say — has nothing to capture at plan time, so `yield* Config.String("MY_PINNED_VALUE")` in the constructor fails **at plan** with `ConfigError: Expected string at ["MY_PINNED_VALUE"]`. Read such values inside the handler or the event-source callback, which run only per invocation. A value that exists on the deploy machine as well — an API token, a sender address — is the ordinary case: the constructor read works in both phases precisely because the deploy process supplies it too. The stage itself needs no `Config` read at all: `Stack` is provided in both phases, at deploy time by the CLI and at cold start by the bootstrap from the `ALCHEMY_STACK_NAME`/`ALCHEMY_STAGE` variables the Function injects.
 
-Second, **every constructor `Config` read becomes a deployed environment variable.** That is why a bearer token read with `Config.redacted` in the constructor is available at cold start without anyone writing it into `env`, and why `alchemy plan --detailed` prints it back: it is bound configuration by then. Treat any secret read this way as present in the function's environment and visible to `lambda:GetFunctionConfiguration`.
+Second, **every constructor `Config` read becomes a deployed environment variable.** That is why a bearer token read with `Config.Redacted` in the constructor is available at cold start without anyone writing it into `env`, and why `alchemy plan --detailed` prints it back: it is bound configuration by then. Treat any secret read this way as present in the function's environment and visible to `lambda:GetFunctionConfiguration`.
 
 Alchemy's Lambda invocation Scope is settled before the response returns. There is no reliable `waitUntil` equivalent for work after a Lambda response. Hard failures can prevent instance finalization. The phase marker and `__ALCHEMY_RUNTIME__` guard are implementation machinery; application code normally uses bindings and correctly placed handlers instead. [Lambda lifecycle](https://alchemy.run/aws/compute/lambda/)
 
 ### HandlerContext is available
 
-The generated native handler provides `AWS.Lambda.HandlerContext` — the Lambda `context` object — per invocation, for HTTP and queue handlers alike (`Function.ts` succeeds the service with the native `context` before running the effect). It is **not** in `FunctionServices` and is not present during planning or cold-start construction. A deadline that must be testable with `TestClock` can use the Effect `Clock` plus the configured timeout instead of `getRemainingTimeInMillis`. [HandlerContext](https://unpkg.com/alchemy@2.0.0-beta.77/src/AWS/Lambda/Function.ts)
+The generated native handler provides `AWS.Lambda.HandlerContext` — the Lambda `context` object — per invocation, for HTTP and queue handlers alike (`Function.ts` succeeds the service with the native `context` before running the effect). It is **not** in `FunctionServices` and is not present during planning or cold-start construction. A deadline that must be testable with `TestClock` can use the Effect `Clock` plus the configured timeout instead of `getRemainingTimeInMillis`. [HandlerContext](https://unpkg.com/alchemy@2.0.0-beta.79/src/AWS/Lambda/Function.ts)
 
 ### Build a function's services once
 
@@ -68,7 +68,7 @@ export const signerProps = Effect.gen(function* () {
 });
 ```
 
-Declare it once in the module that owns it and bind that single declaration into every function that needs it, rather than repeating the call per function. Read it in the handler with `Config.redacted`; the outer constructor cannot, because the value does not exist on the deploy machine.
+Declare it once in the module that owns it and bind that single declaration into every function that needs it, rather than repeating the call per function. Read it in the handler with `Config.Redacted`; the outer constructor cannot, because the value does not exist on the deploy machine.
 
 Three properties to accept before adopting it:
 
@@ -107,7 +107,7 @@ export const makeSender = Effect.gen(function* () {
 }).pipe(Effect.provide(AWS.SES.SendEmailHttp));
 ```
 
-This demonstrates binding placement only. It omits workload-specific authorization, recipient policy, rate control and failure handling. The binding injects `ConfigurationSetName`; do not pass it as if this were an unbound SDK call. [Versioned SendEmail contract](https://unpkg.com/alchemy@2.0.0-beta.77/src/AWS/SES/SendEmail.ts)
+This demonstrates binding placement only. It omits workload-specific authorization, recipient policy, rate control and failure handling. The binding injects `ConfigurationSetName`; do not pass it as if this were an unbound SDK call. [Versioned SendEmail contract](https://unpkg.com/alchemy@2.0.0-beta.79/src/AWS/SES/SendEmail.ts)
 
 ## Hide infrastructure behind domain services
 

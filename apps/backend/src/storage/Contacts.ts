@@ -24,7 +24,7 @@ import type {
   UpdatePrimitives,
 } from "./Primitives.ts";
 
-export const contactKind = "contact";
+const contactKind = "contact";
 
 export const contactKey = (contactId: string) => ({
   pk: str(`CONTACT#${contactId}`),
@@ -145,7 +145,7 @@ const contactChange = (
   };
 };
 
-export type UpdateContactOutcome =
+type UpdateContactOutcome =
   | { readonly outcome: "updated"; readonly contact: Schemas.Contact }
   | { readonly outcome: "contact-missing" }
   | { readonly outcome: "email-taken"; readonly email: string }

@@ -1,17 +1,29 @@
 import { NodeCrypto } from "@effect/platform-node";
 import * as Schemas from "@emailer/api/Schemas";
-import { Clock, Duration, Effect, Fiber, Layer, Logger, Option, Result } from "effect";
+import {
+  Clock,
+  ConfigProvider,
+  Duration,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Logger,
+  Option,
+  Result,
+} from "effect";
 import { TestClock } from "effect/testing";
 import { RateLimiter } from "effect/unstable/persistence";
 import { describe, expect, it } from "vitest";
 
+import { unsubscribeLink } from "../consent/Unsubscribe.ts";
 import { memberPageSize, runSlice, SliceOverrun } from "./Dispatching.ts";
 import { CampaignWake } from "./Dispatch.ts";
 import { Mailer, SubmissionUncertain } from "./Mailer.ts";
 import { SendGuard } from "./SendGuard.ts";
 import { AudienceStore } from "../storage/Audience.ts";
 import { CampaignStore } from "../storage/Campaigns.ts";
-import { unusedAudience } from "../storage/Testing.ts";
+import { unusedAudience, unusedCampaigns } from "../storage/Testing.ts";
 
 import type { PauseReason } from "@emailer/api/Schemas";
 import type { SendPurpose, SubmissionOutcome } from "./Mailer.ts";
@@ -55,12 +67,20 @@ const text = "Hello there";
 const defaultGuard: SendAllowance = {
   limit: 8,
   dailyExhausted: false,
-  halted: Option.none(),
+  halted: false,
 };
 
 const zeros = { accepted: 0, bounced: 0, complained: 0 };
 
 const sliceTimeout = Duration.minutes(5);
+
+const unsubscribeEnv = {
+  EMAILER_UNSUBSCRIBE_URL: "https://unsubscribe.example.com/",
+  EMAILER_UNSUBSCRIBE_SECRET: "8f14e45fceea167a5a36dedd4bea2543a1b2c3d4e5f60718293a4b5c6d7e8f90",
+};
+
+const configurationOf = (env: Readonly<Record<string, string>>) =>
+  Layer.succeed(ConfigProvider.ConfigProvider)(ConfigProvider.fromEnvRecord(env));
 
 interface RecipientRow {
   readonly sendId?: string;
@@ -135,9 +155,6 @@ const emptyWorld = (): World => ({
   run: { ...zeros },
 });
 
-const notExercised = (operation: string) =>
-  Effect.die(new Error(`CampaignStore.${operation} is not exercised by this test`));
-
 const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> =>
   Layer.mergeAll(
     Layer.succeed(AudienceStore)({
@@ -160,18 +177,9 @@ const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> 
         }),
     }),
     Layer.succeed(CampaignStore)({
-      createCampaign: () => notExercised("createCampaign"),
+      ...unusedCampaigns,
       getCampaignBody: () =>
         Effect.succeed(world.html === undefined ? { text } : { text, html: world.html }),
-      getCampaign: () => notExercised("getCampaign"),
-      updateDraft: () => notExercised("updateDraft"),
-      deleteDraft: () => notExercised("deleteDraft"),
-      listCampaigns: () => notExercised("listCampaigns"),
-      getCampaignControl: () => notExercised("getCampaignControl"),
-      enqueueCampaign: () => notExercised("enqueueCampaign"),
-      scheduleCampaign: () => notExercised("scheduleCampaign"),
-      resumeCampaign: () => notExercised("resumeCampaign"),
-      cancelCampaign: () => notExercised("cancelCampaign"),
       beginRun: (_id, token) =>
         Effect.sync(() => {
           if (world.beginOutcome === "stale" || token !== world.runToken) {
@@ -342,6 +350,7 @@ const limiterDouble = (delays: ReadonlyArray<Duration.Duration> = []): LimiterDo
 
 interface SentMessage extends MessageContent {
   readonly recipient: string;
+  readonly unsubscribeUrl: string;
   readonly purpose: SendPurpose;
 }
 
@@ -357,9 +366,9 @@ const mailerDouble = (
   const remaining = [...outcomes];
 
   const layer = Layer.succeed(Mailer)({
-    send: (recipient, content, purpose) =>
+    send: (recipient, content, unsubscribeUrl, purpose) =>
       Effect.gen(function* () {
-        sent.push({ recipient, ...content, purpose });
+        sent.push({ recipient, ...content, unsubscribeUrl, purpose });
 
         const next = remaining.shift();
 
@@ -393,6 +402,7 @@ const wakeDouble = (): WakeDouble => {
 };
 
 interface Scenario {
+  readonly env?: Readonly<Record<string, string>>;
   readonly members?: ReadonlyArray<Schemas.Contact>;
   readonly nextCursor?: string;
   readonly cursor?: string;
@@ -464,6 +474,7 @@ const fixture = (scenario: Scenario = {}): Fixture => {
       limiter.layer,
       Layer.succeed(SendGuard)({ current: Effect.succeed(guard) }),
       NodeCrypto.layer,
+      configurationOf(scenario.env ?? unsubscribeEnv),
     ),
   };
 };
@@ -557,6 +568,11 @@ describe("runSlice", () => {
             { kind: "campaign", campaignId, sendId: fix.world.rows.get(memberA.id)?.sendId },
           ]);
           expect(fix.mailer.sent[0]?.subject).toBe(subject);
+          expect(fix.mailer.sent[0]?.unsubscribeUrl).toBe(
+            yield* unsubscribeLink(memberA.email).pipe(
+              Effect.provide(configurationOf(unsubscribeEnv)),
+            ),
+          );
         }),
       ),
     ));
@@ -793,6 +809,28 @@ describe("runSlice", () => {
       ),
     ));
 
+  it("claims no recipient when the unsubscribe link cannot be minted", () =>
+    Effect.runPromise(
+      onTestClock(
+        Effect.gen(function* () {
+          const fix = fixture({
+            env: { EMAILER_UNSUBSCRIBE_SECRET: unsubscribeEnv.EMAILER_UNSUBSCRIBE_SECRET },
+          });
+
+          const now = yield* Clock.currentTimeMillis;
+
+          const exit = yield* Effect.exit(
+            runSlice({ campaignId, runToken }, now + Duration.toMillis(sliceTimeout)),
+          ).pipe(Effect.provide(fix.layer));
+
+          expect(Exit.hasDies(exit)).toBe(true);
+          expect(fix.world.claims).toHaveLength(0);
+          expect(fix.world.rows.size).toBe(0);
+          expect(fix.mailer.sent).toHaveLength(0);
+        }),
+      ),
+    ));
+
   it("enqueues nothing when a checkpoint is lost", () =>
     Effect.runPromise(
       onTestClock(
@@ -871,7 +909,7 @@ describe("runSlice", () => {
         Effect.gen(function* () {
           const fix = fixture({
             cursor: memberA.id,
-            guard: { limit: 8, dailyExhausted: true, halted: Option.none() },
+            guard: { limit: 8, dailyExhausted: true, halted: false },
           });
 
           successOf(yield* runSliceNow(fix));
@@ -905,7 +943,7 @@ describe("runSlice", () => {
         Effect.gen(function* () {
           const fix = fixture({
             members: [memberA, memberB],
-            guard: { limit: 3, dailyExhausted: false, halted: Option.none() },
+            guard: { limit: 3, dailyExhausted: false, halted: false },
             outcomes: [
               { outcome: "rejected", rejectionCode: "message-rejected" },
               { outcome: "accepted", messageId: "ses-message" },
@@ -927,7 +965,7 @@ describe("runSlice", () => {
         Effect.gen(function* () {
           const fix = fixture({
             cursor: memberA.id,
-            guard: { limit: 8, dailyExhausted: false, halted: Option.some("alarm") },
+            guard: { limit: 8, dailyExhausted: false, halted: true },
           });
 
           successOf(yield* runSliceNow(fix));
@@ -1028,7 +1066,7 @@ describe("runSlice", () => {
         Effect.gen(function* () {
           const fix = fixture({
             cursor: memberA.id,
-            guard: { limit: 8, dailyExhausted: true, halted: Option.some("enforcement") },
+            guard: { limit: 8, dailyExhausted: true, halted: true },
             run: { accepted: 200, bounced: 200, complained: 0 },
           });
 
@@ -1046,7 +1084,7 @@ describe("runSlice", () => {
         Effect.gen(function* () {
           const fix = fixture({
             cursor: memberA.id,
-            guard: { limit: 8, dailyExhausted: true, halted: Option.none() },
+            guard: { limit: 8, dailyExhausted: true, halted: false },
             run: { accepted: 200, bounced: 200, complained: 0 },
           });
 

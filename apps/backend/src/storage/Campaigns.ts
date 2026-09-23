@@ -19,9 +19,7 @@ import {
   withOptional,
 } from "./Items.ts";
 import { allPrimitives, readPrimitives } from "./Primitives.ts";
-
-import type { TransactionTokens } from "./Primitives.ts";
-import { dataTable } from "./Table.ts";
+import { AllTableOperationsHttp, allTableOperations, dataTable } from "./Table.ts";
 
 import type { TableOperations } from "./Items.ts";
 import type {
@@ -29,13 +27,14 @@ import type {
   ReadPrimitives,
   StoredPage,
   TransactionPrimitives,
+  TransactionTokens,
   UpdatePrimitives,
   WritePrimitives,
 } from "./Primitives.ts";
 
-export const campaignKind = "campaign";
+const campaignKind = "campaign";
 
-export const sendKey = (campaignId: string, contactId: string) => ({
+const sendKey = (campaignId: string, contactId: string) => ({
   pk: str(`CAMPAIGN#${campaignId}`),
   sk: str(`SEND#${contactId}`),
 });
@@ -92,7 +91,7 @@ export type RecipientSettlement =
   | { readonly state: "rejected"; readonly rejectionCode: Schemas.RejectionCode }
   | { readonly state: "uncertain" };
 
-export interface CampaignRun {
+interface CampaignRun {
   readonly listId: string;
   readonly subject: string;
   readonly cursor: string | undefined;
@@ -241,7 +240,7 @@ const settlementWrite = (settlement: RecipientSettlement) => {
 };
 
 /** The two reads a campaign's content needs, and all the public preview function may do. */
-export const campaignReads = (primitives: ReadPrimitives) => {
+const campaignReads = (primitives: ReadPrimitives) => {
   const { readItem } = primitives;
 
   // No absent case: every caller holds a META that proves the campaign exists, so a missing body
@@ -906,32 +905,9 @@ export const CampaignReaderLive = Layer.effect(CampaignReader)(
 
 export const CampaignStoreLive = Layer.effect(CampaignStore)(
   Effect.gen(function* () {
-    const table = yield* dataTable;
+    const operations = yield* allTableOperations;
     const crypto = yield* Crypto.Crypto;
 
-    return CampaignStore.of(
-      campaignStoreOperations(
-        {
-          getItem: yield* AWS.DynamoDB.GetItem(table),
-          batchGetItem: yield* AWS.DynamoDB.BatchGetItem(table),
-          putItem: yield* AWS.DynamoDB.PutItem(table),
-          updateItem: yield* AWS.DynamoDB.UpdateItem(table),
-          query: yield* AWS.DynamoDB.Query(table),
-          transactWriteItems: yield* AWS.DynamoDB.TransactWriteItems(table),
-        },
-        Effect.orDie(crypto.randomUUIDv4),
-      ),
-    );
+    return CampaignStore.of(campaignStoreOperations(operations, Effect.orDie(crypto.randomUUIDv4)));
   }),
-).pipe(
-  Layer.provide(
-    Layer.mergeAll(
-      AWS.DynamoDB.GetItemHttp,
-      AWS.DynamoDB.BatchGetItemHttp,
-      AWS.DynamoDB.PutItemHttp,
-      AWS.DynamoDB.UpdateItemHttp,
-      AWS.DynamoDB.QueryHttp,
-      AWS.DynamoDB.TransactWriteItemsHttp,
-    ),
-  ),
-);
+).pipe(Layer.provide(AllTableOperationsHttp));

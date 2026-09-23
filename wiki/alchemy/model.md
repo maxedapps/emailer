@@ -2,7 +2,7 @@
 
 [Alchemy](alchemy.md)
 
-API examples target Alchemy `2.0.0-beta.77` with Effect `4.0.0-rc.112`.
+API examples target Alchemy `2.0.0-beta.79` with Effect `4.0.0-rc.117`.
 
 Alchemy v2 describes infrastructure with Effect programs. A declaration constructs an Effect; yielding a resource records it in the desired graph. The deployment engine subsequently plans and reconciles cloud objects. Arbitrary side effects you add to the program are still ordinary executable code, so keep graph construction free of application writes. [Alchemy model](https://alchemy.run/what-is-alchemy/), [Resources](https://alchemy.run/infrastructure-as-code/resource/)
 

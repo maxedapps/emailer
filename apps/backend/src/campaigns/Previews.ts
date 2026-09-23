@@ -11,7 +11,7 @@ export const previewSecret = Random("PreviewSecret");
 /** The bare tag: the API references the preview function's URL without bundling its handler. */
 export class PreviewFunction extends AWS.Lambda.Function<PreviewFunction>()("Preview") {}
 
-export const previewSigningKey = Config.redacted("EMAILER_PREVIEW_SECRET");
+export const previewSigningKey = Config.Redacted("EMAILER_PREVIEW_SECRET");
 
 /** Long enough for a day of editing, short enough that a forwarded link stops working by itself. */
 const previewLifetime = Duration.hours(24);
@@ -51,7 +51,7 @@ export const verifyPreviewToken = (
 /** Read per call, like the unsubscribe link: the URL exists only once the preview function does. */
 export const previewLink = Effect.fn("Previews.previewLink")(function* (campaignId: string) {
   const configured = yield* Config.all({
-    baseUrl: Config.string("EMAILER_PREVIEW_URL"),
+    baseUrl: Config.String("EMAILER_PREVIEW_URL"),
     signingKey: previewSigningKey,
   });
 

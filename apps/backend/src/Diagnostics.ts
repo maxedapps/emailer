@@ -25,7 +25,7 @@ export const describeCause = (cause: unknown): string =>
       Option.match(asNamed(cause), {
         onSome: (named) => named.name,
         // A native error keeps `name` on its prototype, where a schema reading own properties
-        // never finds it — so a defect that reached here would have classified as "unknown"
+        // never finds it — so without this a defect that reaches here classifies as "unknown"
         // rather than as the `TypeError` it is.
         onNone: () => (cause instanceof Error ? cause.name : "unknown"),
       }),

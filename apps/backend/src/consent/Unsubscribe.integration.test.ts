@@ -13,13 +13,14 @@ import {
   awaitAddressStatus,
   awaitCampaignState,
   campaignStateTimeout,
-  contactFor,
   configuration,
+  contactFor,
   live,
   liveStorage,
   sendRows,
   sendToSimulatorList,
   simulator,
+  submitted,
   uniqueAddress,
   unsubscribeSettings,
 } from "../../test/IntegrationSupport.ts";
@@ -105,9 +106,9 @@ describe("one-click unsubscribe", () => {
             },
           });
 
-          const queued = yield* sendToSimulatorList(client, list.id, second.id);
+          const resent = yield* sendToSimulatorList(client, list.id, second.id);
 
-          expect(queued.submission.state).toBe("queued");
+          expect(submitted.includes(resent.submission.state)).toBe(true);
 
           const skipped = yield* awaitCampaignState(client, second.id, "completed", timeout);
 

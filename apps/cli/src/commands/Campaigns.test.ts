@@ -3,7 +3,6 @@ import * as Schemas from "@emailer/api/Schemas";
 import { Effect } from "effect";
 // oxlint-disable-next-line effecttsgo/node-builtin-import
 import { randomUUID } from "node:crypto";
-// oxlint-disable-next-line effecttsgo/node-builtin-import
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 
@@ -823,13 +822,16 @@ describe("campaign management from the command line", () => {
     60_000,
   );
 
-  it(
-    "refuses a list of more than twenty members before asking or sending",
-    () =>
+  it.each([
+    ["asking", ["--list", listId], "y"],
+    ["--yes", ["--list", listId, "--yes"], undefined],
+  ] as const)(
+    "refuses a list of more than twenty members before sending, under %s",
+    (_label, args, stdin) =>
       Effect.runPromise(
         Effect.gen(function* () {
           const crowd = Array.from({ length: 21 }, (_, n) => `r${n}@example.com`);
-          const { service, result } = yield* testRun(["--list", listId], "y", crowd);
+          const { service, result } = yield* testRun([...args], stdin, crowd);
 
           expect(result.exitCode).not.toBe(0);
           expect(result.stderr).toContain('"Readers" has more than 20 members');

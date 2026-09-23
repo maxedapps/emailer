@@ -31,7 +31,7 @@ export const belongsToIdentity = (sender: string, identity: string): boolean => 
   return domain === identity || domain.endsWith(`.${identity}`);
 };
 
-export const postalAddress = Config.schema(
+const postalAddress = Config.schema(
   Schema.Trim.check(Schema.isNonEmpty()),
   "EMAILER_POSTAL_ADDRESS",
 );
@@ -44,8 +44,8 @@ const decodeAddress = Schema.decodeUnknownEffect(Schemas.EmailAddress);
  */
 export const senderSettings = Effect.gen(function* () {
   const raw = yield* Config.all({
-    identity: Config.string("EMAILER_SENDER_IDENTITY"),
-    sender: Config.string("EMAILER_FROM_EMAIL"),
+    identity: Config.String("EMAILER_SENDER_IDENTITY"),
+    sender: Config.String("EMAILER_FROM_EMAIL"),
     postalAddress,
   });
 

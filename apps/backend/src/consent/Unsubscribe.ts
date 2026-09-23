@@ -1,9 +1,7 @@
 import * as Schemas from "@emailer/api/Schemas";
 import { Random } from "alchemy";
 import * as AWS from "alchemy/AWS";
-import { Config, Effect, Option, Redacted, Schema } from "effect";
-// oxlint-disable-next-line effecttsgo/node-builtin-import
-import { Buffer } from "node:buffer";
+import { Config, Effect, Encoding, Option, Redacted, Result, Schema } from "effect";
 
 import * as SignedToken from "../SignedToken.ts";
 
@@ -13,7 +11,7 @@ export class UnsubscribeFunction extends AWS.Lambda.Function<UnsubscribeFunction
   "Unsubscribe",
 ) {}
 
-export const unsubscribeSigningKey = Config.redacted("EMAILER_UNSUBSCRIBE_SECRET");
+export const unsubscribeSigningKey = Config.Redacted("EMAILER_UNSUBSCRIBE_SECRET");
 
 /** Unpadded base64url expands three input bytes into four characters, rounding up. */
 const encodedLength = (bytes: number): number => Math.ceil((bytes * 4) / 3);
@@ -27,8 +25,7 @@ export const maxTokenLength = SignedToken.lengthFor([encodedLength(Schemas.maxEm
 
 const decodeMailbox = Schema.decodeUnknownOption(Schemas.NormalizedEmailAddress);
 
-const encodePayload = (mailbox: string): string =>
-  Buffer.from(mailbox, "utf8").toString("base64url");
+const encodePayload = (mailbox: string): string => Encoding.encodeBase64Url(mailbox);
 
 /**
  * A link names the mailbox it was issued to, not the contact that happened to hold it. Contacts are
@@ -38,23 +35,18 @@ const encodePayload = (mailbox: string): string =>
 export const mintToken = (signingKey: Redacted.Redacted<string>, email: string): string =>
   SignedToken.sign(signingKey, [encodePayload(Schemas.mailboxKey(email))]);
 
-const mailboxOf = (payload: string): Option.Option<string> => {
-  const mailbox = Buffer.from(payload, "base64url").toString("utf8");
-
-  // base64url decoding is lenient: several encodings, including ones with unused trailing bits set,
-  // decode to the same bytes. Requiring the round trip means exactly one token names any mailbox.
-  if (encodePayload(mailbox) !== payload) {
-    return Option.none();
-  }
-
-  // A valid signature proves we issued the token, not that the key we signed still names a mailbox
-  // this system accepts — the address schema may have tightened since. Canonical form is required
-  // as well, so a signed mixed-case payload cannot address the lowercase consent record.
-  return Option.filter(
-    decodeMailbox(mailbox),
-    (address) => address === Schemas.mailboxKey(address),
+const mailboxOf = (payload: string): Option.Option<string> =>
+  Result.getSuccess(Encoding.decodeBase64UrlString(payload)).pipe(
+    // base64url decoding is lenient: several encodings, including ones with unused trailing bits
+    // set, decode to the same bytes. Requiring the round trip means exactly one token names any
+    // mailbox.
+    Option.filter((mailbox) => encodePayload(mailbox) === payload),
+    // A valid signature proves we issued the token, not that the key we signed still names a
+    // mailbox this system accepts — the address schema may have tightened since. Canonical form is
+    // required as well, so a signed mixed-case payload cannot address the lowercase consent record.
+    Option.flatMap(decodeMailbox),
+    Option.filter((address) => address === Schemas.mailboxKey(address)),
   );
-};
 
 /** Nothing decodes an attacker-supplied payload until the signature has established that we issued it. */
 export const verifyToken = (
@@ -66,9 +58,14 @@ export const verifyToken = (
     ([payload = ""]) => mailboxOf(payload),
   );
 
+/**
+ * Read per call, not at construction: the URL and key are env pinned from the function's props,
+ * which a constructor read would look for on the deploy machine at plan time. A sender mints before
+ * it changes any state, so a link that cannot be minted stops it with nothing to undo.
+ */
 export const unsubscribeLink = Effect.fn("Unsubscribe.unsubscribeLink")(function* (email: string) {
   const configured = yield* Config.all({
-    baseUrl: Config.string("EMAILER_UNSUBSCRIBE_URL"),
+    baseUrl: Config.String("EMAILER_UNSUBSCRIBE_URL"),
     signingKey: unsubscribeSigningKey,
   });
 

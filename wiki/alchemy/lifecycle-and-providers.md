@@ -2,7 +2,7 @@
 
 [Alchemy](alchemy.md)
 
-API examples target Alchemy `2.0.0-beta.77` with Effect `4.0.0-rc.112`.
+API examples target Alchemy `2.0.0-beta.79` with Effect `4.0.0-rc.117`.
 
 Related: [State](environments-and-state.md)
 
@@ -53,7 +53,7 @@ Treat reconciliation as observe → decide → mutate → observe readiness → 
 
 Separate not-found, authorization, validation, conflict and transient transport failures. A forbidden read is not evidence that a resource is absent. An asynchronous cloud update needs a readiness check before dependents receive attributes that imply it is usable. Deletion should accept an already-absent object and handle dependencies or asynchronous termination explicitly.
 
-Where enumeration is implemented, paginate `list` and return accurate live-resource identity. Beta.77's helper supplies an empty default for omitted listing; that permits construction but cannot discover real inventory. Broad inventory or cleanup operations are only as complete as each provider's listing implementation. [Provider helper source](https://unpkg.com/alchemy@2.0.0-beta.77/src/Provider.ts)
+Where enumeration is implemented, paginate `list` and return accurate live-resource identity. Beta.79's helper supplies an empty default for omitted listing; that permits construction but cannot discover real inventory. Broad inventory or cleanup operations are only as complete as each provider's listing implementation. [Provider helper source](https://unpkg.com/alchemy@2.0.0-beta.79/src/Provider.ts)
 
 For a replacement, ask two distinct questions: can the cloud mutate this property in place, and how does existing application data move? A provider can correctly replace a table while leaving data migration entirely unresolved. Likewise, retention preserves a physical object but changes its management relationship. Review both cloud identity and data lifecycle before relying on a plan's classification.
 

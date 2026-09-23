@@ -13,22 +13,20 @@ import { allPrimitives } from "./Primitives.ts";
 import type { TransactionTokens } from "./Primitives.ts";
 
 import type { AudienceOperations } from "./Audience.ts";
+import type { CampaignStoreOperations } from "./Campaigns.ts";
 
 import type { TableOperations } from "./Items.ts";
 import type { StorageFailure } from "./Errors.ts";
 
-export type GetItemReply = Effect.Effect<dynamodb.GetItemOutput, dynamodb.GetItemError>;
+type GetItemReply = Effect.Effect<dynamodb.GetItemOutput, dynamodb.GetItemError>;
 
-export type BatchGetItemReply = Effect.Effect<
-  dynamodb.BatchGetItemOutput,
-  dynamodb.BatchGetItemError
->;
+type BatchGetItemReply = Effect.Effect<dynamodb.BatchGetItemOutput, dynamodb.BatchGetItemError>;
 
-export type PutItemReply = Effect.Effect<dynamodb.PutItemOutput, dynamodb.PutItemError>;
+type PutItemReply = Effect.Effect<dynamodb.PutItemOutput, dynamodb.PutItemError>;
 
-export type UpdateItemReply = Effect.Effect<dynamodb.UpdateItemOutput, dynamodb.UpdateItemError>;
+type UpdateItemReply = Effect.Effect<dynamodb.UpdateItemOutput, dynamodb.UpdateItemError>;
 
-export type QueryReply = Effect.Effect<dynamodb.QueryOutput, dynamodb.QueryError>;
+type QueryReply = Effect.Effect<dynamodb.QueryOutput, dynamodb.QueryError>;
 
 export type TransactionReply = Effect.Effect<
   dynamodb.TransactWriteItemsOutput,
@@ -143,12 +141,6 @@ export const campaignId = "0195f0a0-1111-4222-8333-4444444ca409";
 export const createdAt = "2026-09-11T10:00:00.000Z";
 
 /**
- * Every primitive over a scripted table, so a suite can exercise one item group through its own
- * factory — `contactOperations(primitivesFor(table.operations))` — instead of standing up a whole
- * application store. A capability that needs fewer operations takes fewer primitives, and its
- * suite can say so by building only those.
- */
-/**
  * Deterministic transaction tokens, numbered by the requests already sent: the first logical call
  * carries `token-1`, and a call the store retries as a new one carries the next number, while a
  * repeat the client sends on its own carries the same token because nothing new was issued.
@@ -156,38 +148,65 @@ export const createdAt = "2026-09-11T10:00:00.000Z";
 export const tokensFor = (sent: ReadonlyArray<unknown>): TransactionTokens =>
   Effect.sync(() => `token-${sent.length + 1}`);
 
+/**
+ * Every primitive over a scripted table, so a suite can exercise one item group through its own
+ * factory — `contactOperations(primitivesFor(table))` — instead of standing up a whole application
+ * store.
+ */
 export const primitivesFor = (table: Table) =>
   allPrimitives(table.operations, tokensFor(table.transactionRequests));
 
-const notExercised = (operation: string) =>
-  Effect.die(new Error(`AudienceStore.${operation} is not exercised by this test`));
+const notExercised = (capability: string, operation: string) =>
+  Effect.die(new Error(`${capability}.${operation} is not exercised by this test`));
 
 /**
- * `AudienceStore` is the one capability large enough that listing every operation in every suite
- * would be noise. Spreading this and overriding what a test exercises reports an operation reached
- * by accident rather than answering it with a plausible-looking default.
+ * `AudienceStore` and `CampaignStore` are the two capabilities large enough that listing every
+ * operation in every suite would be noise. Spreading one of these and overriding what a test
+ * exercises reports an operation reached by accident rather than answering it with a
+ * plausible-looking default.
  *
- * There is deliberately no equivalent for CampaignStore or the two writers: suites still state
- * those operations in full — which is the point of splitting them. A feedback test cannot reach a
+ * The narrow writers, `FeedbackStore` and `UnsubscribeStore`, have no stub: their suites state
+ * those operations in full, which is the point of splitting them. A feedback test cannot reach a
  * contact read, because its service does not have one.
  */
 export const unusedAudience: AudienceOperations = {
-  createContact: () => notExercised("createContact"),
-  getContact: () => notExercised("getContact"),
-  getContactByEmail: () => notExercised("getContactByEmail"),
-  listContacts: () => notExercised("listContacts"),
-  updateContact: () => notExercised("updateContact"),
-  deleteContact: () => notExercised("deleteContact"),
-  createList: () => notExercised("createList"),
-  getList: () => notExercised("getList"),
-  listLists: () => notExercised("listLists"),
-  renameList: () => notExercised("renameList"),
-  deleteList: () => notExercised("deleteList"),
-  addMember: () => notExercised("addMember"),
-  removeMember: () => notExercised("removeMember"),
-  listMembers: () => notExercised("listMembers"),
-  importContacts: () => notExercised("importContacts"),
-  addressStatus: () => notExercised("addressStatus"),
-  addressRecord: () => notExercised("addressRecord"),
-  unsuppress: () => notExercised("unsuppress"),
+  createContact: () => notExercised("AudienceStore", "createContact"),
+  getContact: () => notExercised("AudienceStore", "getContact"),
+  getContactByEmail: () => notExercised("AudienceStore", "getContactByEmail"),
+  listContacts: () => notExercised("AudienceStore", "listContacts"),
+  updateContact: () => notExercised("AudienceStore", "updateContact"),
+  deleteContact: () => notExercised("AudienceStore", "deleteContact"),
+  createList: () => notExercised("AudienceStore", "createList"),
+  getList: () => notExercised("AudienceStore", "getList"),
+  listLists: () => notExercised("AudienceStore", "listLists"),
+  renameList: () => notExercised("AudienceStore", "renameList"),
+  deleteList: () => notExercised("AudienceStore", "deleteList"),
+  addMember: () => notExercised("AudienceStore", "addMember"),
+  removeMember: () => notExercised("AudienceStore", "removeMember"),
+  listMembers: () => notExercised("AudienceStore", "listMembers"),
+  importContacts: () => notExercised("AudienceStore", "importContacts"),
+  addressStatus: () => notExercised("AudienceStore", "addressStatus"),
+  addressRecord: () => notExercised("AudienceStore", "addressRecord"),
+  unsuppress: () => notExercised("AudienceStore", "unsuppress"),
+};
+
+export const unusedCampaigns: CampaignStoreOperations = {
+  createCampaign: () => notExercised("CampaignStore", "createCampaign"),
+  getCampaignBody: () => notExercised("CampaignStore", "getCampaignBody"),
+  getCampaign: () => notExercised("CampaignStore", "getCampaign"),
+  listCampaigns: () => notExercised("CampaignStore", "listCampaigns"),
+  getCampaignControl: () => notExercised("CampaignStore", "getCampaignControl"),
+  enqueueCampaign: () => notExercised("CampaignStore", "enqueueCampaign"),
+  scheduleCampaign: () => notExercised("CampaignStore", "scheduleCampaign"),
+  resumeCampaign: () => notExercised("CampaignStore", "resumeCampaign"),
+  cancelCampaign: () => notExercised("CampaignStore", "cancelCampaign"),
+  updateDraft: () => notExercised("CampaignStore", "updateDraft"),
+  deleteDraft: () => notExercised("CampaignStore", "deleteDraft"),
+  beginRun: () => notExercised("CampaignStore", "beginRun"),
+  claimRecipient: () => notExercised("CampaignStore", "claimRecipient"),
+  skipRecipient: () => notExercised("CampaignStore", "skipRecipient"),
+  settleRecipient: () => notExercised("CampaignStore", "settleRecipient"),
+  checkpoint: () => notExercised("CampaignStore", "checkpoint"),
+  completeRun: () => notExercised("CampaignStore", "completeRun"),
+  pauseRun: () => notExercised("CampaignStore", "pauseRun"),
 };

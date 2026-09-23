@@ -4,15 +4,15 @@ import * as Schemas from "@emailer/api/Schemas";
 import * as AWS from "alchemy/AWS";
 import { Context, Data, Duration, Effect, Layer } from "effect";
 
-import { unsubscribeLink } from "../consent/Unsubscribe.ts";
+import { describeCause } from "../Diagnostics.ts";
 import { sendingIdentity } from "../identity/SendingIdentity.ts";
 import { compose, senderSettings } from "./Message.ts";
 
 import type { MessageContent } from "./Message.ts";
 
-export const configurationSetLogicalId = "EmailerMail";
+const configurationSetLogicalId = "EmailerMail";
 
-export const eventDestinationLogicalId = "EmailerMailFeedback";
+const eventDestinationLogicalId = "EmailerMailFeedback";
 
 export const configurationSet = AWS.SES.ConfigurationSet(configurationSetLogicalId, {
   suppressedReasons: ["BOUNCE", "COMPLAINT"],
@@ -56,6 +56,7 @@ export class Mailer extends Context.Service<
     readonly send: (
       recipient: string,
       content: MessageContent,
+      unsubscribeUrl: string,
       purpose: SendPurpose,
     ) => Effect.Effect<SubmissionOutcome, SubmissionUncertain>;
   }
@@ -90,11 +91,10 @@ export const makeSend =
   (
     recipient: string,
     content: MessageContent,
+    unsubscribeUrl: string,
     purpose: SendPurpose,
   ): Effect.Effect<SubmissionOutcome, SubmissionUncertain> =>
     Effect.gen(function* () {
-      // Read per message rather than captured at construction: the link carries the recipient.
-      const unsubscribeUrl = yield* unsubscribeLink(recipient).pipe(Effect.orDie);
       const message = compose(content, unsubscribeUrl, postal);
       const text = { Text: { Data: message.text, Charset: "UTF-8" } };
 
@@ -138,6 +138,15 @@ export const makeSend =
         Effect.timeout(submissionTimeout),
         Effect.catchTag("TimeoutError", (cause) =>
           Effect.fail(new SubmissionUncertain({ reason: "timeout", cause })),
+        ),
+        // Callers record only that the outcome is unknown; why is logged here, where it is
+        // classified, reduced so neither the recipient nor an SDK payload reaches the log.
+        Effect.tapError((uncertain) =>
+          Effect.logWarning("submission uncertain", {
+            ...purpose,
+            reason: uncertain.reason,
+            cause: describeCause(uncertain.cause),
+          }),
         ),
       );
     });

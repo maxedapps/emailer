@@ -1,6 +1,6 @@
 import { makeEmailerClient } from "@emailer/api/Client";
 import type { EmailerClient } from "@emailer/api/Client";
-import { Config, Console, Duration, Effect, Inspectable, Layer } from "effect";
+import { Config, Console, Duration, Effect, Inspectable } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 
 /**
@@ -12,8 +12,8 @@ import { FetchHttpClient } from "effect/unstable/http";
 const requestTimeout = Duration.seconds(70);
 
 const emailerClient = Effect.gen(function* () {
-  const url = yield* Config.string("EMAILER_API_URL");
-  const token = yield* Config.redacted("EMAILER_API_TOKEN");
+  const url = yield* Config.String("EMAILER_API_URL");
+  const token = yield* Config.Redacted("EMAILER_API_TOKEN");
 
   return yield* makeEmailerClient(url, token);
 });
@@ -25,6 +25,6 @@ export const withClient = <A>(
     const client = yield* emailerClient;
 
     return yield* use(client);
-  }).pipe(Effect.timeout(requestTimeout), Effect.provide(Layer.mergeAll(FetchHttpClient.layer)));
+  }).pipe(Effect.timeout(requestTimeout), Effect.provide(FetchHttpClient.layer));
 
 export const report = <Value>(value: Value) => Console.log(Inspectable.toStringUnknown(value));

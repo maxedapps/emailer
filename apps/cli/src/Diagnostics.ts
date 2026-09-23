@@ -30,7 +30,7 @@ const render = (cause: Cause.Cause<unknown>): string =>
  * It is deliberately not `NodeRuntime`'s default reporting: the runner reports outside the
  * program's context, which means outside any logger the program provided, and can write to stdout.
  */
-export const reportCause = (cause: Cause.Cause<unknown>): Effect.Effect<void> =>
+const reportCause = (cause: Cause.Cause<unknown>): Effect.Effect<void> =>
   shouldReport(cause) ? Console.error(`emailer: ${render(cause)}`) : Effect.void;
 
 /**

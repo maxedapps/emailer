@@ -23,7 +23,7 @@ export interface AlarmStates {
 export interface SendAllowance {
   readonly limit: number;
   readonly dailyExhausted: boolean;
-  readonly halted: Option.Option<"alarm" | "enforcement">;
+  readonly halted: boolean;
 }
 
 /**
@@ -56,22 +56,19 @@ export const sendGuard = (
   const enforcement =
     account.EnforcementStatus !== undefined && account.EnforcementStatus !== "HEALTHY";
 
+  // SES reports -1 for an account without a daily quota; only the ceiling then limits the day.
+  const quotaLimit =
+    max24HourSend === undefined || max24HourSend < 0 ? Infinity : max24HourSend * 0.9;
+
   return {
     limit: maxSendRate === undefined ? 1 : Math.max(1, Math.floor(maxSendRate * 0.8)),
     dailyExhausted:
-      max24HourSend === undefined
-        ? false
-        : sentLast24Hours >=
-          (ceiling === undefined ? max24HourSend * 0.9 : Math.min(max24HourSend * 0.9, ceiling)),
-    halted: alarmed
-      ? Option.some("alarm")
-      : enforcement
-        ? Option.some("enforcement")
-        : Option.none(),
+      max24HourSend !== undefined && sentLast24Hours >= Math.min(quotaLimit, ceiling ?? Infinity),
+    halted: alarmed || enforcement,
   };
 };
 
-const dailySendCeiling = Config.option(Config.int("EMAILER_DAILY_SEND_CEILING"));
+const dailySendCeiling = Config.option(Config.Int("EMAILER_DAILY_SEND_CEILING"));
 
 export const SendGuardLive = Layer.effect(SendGuard)(
   Effect.gen(function* () {

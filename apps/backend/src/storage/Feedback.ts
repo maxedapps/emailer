@@ -1,6 +1,6 @@
 import * as Schemas from "@emailer/api/Schemas";
 import * as AWS from "alchemy/AWS";
-import { Context, Crypto, Effect, Layer, Schema } from "effect";
+import { Context, Crypto, Effect, Layer } from "effect";
 
 import { suppressionWrites, transientKey } from "./Addresses.ts";
 import {
@@ -18,13 +18,9 @@ import { dataTable } from "./Table.ts";
 import type { TableOperations } from "./Items.ts";
 import type { TransactionPrimitives, TransactionTokens } from "./Primitives.ts";
 
-export const FeedbackKind = Schema.Literals(["bounce", "complaint"]);
+export type FeedbackKind = "bounce" | "complaint";
 
-export type FeedbackKind = typeof FeedbackKind.Type;
-
-export const FeedbackOutcome = Schema.Literals(["suppressed", "recorded"]);
-
-export type FeedbackOutcome = typeof FeedbackOutcome.Type;
+export type FeedbackOutcome = "suppressed" | "recorded";
 
 const feedbackKey = (
   campaignId: string,
@@ -171,7 +167,7 @@ export const feedbackWrites = (primitives: TransactionPrimitives) => {
  * transient window. Suppression stays a single conditional Put; history and counters share
  * `TransactWriteItems`.
  */
-export const feedbackStoreOperations = (
+const feedbackStoreOperations = (
   operations: Pick<TableOperations, "putItem" | "transactWriteItems">,
   tokens: TransactionTokens,
 ) => {

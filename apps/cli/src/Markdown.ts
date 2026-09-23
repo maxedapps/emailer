@@ -33,7 +33,7 @@ export const styles = {
   hr: "border:0;border-top:1px solid #d0d7de;margin:24px 0;",
 } as const;
 
-export const escapeHtml = (value: string): string =>
+const escapeHtml = (value: string): string =>
   value
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
@@ -45,7 +45,7 @@ export const escapeHtml = (value: string): string =>
  * The page every Markdown campaign shares: a fluid table capped at 600px, with an Outlook-only
  * fixed-width wrapper, on a light page colour the backend's footer repeats.
  */
-export const layout = (title: string, body: string): string => `<!doctype html>
+const layout = (title: string, body: string): string => `<!doctype html>
 <html lang="en" xmlns="http://www.w3.org/1999/xhtml" xmlns:o="urn:schemas-microsoft-com:office:office">
 <head>
 <meta charset="utf-8">

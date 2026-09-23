@@ -1,6 +1,6 @@
 import * as Schemas from "@emailer/api/Schemas";
-import { Effect } from "effect";
-import { Command, Flag } from "effect/unstable/cli";
+import { Effect, FileSystem, Schema } from "effect";
+import { CliError, Command, Flag } from "effect/unstable/cli";
 
 import { report, withClient } from "../Client.ts";
 import { entityPageFlags, idArgument, memberPageFlags, pageQuery } from "../Flags.ts";
@@ -8,7 +8,7 @@ import { entityPageFlags, idArgument, memberPageFlags, pageQuery } from "../Flag
 const listsCreate = Command.make(
   "create",
   {
-    name: Flag.string("name").pipe(
+    name: Flag.String("name").pipe(
       Flag.withDescription("The list's name"),
       Flag.withSchema(Schemas.EntityName),
     ),
@@ -71,7 +71,7 @@ const listsRename = Command.make(
   "rename",
   {
     id: idArgument("id"),
-    name: Flag.string("name").pipe(
+    name: Flag.String("name").pipe(
       Flag.withDescription("The list's new name"),
       Flag.withSchema(Schemas.EntityName),
     ),
@@ -109,14 +109,40 @@ const listsRemoveContact = Command.make(
   }),
 ).pipe(Command.withDescription("Remove a contact from a list; repeating it changes nothing"));
 
+const decodeImportFile = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(Schemas.ImportContactsPayload),
+  { onExcessProperty: "error" },
+);
+
+/**
+ * Read and decoded here rather than through `Flag.FileSchema`, whose decode drops keys the contract
+ * does not declare: a misspelled `attributs` would vanish and its contact would be imported without
+ * attributes. Rejecting the key names it before any request is made.
+ */
+const importFile = Flag.File("file", { mustExist: true }).pipe(
+  Flag.withDescription("A JSON file holding the contacts to load"),
+  Flag.mapEffect((path) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+
+      return yield* decodeImportFile(yield* fs.readFileString(path));
+    }).pipe(
+      Effect.mapError(
+        (error) =>
+          new CliError.InvalidValue({
+            option: "file",
+            value: path,
+            expected: error.message,
+            kind: "flag",
+          }),
+      ),
+    ),
+  ),
+);
+
 const listsImport = Command.make(
   "import",
-  {
-    listId: idArgument("listId"),
-    file: Flag.fileSchema("file", Schemas.ImportContactsPayload, { format: "json" }).pipe(
-      Flag.withDescription("A JSON file holding the contacts to load"),
-    ),
-  },
+  { listId: idArgument("listId"), file: importFile },
   Effect.fn(function* (input) {
     yield* report(
       yield* withClient((client) =>

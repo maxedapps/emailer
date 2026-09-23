@@ -210,7 +210,15 @@ describe("test sends", () => {
             ]);
           }
 
-          expect(fromList.recipients.map((entry) => entry.email)).toStrictEqual(listed);
+          // Members come back in key order, which random contact ids make independent of `listed`.
+          const members = yield* client.lists.listMembers({
+            params: { listId: list.id },
+            query: {},
+          });
+
+          expect(fromList.recipients.map((entry) => entry.email)).toStrictEqual(
+            members.items.map((member) => member.email),
+          );
 
           const meta = yield* campaignMeta(campaign.id);
 

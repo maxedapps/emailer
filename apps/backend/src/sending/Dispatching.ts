@@ -1,6 +1,7 @@
 import type * as Schemas from "@emailer/api/Schemas";
 import { Clock, Data, Duration, Effect, Option, Result } from "effect";
 
+import { unsubscribeLink } from "../consent/Unsubscribe.ts";
 import { newIdentifier, nowIso } from "../Identifiers.ts";
 import { CampaignWake } from "./Dispatch.ts";
 import { Mailer, submissionTimeout } from "./Mailer.ts";
@@ -22,7 +23,7 @@ export const memberPageSize = 50;
 /**
  * Per-run bounce and complaint thresholds. Integer arithmetic only.
  */
-export const breaker = {
+const breaker = {
   bounce: { minimumAccepted: 200, percent: 5 },
   complaint: { minimumAccepted: 1000, perMille: 1 },
 } as const;
@@ -78,7 +79,7 @@ export const runSlice = Effect.fn("Dispatching.runSlice")(function* (
   const run = begun.campaign.run;
   const guard = yield* guards.current;
 
-  if (Option.isSome(guard.halted)) {
+  if (guard.halted) {
     yield* campaigns.pauseRun(message.campaignId, message.runToken, "reputation", previous);
 
     return;
@@ -175,6 +176,10 @@ export const runSlice = Effect.fn("Dispatching.runSlice")(function* (
       return;
     }
 
+    // Minted before the claim: a claimed row is only ever settled by a submission, so a link that
+    // cannot be minted must stop the slice while the member is still unclaimed.
+    const unsubscribeUrl = yield* unsubscribeLink(member.email).pipe(Effect.orDie);
+
     const sendId = yield* newIdentifier;
 
     const claimed = yield* campaigns.claimRecipient(
@@ -198,6 +203,7 @@ export const runSlice = Effect.fn("Dispatching.runSlice")(function* (
     const submitted = yield* submitClaimed({
       recipient: member.email,
       content,
+      unsubscribeUrl,
       campaignId: message.campaignId,
       sendId,
       contactId: member.id,
@@ -227,6 +233,7 @@ type ClaimedSubmit = { readonly kind: "next" } | { readonly kind: "stop" };
 const submitClaimed = Effect.fn("Dispatching.submitClaimed")(function* (input: {
   readonly recipient: string;
   readonly content: MessageContent;
+  readonly unsubscribeUrl: string;
   readonly campaignId: string;
   readonly sendId: string;
   readonly contactId: string;
@@ -244,7 +251,10 @@ const submitClaimed = Effect.fn("Dispatching.submitClaimed")(function* (input: {
 
     yield* Effect.sleep(delay);
 
-    const attemptResult = yield* Effect.result(mailer.send(recipient, content, purpose));
+    const attemptResult = yield* Effect.result(
+      mailer.send(recipient, content, input.unsubscribeUrl, purpose),
+    );
+
     const finishedAt = yield* nowIso;
 
     if (Result.isFailure(attemptResult)) {

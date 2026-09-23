@@ -77,6 +77,30 @@ describe("unsubscribe tokens", () => {
       }),
     ));
 
+  // Links already sit in inboxes, so the exact bytes a key and an address mint are a contract. The
+  // twenty-byte address does not end on a base64 group, which pins the encoding as unpadded.
+  it.each([
+    [
+      email,
+      mailbox,
+      "v1.cmVjaXBpZW50QGV4YW1wbGUuY29t.051454aaab35bc94e7d5bfbe7438617a78c802ee64b584ff42af318ef228a44b",
+    ],
+    [
+      "recipient@example.co",
+      "recipient@example.co",
+      "v1.cmVjaXBpZW50QGV4YW1wbGUuY28.e053d45987c097a0813b4f677c491477e83b83d4ccc37c1638970c530f6edbb6",
+    ],
+  ])("mints and verifies the exact token already issued for %s", (address, expected, token) =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const signingKey = yield* signingKeyFor(secret);
+
+        expect(mintToken(signingKey, address)).toBe(token);
+        expect(verifyToken(signingKey, token)).toStrictEqual(Option.some(expected));
+      }),
+    ),
+  );
+
   it("verifies a token it minted and yields the mailbox back", () =>
     Effect.runPromise(
       Effect.gen(function* () {
@@ -183,8 +207,8 @@ describe("unsubscribe tokens", () => {
               Buffer.from(candidate, "base64url").toString("utf8") === unaligned,
           );
 
-        // Same bytes, unused trailing bits set: Buffer decodes it to the same
-        // mailbox, so only the round-trip check distinguishes it.
+        // Same bytes, unused trailing bits set: it decodes to the same mailbox,
+        // so only the round-trip check distinguishes it.
         expect(alternate).toBeDefined();
         expect(verifyToken(signingKey, signIndependently(secret, alternate ?? ""))).toStrictEqual(
           Option.none(),

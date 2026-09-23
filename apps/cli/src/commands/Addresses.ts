@@ -7,7 +7,7 @@ import { report, withClient } from "../Client.ts";
 const addressesStatus = Command.make(
   "status",
   {
-    email: Flag.string("email").pipe(
+    email: Flag.String("email").pipe(
       Flag.withDescription("The address to inspect, exactly as SES lists it"),
       Flag.withSchema(Schemas.ListedEmailAddress),
     ),
@@ -22,7 +22,7 @@ const addressesStatus = Command.make(
 const addressesUnsuppress = Command.make(
   "unsuppress",
   {
-    email: Flag.string("email").pipe(
+    email: Flag.String("email").pipe(
       Flag.withDescription("The address to remove from suppression, exactly as SES lists it"),
       Flag.withSchema(Schemas.ListedEmailAddress),
     ),

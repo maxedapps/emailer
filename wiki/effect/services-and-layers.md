@@ -2,11 +2,11 @@
 
 [Effect](effect.md)
 
-API examples target Effect `4.0.0-rc.112`.
+API examples target Effect `4.0.0-rc.117`.
 
 Related: [Alchemy bindings](../alchemy/runtime-and-bindings.md)
 
-A service tag identifies an interface. A Layer constructs its implementation and describes the implementation's dependencies. RC112 uses `Context.Service`; early beta examples using `ServiceMap` are obsolete for this baseline. [Service example](https://unpkg.com/effect@4.0.0-rc.112/ai-docs/src/01_effect/03_services/01_service.ts)
+A service tag identifies an interface. A Layer constructs its implementation and describes the implementation's dependencies. RC117 uses `Context.Service`; early beta examples using `ServiceMap` are obsolete for this baseline. [Service example](https://unpkg.com/effect@4.0.0-rc.117/ai-docs/src/01_effect/03_services/01_service.ts)
 
 ```typescript
 import { Context, Effect, Layer } from "effect";
@@ -45,7 +45,7 @@ DatabaseLive → RepositoryLive → ApplicationLive
 - `B.pipe(Layer.provide(A))` satisfies B's dependency and exposes B.
 - `B.pipe(Layer.provideMerge(A))` satisfies B and exposes both A and B.
 
-Providing sibling Layers without wiring their dependencies is a common source of residual `R` requirements. Do not suppress those errors with `any` or a cast to `never`. [Layer composition](https://unpkg.com/effect@4.0.0-rc.112/ai-docs/src/01_effect/03_services/20_layer-composition.ts)
+Providing sibling Layers without wiring their dependencies is a common source of residual `R` requirements. Do not suppress those errors with `any` or a cast to `never`. [Layer composition](https://unpkg.com/effect@4.0.0-rc.117/ai-docs/src/01_effect/03_services/20_layer-composition.ts)
 
 ## Choose service boundaries by behavior
 
@@ -55,7 +55,7 @@ Expose expected failures and dependencies accurately. A service that may fail wh
 
 ## Lifetime and memoization
 
-Reuse a Layer value within a composition graph so its initialization can be shared. Rebuilding Layer factories or independent runtimes may allocate separate clients and caches. Acquire closeable resources with `Effect.acquireRelease` and a Scope. The acquisition site determines whether the resource belongs to a process, a warm Lambda environment or a single request. [Resource management](https://unpkg.com/effect@4.0.0-rc.112/ai-docs/src/01_effect/05_resources/10_acquire-release.ts), [ManagedRuntime](https://unpkg.com/effect@4.0.0-rc.112/src/ManagedRuntime.ts)
+Reuse a Layer value within a composition graph so its initialization can be shared. Rebuilding Layer factories or independent runtimes may allocate separate clients and caches. Acquire closeable resources with `Effect.acquireRelease` and a Scope. The acquisition site determines whether the resource belongs to a process, a warm Lambda environment or a single request. [Resource management](https://unpkg.com/effect@4.0.0-rc.117/ai-docs/src/01_effect/05_resources/10_acquire-release.ts), [ManagedRuntime](https://unpkg.com/effect@4.0.0-rc.117/src/ManagedRuntime.ts)
 
 Never hold mutable authenticated caller identity in an instance-wide service. Pass it as request data or provide a request-scoped context. In-memory fakes are useful for deterministic domain tests, but they cannot validate AWS consistency, IAM or retry behavior.
 
@@ -83,10 +83,10 @@ export const scopedResourceExample = Effect.gen(function* () {
 });
 ```
 
-The inner Scope owns the acquisition. On normal completion it closes before the outer program reads the release flag, producing `{ value: 42, released: true }`. Scope also governs cleanup on typed failure or interruption, subject to process termination limits. Real acquisitions replace the placeholder object with a connection, file or subscription and provide the corresponding close operation. [Resource management](https://unpkg.com/effect@4.0.0-rc.112/src/Scope.ts), [acquire/release example](https://unpkg.com/effect@4.0.0-rc.112/ai-docs/src/01_effect/05_resources/10_acquire-release.ts)
+The inner Scope owns the acquisition. On normal completion it closes before the outer program reads the release flag, producing `{ value: 42, released: true }`. Scope also governs cleanup on typed failure or interruption, subject to process termination limits. Real acquisitions replace the placeholder object with a connection, file or subscription and provide the corresponding close operation. [Resource management](https://unpkg.com/effect@4.0.0-rc.117/src/Scope.ts), [acquire/release example](https://unpkg.com/effect@4.0.0-rc.117/ai-docs/src/01_effect/05_resources/10_acquire-release.ts)
 
 ## Sharing is tied to construction context
 
 Layer memoization is associated with a build graph or explicitly shared memo map. Reusing the same Layer value inside one composition allows sharing; independently creating runtimes does not imply one global singleton. A constructor that creates a fresh Layer on each call can defeat intended reuse. Deliberately fresh instances are useful when isolation is required, but should be explicit.
 
-In tests, replace the narrow service the behavior depends on and retain its real contract. An infallible in-memory fake can verify success logic but cannot demonstrate handling of a storage error it never produces. For request-scoped capabilities, supply the context within that request; avoid mutating a shared service to store the current caller. [Layer source](https://unpkg.com/effect@4.0.0-rc.112/src/Layer.ts)
+In tests, replace the narrow service the behavior depends on and retain its real contract. An infallible in-memory fake can verify success logic but cannot demonstrate handling of a storage error it never produces. For request-scoped capabilities, supply the context within that request; avoid mutating a shared service to store the current caller. [Layer source](https://unpkg.com/effect@4.0.0-rc.117/src/Layer.ts)

@@ -44,7 +44,7 @@ A DynamoDB Streams trigger offers prompt delivery of changes. Filter for new/eli
 
 Keep the outbox item itself durable until publication is settled and retain a due-work recovery query. A periodic repair process finds undispatched intents if a stream consumer falls behind the retention window. Do not assume a short-lived stream is a permanent audit log or sole recovery source.
 
-If the relay batches writes, inspect each SQS `Successful` and `Failed` entry, preserving the mapping to its outbox ID. Persist permanent rejection before considering it handled. Alchemy beta.77's generic queue sink can drop permanent failures, so use the [explicit publication boundary](../alchemy/events-and-sinks.md).
+If the relay batches writes, inspect each SQS `Successful` and `Failed` entry, preserving the mapping to its outbox ID. Persist permanent rejection before considering it handled. Alchemy beta.79's generic queue sink can drop permanent failures, so use the [explicit publication boundary](../alchemy/events-and-sinks.md).
 
 ## Bounded fan-out
 

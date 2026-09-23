@@ -28,7 +28,7 @@ export const stderrTerminal = Layer.effect(Terminal.Terminal)(
  * prompt aborted — the command stops and says how to proceed without asking.
  */
 export const confirm = (message: string) =>
-  Prompt.confirm({ message }).pipe(
+  Prompt.Confirm({ message }).pipe(
     Effect.catchTag("QuitError", (cause) =>
       Effect.fail(
         new CliError.UserError({

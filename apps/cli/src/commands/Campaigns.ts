@@ -11,18 +11,18 @@ const refuse = (userMessage: string) => new CliError.UserError({ cause: userMess
 
 /** A campaign body comes from one Markdown file, or from a text file and an optional HTML file. */
 const contentFlags = {
-  markdown: Flag.fileText("markdown").pipe(
+  markdown: Flag.FileText("markdown").pipe(
     Flag.withDescription(
       "Path to a Markdown file; both the text and the HTML body are rendered from it",
     ),
     Flag.optional,
   ),
-  text: Flag.fileText("text").pipe(
+  text: Flag.FileText("text").pipe(
     Flag.withDescription("Path to a file holding the plain-text body"),
     Flag.withSchema(Schemas.CampaignText),
     Flag.optional,
   ),
-  html: Flag.fileText("html").pipe(
+  html: Flag.FileText("html").pipe(
     Flag.withDescription("Path to a file holding the HTML body; needs --text"),
     Flag.withSchema(Schemas.CampaignHtml),
     Flag.optional,
@@ -86,16 +86,16 @@ const bodyOf = <E>(content: Content, subject: Effect.Effect<string, E>) =>
 const campaignsCreate = Command.make(
   "create",
   {
-    list: Flag.string("list").pipe(
+    list: Flag.String("list").pipe(
       Flag.withDescription("The list to send to"),
       Flag.withSchema(Schemas.EntityId),
     ),
-    subject: Flag.string("subject").pipe(
+    subject: Flag.String("subject").pipe(
       Flag.withDescription("The message subject"),
       Flag.withSchema(Schemas.CampaignSubject),
     ),
     ...contentFlags,
-    filter: Flag.keyValuePair("filter").pipe(
+    filter: Flag.KeyValuePair("filter").pipe(
       Flag.withDescription(
         "Send only to members whose attributes equal every key=value given; repeat the flag per entry",
       ),
@@ -159,23 +159,23 @@ const campaignsUpdate = Command.make(
   "update",
   {
     id: idArgument("id"),
-    list: Flag.string("list").pipe(
+    list: Flag.String("list").pipe(
       Flag.withDescription("Move the draft to another list"),
       Flag.withSchema(Schemas.EntityId),
       Flag.optional,
     ),
-    subject: Flag.string("subject").pipe(
+    subject: Flag.String("subject").pipe(
       Flag.withDescription("A new subject"),
       Flag.withSchema(Schemas.CampaignSubject),
       Flag.optional,
     ),
     ...contentFlags,
-    filter: Flag.keyValuePair("filter").pipe(
+    filter: Flag.KeyValuePair("filter").pipe(
       Flag.withDescription("Replace the filter, as repeated key=value pairs"),
       Flag.withSchema(Schemas.ContactAttributes),
       Flag.optional,
     ),
-    clearFilter: Flag.boolean("clear-filter").pipe(
+    clearFilter: Flag.Boolean("clear-filter").pipe(
       Flag.withDescription("Remove the filter, so the draft goes to the whole list"),
       Flag.withDefault(false),
     ),
@@ -248,19 +248,19 @@ const campaignsTest = Command.make(
   "test",
   {
     id: idArgument("id"),
-    to: Flag.string("to").pipe(
+    to: Flag.String("to").pipe(
       Flag.withDescription(
         `An address to send the test to; repeat for up to ${Schemas.maxTestRecipients}`,
       ),
       Flag.withSchema(Schemas.EmailAddress),
       Flag.between(0, Schemas.maxTestRecipients),
     ),
-    list: Flag.string("list").pipe(
+    list: Flag.String("list").pipe(
       Flag.withDescription("Send the test to every member of this list, after confirming how many"),
       Flag.withSchema(Schemas.EntityId),
       Flag.optional,
     ),
-    yes: Flag.boolean("yes").pipe(
+    yes: Flag.Boolean("yes").pipe(
       Flag.withDescription("Send to --list without asking first"),
       Flag.withDefault(false),
     ),
@@ -270,7 +270,7 @@ const campaignsTest = Command.make(
       return yield* refuse("Pass --to (repeatable) or --list, one of the two");
     }
 
-    if (Option.isSome(input.list) && !input.yes) {
+    if (Option.isSome(input.list)) {
       const listId = input.list.value;
 
       // Its own request, so the time the operator takes to answer is not charged to the send's.
@@ -291,9 +291,11 @@ const campaignsTest = Command.make(
         );
       }
 
-      const confirmed = yield* confirm(
-        `Send a test of "${audience.campaign.subject}" to ${audience.members.items.length} members of "${audience.list.name}"?`,
-      );
+      const confirmed =
+        input.yes ||
+        (yield* confirm(
+          `Send a test of "${audience.campaign.subject}" to ${audience.members.items.length} members of "${audience.list.name}"?`,
+        ));
 
       if (!confirmed) {
         return;
@@ -332,7 +334,7 @@ const campaignsPreview = Command.make(
   "preview",
   {
     id: idArgument("id"),
-    open: Flag.boolean("open").pipe(
+    open: Flag.Boolean("open").pipe(
       Flag.withDescription("Also open the link in this machine's browser"),
       Flag.withDefault(false),
     ),
@@ -433,7 +435,7 @@ const campaignsSchedule = Command.make(
   "schedule",
   {
     id: idArgument("id"),
-    at: Flag.string("at").pipe(
+    at: Flag.String("at").pipe(
       Flag.withDescription(
         "When to send, as an ISO-8601 date or date-time (up to milliseconds); no zone means UTC",
       ),
