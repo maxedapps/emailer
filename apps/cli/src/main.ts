@@ -2,8 +2,8 @@ import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Effect } from "effect";
 import { Command } from "effect/unstable/cli";
 
-import { emailer } from "./Commands.ts";
 import { reporting } from "./Diagnostics.ts";
+import { emailer } from "./Emailer.ts";
 
 // The reporter wraps the provisioning too, so a failure building the HTTP client or reading
 // configuration is reported like any other. The runner's own reporting stays disabled: it runs
