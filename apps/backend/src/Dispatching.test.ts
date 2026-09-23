@@ -23,7 +23,7 @@ import { DispatchGuard, memberPageSize, runSlice, SliceOverrun } from "./Dispatc
 import { Mailer, SubmissionUncertain } from "./Mailer.ts";
 import { AudienceStore } from "./Storage/Audience.ts";
 import { CampaignStore } from "./Storage/Campaigns.ts";
-import { unusedAudience } from "./Storage/Testing.ts";
+import { unusedAudience, unusedCampaigns } from "./Storage/Testing.ts";
 
 import type { PauseReason } from "@emailer/api/Schemas";
 import type { OutgoingMessage, SubmissionOutcome } from "./Mailer.ts";
@@ -156,9 +156,6 @@ const emptyWorld = (): World => ({
   run: { ...zeros },
 });
 
-const notExercised = (operation: string) =>
-  Effect.die(new Error(`CampaignStore.${operation} is not exercised by this test`));
-
 const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> =>
   Layer.mergeAll(
     Layer.succeed(AudienceStore)({
@@ -181,16 +178,9 @@ const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> 
         }),
     }),
     Layer.succeed(CampaignStore)({
-      createCampaign: () => notExercised("createCampaign"),
+      ...unusedCampaigns,
       getCampaignBody: () =>
         Effect.succeed(world.html === undefined ? { text } : { text, html: world.html }),
-      getCampaign: () => notExercised("getCampaign"),
-      listCampaigns: () => notExercised("listCampaigns"),
-      getCampaignControl: () => notExercised("getCampaignControl"),
-      enqueueCampaign: () => notExercised("enqueueCampaign"),
-      scheduleCampaign: () => notExercised("scheduleCampaign"),
-      resumeCampaign: () => notExercised("resumeCampaign"),
-      cancelCampaign: () => notExercised("cancelCampaign"),
       beginRun: (_id, token) =>
         Effect.sync(() => {
           if (world.beginOutcome === "stale" || token !== world.runToken) {

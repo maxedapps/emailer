@@ -15,7 +15,7 @@
     "knip": "knip",
     "test": "vitest run --project unit",
     "test:watch": "vitest --project unit",
-    "test:integration": "vitest run --project integration",
+    "test:integration": "node --env-file=.env.test node_modules/vitest/vitest.mjs run --project integration",
     "check:imports": "node --input-type=module -e 'await import(\"alchemy\"); await import(\"alchemy/AWS\"); await import(\"alchemy/Cloudflare\"); await import(\"@effect/platform-node/NodeRuntime\")'",
     "check": "pnpm format:check && pnpm lint && pnpm knip && pnpm typecheck && pnpm test && pnpm check:imports"
   },

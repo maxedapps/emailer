@@ -8,7 +8,7 @@ import { publicly } from "./Diagnostics.ts";
 import { AudienceStore } from "./Storage/Audience.ts";
 import { CampaignStore } from "./Storage/Campaigns.ts";
 import { StorageFailure } from "./Storage/Errors.ts";
-import { unusedAudience } from "./Storage/Testing.ts";
+import { unusedAudience, unusedCampaigns } from "./Storage/Testing.ts";
 
 import type { CampaignControl } from "./Storage/Campaigns.ts";
 
@@ -103,9 +103,6 @@ const completedCampaign: Schemas.Campaign = {
   submission: { state: "completed", queuedAt, startedAt, finishedAt, progress, feedback },
 };
 
-const notExercised = (operation: string) =>
-  Effect.die(new Error(`CampaignStore.${operation} is not exercised by this test`));
-
 const startedAtOf = (world: World, campaign: Schemas.Campaign): string | undefined =>
   world.startedAt.get(campaign.id) ??
   ("startedAt" in campaign.submission ? campaign.submission.startedAt : undefined);
@@ -154,11 +151,11 @@ const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> 
       getList: (id) => Effect.sync(() => Option.fromUndefinedOr(world.lists.get(id))),
     }),
     Layer.succeed(CampaignStore)({
+      ...unusedCampaigns,
       createCampaign: (campaign) =>
         Effect.sync(() => {
           world.campaigns.set(campaign.id, { ...campaign, submission: { state: "draft" } });
         }),
-      getCampaignBody: () => notExercised("getCampaignBody"),
       getCampaign: (id) => Effect.sync(() => Option.fromUndefinedOr(world.campaigns.get(id))),
       listCampaigns: (limit) =>
         Effect.sync(() => ({
@@ -302,13 +299,6 @@ const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> 
 
           return "applied" as const;
         }),
-      beginRun: () => notExercised("beginRun"),
-      claimRecipient: () => notExercised("claimRecipient"),
-      skipRecipient: () => notExercised("skipRecipient"),
-      settleRecipient: () => notExercised("settleRecipient"),
-      checkpoint: () => notExercised("checkpoint"),
-      completeRun: () => notExercised("completeRun"),
-      pauseRun: () => notExercised("pauseRun"),
     }),
   );
 

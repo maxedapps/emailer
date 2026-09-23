@@ -166,7 +166,7 @@
 
 ### T5 — Tests and docs
 
-- **Status:** Pending
+- **Status:** Verified
 - **Items:**
   - T5.1: one shared unused-`CampaignStore` stub.
   - T5.2: trim `Api.test.ts` to what only the HTTP layer can break.
@@ -177,10 +177,23 @@
     - knip is part of `pnpm check`.
 - **Acceptance:** `pnpm check` is green; no protected HTTP behaviour loses its test.
 - **Evidence:**
+  - **T5.1:** `unusedCampaigns` sits beside `unusedAudience`, sharing one private helper, and replaces three hand-written copies.
+  - **T5.2:** five campaign-rule cases in `Api.test.ts` were removed, each mapped to the `Campaigns.test.ts` case that covers the same rule: resume, schedule, scheduled cancel, manual-pause cancel, and replacement-generation 409.
+    - Every auth, decoding, size, scope, error-status and round-trip case stays, including one cancel round trip with the runToken checks.
+    - The fake shrank by 140 lines; the file went from 2325 to 1911 lines.
+    - **Accepted:** the resume route is now reached over HTTP only by the live suite (the alarm-pause case).
+  - **T5.3:** `test:integration` is `node --env-file=.env.test node_modules/vitest/vitest.mjs run --project integration`.
+  - **T5.4 (README):**
+    - a new "Develop and test" section;
+    - the `--force` / `CodeSha256` redeploy note;
+    - address-case advice corrected in both places;
+    - import strictness and the "existing contact unchanged" note;
+    - the Requirements line pins beta.79 and rc.117.
+  - **Check:** `pnpm check` exit 0, 737 unit tests (742 minus the five duplicates).
 
 ## Handoff
 
-- **Next action:** T5
+- **Next action:** Final live gate via `pnpm test:integration`, destroy `test-cleanup`, final full-plan review, merge
 - **Reviews:**
   - **Checkpoint A** (fresh reviewer, commits `c72055b..0f35cd5`, git objects only): no regressions. Dispositions:
     - **L1:** the probe inside acquire could leave the mapping disabled. Fixed now: the waits moved after `acquireRelease`.
