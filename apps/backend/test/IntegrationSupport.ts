@@ -235,8 +235,8 @@ export const liveStorage = (
       },
     };
 
-    // The suite drives every capability against one live table, so it composes all
-    // four rather than depending on a service the application no longer has.
+    // The suite drives every capability against one live table, so it composes all four stores'
+    // operations over it rather than any one function's service.
     const crypto = yield* Crypto.Crypto;
     const tokens = Effect.orDie(crypto.randomUUIDv4);
     const writes = writePrimitives(operations);

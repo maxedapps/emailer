@@ -1647,7 +1647,7 @@ describe("pauseRun", () => {
       Effect.gen(function* () {
         const { table, storage } = withStorage({});
 
-        expect(yield* storage.pauseRun(campaignId, runToken, "daily-quota", contactId, now)).toBe(
+        expect(yield* storage.pauseRun(campaignId, runToken, "daily-quota", contactId)).toBe(
           "paused",
         );
         expect(table.updateItemRequests[0]).toStrictEqual({
@@ -1672,9 +1672,9 @@ describe("pauseRun", () => {
       Effect.gen(function* () {
         const { table, storage } = withStorage({});
 
-        expect(
-          yield* storage.pauseRun(campaignId, runToken, "sending-paused", undefined, now),
-        ).toBe("paused");
+        expect(yield* storage.pauseRun(campaignId, runToken, "sending-paused", undefined)).toBe(
+          "paused",
+        );
         expect(table.updateItemRequests[0]?.UpdateExpression).toBe(
           "SET #state = :paused, pausedReason = :reason REMOVE #cursor",
         );
@@ -1690,7 +1690,7 @@ describe("pauseRun", () => {
       Effect.gen(function* () {
         const { table, storage } = withStorage({ updateItem: [conditionFailed] });
 
-        expect(yield* storage.pauseRun(campaignId, runToken, "rate-limited", contactId, now)).toBe(
+        expect(yield* storage.pauseRun(campaignId, runToken, "rate-limited", contactId)).toBe(
           "stale",
         );
         expectAliasedReservedNames(table);

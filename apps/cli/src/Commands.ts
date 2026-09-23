@@ -1,17 +1,7 @@
 import { makeEmailerClient } from "@emailer/api/Client";
 import type { EmailerClient } from "@emailer/api/Client";
 import * as Schemas from "@emailer/api/Schemas";
-import {
-  Config,
-  Console,
-  DateTime,
-  Duration,
-  Effect,
-  Inspectable,
-  Layer,
-  Option,
-  Schema,
-} from "effect";
+import { Config, Console, DateTime, Duration, Effect, Inspectable, Option, Schema } from "effect";
 import { Argument, Command, Flag } from "effect/unstable/cli";
 import { FetchHttpClient } from "effect/unstable/http";
 
@@ -37,7 +27,7 @@ const withClient = <A>(
     const client = yield* emailerClient;
 
     return yield* use(client);
-  }).pipe(Effect.timeout(requestTimeout), Effect.provide(Layer.mergeAll(FetchHttpClient.layer)));
+  }).pipe(Effect.timeout(requestTimeout), Effect.provide(FetchHttpClient.layer));
 
 const report = <Value>(value: Value) => Console.log(Inspectable.toStringUnknown(value));
 

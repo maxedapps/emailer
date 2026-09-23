@@ -60,7 +60,10 @@ const ignoredComplaintTypes = new Set(["not-spam", "auth-failure"]);
 
 /**
  * A permanent bounce with one of these subtypes never reached a mailbox: SES accepted the send and
- * dropped it because the address was already on the account suppression list.
+ * dropped it without attempting delivery. `OnAccountSuppressionList` means the address is on the
+ * account-level suppression list; `Suppressed` means it is on the SES global suppression list.
+ * Account-level suppression, which this configuration set enables, overrides the global list, so
+ * the second is rare here — but no less an echo.
  */
 const bounceEchoSubtypes = new Set(["OnAccountSuppressionList", "Suppressed"]);
 

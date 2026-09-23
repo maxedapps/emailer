@@ -6,14 +6,13 @@ import { RateLimiter } from "effect/unstable/persistence";
 
 import { CampaignWake } from "./Campaigns.ts";
 import { reportedAndFatal } from "./Diagnostics.ts";
-import { decodeDispatchMessage, dispatchQueue, encodeDispatchMessage } from "./Dispatch.ts";
+import { campaignWake, decodeDispatchMessage, dispatchQueue } from "./Dispatch.ts";
 import { DispatchGuard, runSlice } from "./Dispatching.ts";
 import { Mailer, MailerLive } from "./Mailer.ts";
 import { reputationAlarms } from "./Reputation.ts";
 import { sendGuard, SendPacingLive } from "./SendGuard.ts";
 import { AudienceStore, AudienceStoreLive } from "./Storage/Audience.ts";
 import { CampaignStore, CampaignStoreLive } from "./Storage/Campaigns.ts";
-import { unavailable } from "./Storage/Errors.ts";
 import { UnsubscribeFunction, unsubscribeSecret } from "./Unsubscribe.ts";
 
 const logRetention = Duration.days(7);
@@ -72,15 +71,7 @@ export default class DispatcherFunction extends AWS.Lambda.Function<DispatcherFu
       Layer.succeed(CampaignStore)(campaigns),
       Layer.succeed(Mailer)(mailer),
       Layer.succeed(RateLimiter.RateLimiter)(limiter),
-      Layer.succeed(CampaignWake)({
-        enqueue: (campaignId, runToken) =>
-          encodeDispatchMessage({ campaignId, runToken }).pipe(
-            Effect.orDie,
-            Effect.flatMap((MessageBody) => sendMessage({ MessageBody })),
-            Effect.mapError(unavailable("dispatch")),
-            Effect.asVoid,
-          ),
-      }),
+      Layer.succeed(CampaignWake)(campaignWake(sendMessage)),
       Layer.succeed(DispatchGuard)({
         current: sendGuard(getAccount, () => describeAlarms(), ceiling).pipe(Effect.orDie),
       }),

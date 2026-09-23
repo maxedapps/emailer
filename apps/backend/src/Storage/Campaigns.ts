@@ -1,5 +1,4 @@
 import * as Schemas from "@emailer/api/Schemas";
-import * as AWS from "alchemy/AWS";
 import { Context, Crypto, Effect, Layer, Option, Schema, SchemaTransformation } from "effect";
 
 import { corrupt } from "./Errors.ts";
@@ -21,7 +20,7 @@ import {
 import { allPrimitives } from "./Primitives.ts";
 
 import type { TransactionTokens } from "./Primitives.ts";
-import { dataTable } from "./Table.ts";
+import { AllTableOperationsHttp, allTableOperations } from "./Table.ts";
 
 import type { TableOperations } from "./Items.ts";
 import type {
@@ -745,7 +744,6 @@ export const campaignOperations = (
     runToken: string,
     reason: Schemas.PauseReason,
     cursor: string | undefined,
-    _now: string,
   ) {
     const outcome = yield* updateIf(
       "pauseRun",
@@ -815,32 +813,9 @@ export class CampaignStore extends Context.Service<CampaignStore, CampaignStoreO
 
 export const CampaignStoreLive = Layer.effect(CampaignStore)(
   Effect.gen(function* () {
-    const table = yield* dataTable;
+    const operations = yield* allTableOperations;
     const crypto = yield* Crypto.Crypto;
 
-    return CampaignStore.of(
-      campaignStoreOperations(
-        {
-          getItem: yield* AWS.DynamoDB.GetItem(table),
-          batchGetItem: yield* AWS.DynamoDB.BatchGetItem(table),
-          putItem: yield* AWS.DynamoDB.PutItem(table),
-          updateItem: yield* AWS.DynamoDB.UpdateItem(table),
-          query: yield* AWS.DynamoDB.Query(table),
-          transactWriteItems: yield* AWS.DynamoDB.TransactWriteItems(table),
-        },
-        Effect.orDie(crypto.randomUUIDv4),
-      ),
-    );
+    return CampaignStore.of(campaignStoreOperations(operations, Effect.orDie(crypto.randomUUIDv4)));
   }),
-).pipe(
-  Layer.provide(
-    Layer.mergeAll(
-      AWS.DynamoDB.GetItemHttp,
-      AWS.DynamoDB.BatchGetItemHttp,
-      AWS.DynamoDB.PutItemHttp,
-      AWS.DynamoDB.UpdateItemHttp,
-      AWS.DynamoDB.QueryHttp,
-      AWS.DynamoDB.TransactWriteItemsHttp,
-    ),
-  ),
-);
+).pipe(Layer.provide(AllTableOperationsHttp));

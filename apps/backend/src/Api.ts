@@ -18,12 +18,10 @@ import { publicly } from "./Diagnostics.ts";
 import { campaignSchedule } from "./CampaignSchedule.ts";
 import * as Campaigns from "./Campaigns.ts";
 import * as Contacts from "./Contacts.ts";
-import { dispatchQueue, encodeDispatchMessage, scheduleGroup, schedulerRole } from "./Dispatch.ts";
+import { campaignWake, dispatchQueue, scheduleGroup, schedulerRole } from "./Dispatch.ts";
 import * as Lists from "./Lists.ts";
 import { AudienceStore, AudienceStoreLive } from "./Storage/Audience.ts";
 import { CampaignStore, CampaignStoreLive } from "./Storage/Campaigns.ts";
-import { unavailable } from "./Storage/Errors.ts";
-import { UnsubscribeFunction, unsubscribeSecret } from "./Unsubscribe.ts";
 
 const logRetention = Duration.days(7);
 
@@ -114,13 +112,6 @@ const apiProps = Effect.gen(function* () {
     retention: logRetention,
   });
 
-  // The bare tag, not the inline class form: the inline form always builds when
-  // yielded, which would run the unsubscribe function's props and init inside
-  // this Lambda at every cold start. The value reference records the dependency
-  // edge, so declaration order in the Stack generator is irrelevant.
-  const unsubscribe = yield* UnsubscribeFunction;
-  const secret = yield* unsubscribeSecret;
-
   return {
     functionName,
     main: import.meta.url,
@@ -129,22 +120,18 @@ const apiProps = Effect.gen(function* () {
     memorySize: 512,
     timeout: invocationTimeout,
     functionUrl: { authType: "NONE" },
-    env: {
-      EMAILER_LOG_GROUP: logGroup.logGroupName,
-      EMAILER_UNSUBSCRIBE_URL: unsubscribe.functionUrl,
-      EMAILER_UNSUBSCRIBE_SECRET: secret.text,
-    },
+    env: { EMAILER_LOG_GROUP: logGroup.logGroupName },
   } as const;
 });
 
 /**
  * Builds the application once and returns the per-invocation handler.
  *
- * The router used to be assembled inside the request effect, so every invocation rebuilt the
- * whole API — handlers, middleware and all — before answering. Construction is instance work and
- * the handler is request work; separating them is also what makes the request scope visible,
- * since only the returned effect runs inside it. Nothing request-specific is captured here: the
- * credential check reads the incoming request, and finalizers belong to the invocation's own scope.
+ * Construction is instance work and the handler is request work: the router, its handlers and its
+ * middleware are built once per instance, so an invocation only answers. Separating them is also
+ * what makes the request scope visible, since only the returned effect runs inside it. Nothing
+ * request-specific is captured here: the credential check reads the incoming request, and
+ * finalizers belong to the invocation's own scope.
  */
 export const makeApiHandler = (token: Redacted.Redacted<string>) =>
   Effect.map(
@@ -183,7 +170,6 @@ export default class ApiFunction extends AWS.Lambda.Function<ApiFunction>()(
     const getSuppressedDestination = yield* AWS.SES.GetSuppressedDestination();
     const deleteSuppressedDestination = yield* AWS.SES.DeleteSuppressedDestination();
 
-    // Yielding the source queue registers it; T4 only registered the dead-letter queue.
     const queue = yield* dispatchQueue;
     const sendMessage = yield* AWS.SQS.SendMessage(queue);
     const queueArn = yield* queue.queueArn;
@@ -203,15 +189,7 @@ export default class ApiFunction extends AWS.Lambda.Function<ApiFunction>()(
           getSuppressedDestination,
           deleteSuppressedDestination,
         }),
-        Layer.succeed(Campaigns.CampaignWake)({
-          enqueue: (campaignId, runToken) =>
-            encodeDispatchMessage({ campaignId, runToken }).pipe(
-              Effect.orDie,
-              Effect.flatMap((MessageBody) => sendMessage({ MessageBody })),
-              Effect.mapError(unavailable("dispatch")),
-              Effect.asVoid,
-            ),
-        }),
+        Layer.succeed(Campaigns.CampaignWake)(campaignWake(sendMessage)),
         Layer.succeed(Campaigns.CampaignSchedule)(
           campaignSchedule(createSchedule, deleteSchedule, queueArn),
         ),

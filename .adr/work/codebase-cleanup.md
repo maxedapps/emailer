@@ -96,7 +96,7 @@
 
 ### T2 — Simplify
 
-- **Status:** Pending
+- **Status:** Verified
 - **Items:**
   - T2.1: drop `pauseRun`'s `_now` parameter.
   - T2.2: the API Lambda no longer carries the unsubscribe URL or secret, and the stale `alchemy.run.ts` comment goes.
@@ -111,6 +111,16 @@
   - T2.11: fix stale and wrong comments.
 - **Acceptance:** `pnpm check` is green; existing tests are updated only where a signature changed.
 - **Evidence:**
+  - **Shared helpers:**
+    - `allTableOperations` / `AllTableOperationsHttp` in `Storage/Table.ts`, used by both stores.
+    - `campaignWake(sendMessage)` in `Dispatch.ts`, used by the API and the dispatcher.
+  - **`readItems`:** a plain loop with one deadline and `catchTag("TimeoutError")`. No `instanceof` and no private-error control flow remain. `Primitives.test.ts` is unchanged, 26/26.
+  - **API Lambda:** no longer carries the unsubscribe URL or secret. An import walk from `Api.ts` (23 modules) finds no reader. The bare-tag comment in `alchemy.run.ts` now names the Dispatcher, and ADR-0004's ADR-0011 line says the dispatcher mints the links.
+  - **Unsubscribe tokens:** `Encoding` base64url replaces `Buffer`. The new golden test "mints and verifies the exact token already issued for %s" passed on `Buffer` before the switch and on `Encoding` after (21- and 20-byte addresses).
+  - **`halted`:** now a boolean, so the precedence test lost its meaning and was removed.
+  - **Smaller changes:** `pauseRun`'s `_now` is gone; `predecessor !== undefined`; `FetchHttpClient.layer`.
+  - **Comments:** stale comments rewritten in `Api.ts`, `Diagnostics.ts`, `Items.ts`, `Membership.ts`, `Testing.ts`, `Primitives.ts` (worst case 3.8 s), `FeedbackClassification.ts` (the `Suppressed` subtype is the global list), `Feedback.ts` and `IntegrationSupport.ts`.
+  - **Check:** `pnpm check` exit 0, 738 unit tests.
 
 ### T3 — Correctness and error handling
 
@@ -149,7 +159,7 @@
 
 ## Handoff
 
-- **Next action:** T2
+- **Next action:** T3
 - **Reviews:**
 - **Deviations:**
   - **T1, index slip:** the worker briefly staged and unstaged the `apps/mcp` deletion. The index was back at HEAD before the commit; nothing was lost.

@@ -40,9 +40,9 @@ export const strMap = (values: Schemas.ContactAttributes) => ({
 /**
  * The three attribute kinds this table stores, as codecs rather than as extraction helpers.
  *
- * The difference is not stylistic. The helpers they replace answered `undefined` for an attribute
- * of the wrong kind — a number where a string belongs read as absent, and an optional field that
- * was corrupt read as one that was never written. A codec makes the wrong kind a decoding failure,
+ * The difference is not stylistic. An extraction helper answers `undefined` for an attribute of
+ * the wrong kind, so a number where a string belongs reads as absent, and an optional field that is
+ * corrupt reads as one that was never written. A codec makes the wrong kind a decoding failure,
  * which is what `corrupt` exists to report.
  *
  * Composing them with a domain schema is `Schema.decodeTo(..., passthrough())`, so an item schema

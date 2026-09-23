@@ -63,7 +63,7 @@ const text = "Hello there";
 const defaultGuard: SendGuard = {
   limit: 8,
   dailyExhausted: false,
-  halted: Option.none(),
+  halted: false,
 };
 
 const zeros = { accepted: 0, bounced: 0, complained: 0 };
@@ -869,7 +869,7 @@ describe("runSlice", () => {
         Effect.gen(function* () {
           const fix = fixture({
             cursor: memberA.id,
-            guard: { limit: 8, dailyExhausted: true, halted: Option.none() },
+            guard: { limit: 8, dailyExhausted: true, halted: false },
           });
 
           successOf(yield* runSliceNow(fix));
@@ -903,7 +903,7 @@ describe("runSlice", () => {
         Effect.gen(function* () {
           const fix = fixture({
             members: [memberA, memberB],
-            guard: { limit: 3, dailyExhausted: false, halted: Option.none() },
+            guard: { limit: 3, dailyExhausted: false, halted: false },
             outcomes: [
               { outcome: "rejected", rejectionCode: "message-rejected" },
               { outcome: "accepted", messageId: "ses-message" },
@@ -925,7 +925,7 @@ describe("runSlice", () => {
         Effect.gen(function* () {
           const fix = fixture({
             cursor: memberA.id,
-            guard: { limit: 8, dailyExhausted: false, halted: Option.some("alarm") },
+            guard: { limit: 8, dailyExhausted: false, halted: true },
           });
 
           successOf(yield* runSliceNow(fix));
@@ -1026,7 +1026,7 @@ describe("runSlice", () => {
         Effect.gen(function* () {
           const fix = fixture({
             cursor: memberA.id,
-            guard: { limit: 8, dailyExhausted: true, halted: Option.some("enforcement") },
+            guard: { limit: 8, dailyExhausted: true, halted: true },
             run: { accepted: 200, bounced: 200, complained: 0 },
           });
 
@@ -1044,7 +1044,7 @@ describe("runSlice", () => {
         Effect.gen(function* () {
           const fix = fixture({
             cursor: memberA.id,
-            guard: { limit: 8, dailyExhausted: true, halted: Option.none() },
+            guard: { limit: 8, dailyExhausted: true, halted: false },
             run: { accepted: 200, bounced: 200, complained: 0 },
           });
 

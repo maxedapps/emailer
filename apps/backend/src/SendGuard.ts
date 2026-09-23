@@ -1,4 +1,4 @@
-import { Effect, Layer, Option } from "effect";
+import { Effect, Layer } from "effect";
 import { RateLimiter } from "effect/unstable/persistence";
 
 import { RateLimitStoreLive } from "./Storage/RateLimit.ts";
@@ -12,7 +12,7 @@ export interface SendQuota {
 export interface SendGuard {
   readonly limit: number;
   readonly dailyExhausted: boolean;
-  readonly halted: Option.Option<"alarm" | "enforcement">;
+  readonly halted: boolean;
 }
 
 export const SendPacingLive = RateLimiter.layer.pipe(Layer.provide(RateLimitStoreLive));
@@ -64,10 +64,6 @@ export const sendGuard = <EA, RA, ED, RD>(
           ? false
           : sentLast24Hours >=
             (ceiling === undefined ? max24HourSend * 0.9 : Math.min(max24HourSend * 0.9, ceiling)),
-      halted: alarmed
-        ? Option.some("alarm")
-        : enforcement
-          ? Option.some("enforcement")
-          : Option.none(),
+      halted: alarmed || enforcement,
     };
   });

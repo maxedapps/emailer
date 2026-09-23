@@ -32,11 +32,6 @@ import type {
  */
 const cascadePageLimit = 40;
 
-/**
- * Membership rows project one field each. They get schemas too: a row whose `contactId` is the
- * wrong attribute kind used to read as absent, which these loops then reported as corrupt anyway —
- * but a row where it was a number would have read as absent rather than as wrong.
- */
 const MemberEntry = Schema.Struct({ contactId: attributeOf(Schemas.EntityId) });
 
 const MembershipEntry = Schema.Struct({ listId: attributeOf(Schemas.EntityId) });
@@ -107,6 +102,11 @@ export const membershipOperations = (
     contactId: str(contactId),
     addedAt: str(addedAt),
   });
+
+  const removeMembership = (listId: string, contactId: string) => [
+    { Delete: { Table: tableLogicalId, Key: memberKey(listId, contactId) } },
+    { Delete: { Table: tableLogicalId, Key: memberOfKey(contactId, listId) } },
+  ];
 
   /**
    * Slot 0 checks the contact, slot 1 bumps the list, slot 2 writes the forward member and slot 3
@@ -180,8 +180,7 @@ export const membershipOperations = (
   ) {
     const outcome = yield* runTransaction("removeMember", {
       TransactItems: [
-        { Delete: { Table: tableLogicalId, Key: memberKey(listId, contactId) } },
-        { Delete: { Table: tableLogicalId, Key: memberOfKey(contactId, listId) } },
+        ...removeMembership(listId, contactId),
         {
           Update: {
             Table: tableLogicalId,
@@ -262,11 +261,6 @@ export const membershipOperations = (
 
     return Option.some<StoredPage<Schemas.Contact, string>>({ items: contacts, nextCursor });
   });
-
-  const removeMembership = (listId: string, contactId: string) => [
-    { Delete: { Table: tableLogicalId, Key: memberKey(listId, contactId) } },
-    { Delete: { Table: tableLogicalId, Key: memberOfKey(contactId, listId) } },
-  ];
 
   const joinMember = (
     key: dynamodb.AttributeMap,

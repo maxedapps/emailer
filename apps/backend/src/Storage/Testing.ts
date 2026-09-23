@@ -140,12 +140,6 @@ export const campaignId = "0195f0a0-1111-4222-8333-4444444ca409";
 export const createdAt = "2026-09-11T10:00:00.000Z";
 
 /**
- * Every primitive over a scripted table, so a suite can exercise one item group through its own
- * factory — `contactOperations(primitivesFor(table.operations))` — instead of standing up a whole
- * application store. A capability that needs fewer operations takes fewer primitives, and its
- * suite can say so by building only those.
- */
-/**
  * Deterministic transaction tokens, numbered by the requests already sent: the first logical call
  * carries `token-1`, and a call the store retries as a new one carries the next number, while a
  * repeat the client sends on its own carries the same token because nothing new was issued.
@@ -153,6 +147,11 @@ export const createdAt = "2026-09-11T10:00:00.000Z";
 export const tokensFor = (sent: ReadonlyArray<unknown>): TransactionTokens =>
   Effect.sync(() => `token-${sent.length + 1}`);
 
+/**
+ * Every primitive over a scripted table, so a suite can exercise one item group through its own
+ * factory — `contactOperations(primitivesFor(table))` — instead of standing up a whole application
+ * store.
+ */
 export const primitivesFor = (table: Table) =>
   allPrimitives(table.operations, tokensFor(table.transactionRequests));
 

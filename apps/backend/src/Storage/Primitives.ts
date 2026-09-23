@@ -1,16 +1,6 @@
 import type * as dynamodb from "@distilled.cloud/aws/dynamodb";
 import type * as AWS from "alchemy/AWS";
-import {
-  Data,
-  Duration,
-  Effect,
-  Option,
-  Predicate,
-  Random,
-  Result,
-  Schedule,
-  Schema,
-} from "effect";
+import { Data, Duration, Effect, Option, Predicate, Random, Schedule, Schema } from "effect";
 
 import { corrupt, StorageFailure, unavailable } from "./Errors.ts";
 import { attributeOf, listingIndexName, operationTimeout, str, tableLogicalId } from "./Items.ts";
@@ -40,8 +30,9 @@ const committed: TransactionOutcome = { committed: true };
  * repeat.
  *
  * `Schedule.max` keeps going only while both the delay policy and the recurrence bound continue;
- * six recurrences after the first attempt is seven tries, about 3.2 s of waiting in the worst
- * case, inside the 5 s operation timeout around the whole sequence.
+ * six recurrences after the first attempt is seven tries. The delays double from 50 ms and sum to
+ * 3.15 s; jitter scales each by 0.8–1.2, so the worst case is about 3.8 s of waiting, inside the 5 s
+ * operation timeout around the whole sequence.
  */
 const conflictRetry = Schedule.max([
   Schedule.recurs(6),
@@ -212,7 +203,7 @@ const batchRetryDelay = Duration.millis(100);
 
 const batchDeadline = Duration.seconds(5);
 
-/** The private signal that a batch came back incomplete; it never leaves `readItems`. */
+/** Why a hydration failed after its last attempt: the items that did arrive and the keys that did not. */
 class IncompleteBatch extends Data.TaggedError("IncompleteBatch")<{
   readonly items: ReadonlyArray<dynamodb.AttributeMap>;
   readonly pending: dynamodb.KeysAndAttributes;
@@ -227,32 +218,13 @@ const batchPrimitives = (operations: Pick<TableOperations, "batchGetItem">) => {
    * responses are read by value rather than by name.
    *
    * AWS may leave keys unprocessed on any response, including the retry of a retry — it is
-   * throttling, not a one-off. Reading one extra page and returning whatever arrived answered a
-   * partial hydration as if it were a complete one: a listing would quietly drop members. So the
-   * pending block is retried until it is empty, and if the attempts run out the operation fails.
-   * A short read is never a successful read.
+   * throttling, not a one-off. Returning whatever arrived would answer a partial hydration as if it
+   * were a complete one, and a listing would quietly drop members. So the pending block is retried
+   * until it is empty, and if the attempts run out the operation fails. A short read is never a
+   * successful read.
    */
-  const readItems = (operationId: string, keys: ReadonlyArray<dynamodb.AttributeMap>) => {
-    const runBatch = (requested: dynamodb.KeysAndAttributes) =>
-      operations
-        .batchGetItem({ RequestItems: { [tableLogicalId]: requested } })
-        .pipe(Effect.timeout(operationTimeout), Effect.mapError(unavailable(operationId)));
-
-    const collect = (
-      collected: ReadonlyArray<dynamodb.AttributeMap>,
-      requested: dynamodb.KeysAndAttributes,
-    ) =>
-      Effect.gen(function* () {
-        const response = yield* runBatch(requested);
-        const items = [...collected, ...responseItems(response)];
-        const pending = Object.values(response.UnprocessedKeys ?? {})[0];
-
-        return pending === undefined || pending.Keys.length === 0
-          ? items
-          : yield* new IncompleteBatch({ items, pending });
-      });
-
-    return Effect.gen(function* () {
+  const readItems = (operationId: string, keys: ReadonlyArray<dynamodb.AttributeMap>) =>
+    Effect.gen(function* () {
       // A page can legitimately hydrate nothing — an empty listing partition, or a page whose
       // every index entry has since been deleted. `KeysAndAttributes.Keys` must carry at least one
       // key, and neither the SDK nor the service tolerates an empty one, so the request is skipped
@@ -261,23 +233,24 @@ const batchPrimitives = (operations: Pick<TableOperations, "batchGetItem">) => {
         return [];
       }
 
-      let collected: ReadonlyArray<dynamodb.AttributeMap> = [];
+      const items: Array<dynamodb.AttributeMap> = [];
       let requested: dynamodb.KeysAndAttributes = { Keys: [...keys], ConsistentRead: true };
 
       for (let attempt = 1; attempt <= batchAttempts; attempt += 1) {
-        const outcome = yield* Effect.result(collect(collected, requested));
+        const response = yield* operations
+          .batchGetItem({ RequestItems: { [tableLogicalId]: requested } })
+          .pipe(Effect.mapError(unavailable(operationId)));
 
-        if (Result.isSuccess(outcome)) {
-          return outcome.success;
+        items.push(...responseItems(response));
+
+        const pending = Object.values(response.UnprocessedKeys ?? {})[0];
+
+        if (pending === undefined || pending.Keys.length === 0) {
+          return items;
         }
 
-        if (!(outcome.failure instanceof IncompleteBatch)) {
-          return yield* outcome.failure;
-        }
-
-        collected = outcome.failure.items;
         // Re-keyed to the logical ID the binding expects, preserving ConsistentRead.
-        requested = { Keys: outcome.failure.pending.Keys, ConsistentRead: true };
+        requested = { Keys: pending.Keys, ConsistentRead: true };
 
         if (attempt < batchAttempts) {
           // Jittered exponential backoff: unprocessed keys mean the table is shedding load, and
@@ -288,20 +261,13 @@ const batchPrimitives = (operations: Pick<TableOperations, "batchGetItem">) => {
         }
       }
 
-      // Attempts exhausted with keys still unread. The private signal becomes the public failure
-      // here and nowhere else.
-      return yield* unavailable(operationId)(
-        new IncompleteBatch({ items: collected, pending: requested }),
-      );
+      return yield* unavailable(operationId)(new IncompleteBatch({ items, pending: requested }));
     }).pipe(
       // One deadline for the whole operation, retries included, rather than one per attempt: the
       // caller's budget does not grow because the store needed several rounds.
       Effect.timeout(batchDeadline),
-      Effect.mapError((failure) =>
-        failure instanceof StorageFailure ? failure : unavailable(operationId)(failure),
-      ),
+      Effect.catchTag("TimeoutError", (timeout) => Effect.fail(unavailable(operationId)(timeout))),
     );
-  };
 
   return { readItems } as const;
 };

@@ -25,7 +25,7 @@ export const describeCause = (cause: unknown): string =>
       Option.match(asNamed(cause), {
         onSome: (named) => named.name,
         // A native error keeps `name` on its prototype, where a schema reading own properties
-        // never finds it — so a defect that reached here would have classified as "unknown"
+        // never finds it — so without this a defect that reaches here classifies as "unknown"
         // rather than as the `TypeError` it is.
         onNone: () => (cause instanceof Error ? cause.name : "unknown"),
       }),
@@ -39,9 +39,9 @@ const reportStorageFailure = (failure: StorageFailure) =>
   });
 
 /**
- * The API boundary for every operation that only touches storage. Internal detail is recorded here
- * and converted here, exactly once, rather than at each of the twenty-odd call sites that used to
- * map the failure themselves and throw its cause away in the process.
+ * The API boundary for every operation that only touches storage. Internal detail is recorded and
+ * converted here, exactly once, rather than at each call site, where mapping the failure would
+ * throw its cause away.
  */
 export const publicly = <A, E, R>(
   operation: Effect.Effect<A, E, R>,
