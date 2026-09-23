@@ -17,6 +17,25 @@ pnpm install --frozen-lockfile
 
 Do not skip lifecycle scripts. There is no build step: Node 24 runs the TypeScript directly.
 
+## First deployment at a glance
+
+1. Get SES production access in your Region.
+2. Fill in `.env` ([Configure](#configure)).
+3. Create the Alchemy profile and bootstrap the account ([One-time setup](#one-time-setup)).
+4. Set up the sending identity ([Sending identity](#sending-identity-once-per-account-and-region)):
+   - publish the MAIL FROM and DMARC records;
+   - deploy the identity stack;
+   - publish its three DKIM records;
+   - wait until SES reports them verified.
+5. Deploy the service and put `apiUrl` into `.env` ([Deploy the service](#deploy-the-service)).
+6. If you set `EMAILER_ALERT_EMAIL`, confirm the subscription mail it receives.
+
+The only manual work outside the CLI is DNS:
+
+- six records for a domain without DMARC;
+- five if it already has one;
+- one more if DMARC reports go to another domain.
+
 ## Configure
 
 Copy `.env.example` to an untracked `.env` and fill it in. Alchemy and the CLI read the file you pass with `--env-file`; they do not interpolate `$OTHER` inside it.
@@ -37,22 +56,48 @@ Do not set `EMAILER_UNSUBSCRIBE_SECRET`. Alchemy mints it, binds it into the fun
 
 `.env.example` also lists `EMAILER_TEST_*` keys. Those are for the live integration suite only, not for operating the service.
 
+## One-time setup
+
+**Once per machine.** Alchemy profiles are not AWS CLI profiles:
+
+```sh
+pnpm exec alchemy profile create emailer
+pnpm exec alchemy profile edit --profile emailer --add AWS --method sso --set ssoProfile=<your-aws-sso-profile>
+```
+
+**Once per AWS account and Region.** A deploy fails with `Assets bucket not found` until this exists. Leave the bootstrap and state buckets in place; `alchemy destroy` does not remove them.
+
+```sh
+pnpm exec alchemy provider aws bootstrap --aws-profile <your-aws-sso-profile> --region <region>
+```
+
 ## Sending identity (once per account and Region)
 
 DNS is published by hand. The stacks never create Route 53 or other DNS records.
 
 1. Publish MX, SPF and DMARC **before** SES probes MAIL FROM.
 2. Deploy the identity stack at `--stage shared`.
-3. Publish the three Easy DKIM `CNAME`s from the stack output `dkimTokens` (or `GetEmailIdentity`).
-4. Confirm `MailFromDomainStatus=SUCCESS` and, on a delivered message, `spf=pass`, `dkim=pass` and `dmarc=pass`.
+3. Publish the three Easy DKIM `CNAME`s (command below).
+4. Wait for `DkimStatus=SUCCESS` and `MailFromDomainStatus=SUCCESS`, usually minutes and at most 72 hours.
+   - Until DKIM verifies, SES refuses to send.
+   - Until MAIL FROM verifies, SES uses its own bounce domain, so SPF does not align.
+5. On a delivered message, confirm `spf=pass`, `dkim=pass` and `dmarc=pass`.
 
-Replace `mail.example.com` with your `EMAILER_SENDER_IDENTITY` and `us-east-1` with your `AWS_REGION`:
+Replace `mail.example.com` with your `EMAILER_SENDER_IDENTITY` and `us-east-1` with your `AWS_REGION`. A root domain works the same way, e.g. `bounce.example.com` and `_dmarc.example.com`.
 
 - MX `bounce.mail.example.com` → `10 feedback-smtp.us-east-1.amazonses.com`
 - TXT `bounce.mail.example.com` → `"v=spf1 include:amazonses.com ~all"`
 - TXT `_dmarc.mail.example.com` → `"v=DMARC1; p=none; rua=mailto:dmarc@your-reports.example"`
 - If `rua` is on a different organizational domain, also publish TXT `mail.example.com._report._dmarc.<rua-host>` → `"v=DMARC1"`
 - After deploy: CNAME `<token>._domainkey.mail.example.com` → `<token>.<SigningHostedZone>` for each DKIM token
+
+**A name can hold only one DMARC record.** If `_dmarc.<your domain>` already exists, which is common on a root domain, keep it instead of adding a second one. It must not set `aspf=s`.
+
+Read the DKIM tokens and `SigningHostedZone` after the deploy. Never assume the zone; it differs by Region:
+
+```sh
+aws sesv2 get-email-identity --email-identity mail.example.com --query 'DkimAttributes.[Tokens,SigningHostedZone]'
+```
 
 Do not use the `bounce.` subdomain as a From address. Never destroy stack `EmailerSending`. Exclude `AWS.SES.*` from `alchemy unsafe nuke`.
 
@@ -70,19 +115,6 @@ pnpm exec alchemy deploy --config stacks/sending-identity.ts --stage shared --en
 ```
 
 ## Deploy the service
-
-**Once per machine.** Alchemy profiles are not AWS CLI profiles:
-
-```sh
-pnpm exec alchemy profile create emailer
-pnpm exec alchemy profile edit --profile emailer --add AWS --method sso --set ssoProfile=<your-aws-sso-profile>
-```
-
-**Once per AWS account and Region.** A deploy fails with `Assets bucket not found` until this exists. Leave the bootstrap and state buckets in place; `alchemy destroy` does not remove them.
-
-```sh
-pnpm exec alchemy provider aws bootstrap --aws-profile <your-aws-sso-profile> --region <region>
-```
 
 The identity stack must already be deployed. Pick a durable `--stage` (for example `prod`). Omitting it falls back to `live_$USER`.
 
