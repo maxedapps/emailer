@@ -230,6 +230,12 @@ On 2026-09-23 the drafting slice (ADR-0019, ADR-0020) landed on `origin/main` fr
   - The first full run afterwards went 40/41; its only failure was the flaky order above. After the fix, the full suite passed 41/41 in 475 s.
   - The stage was destroyed (31 resources). The inventory shows no function, table, queue, alarm, schedule group, topic, log group, rule, configuration set, role or mapping left for it. Prod's four functions are untouched.
 - **Leak check:** the pattern from main's drafting work doc matches nothing in the changed files, the patches, or the commit messages.
+- **Plan audits** (two fresh reviewers, git objects at `dd4fc5c`, 2026-09-23):
+  - **This plan:** all 36 subtasks accounted for. Two were reverted or superseded by main (T2.2, T2.4), T3.2's API half is blocked upstream, and T3.3 was absent until its restoration above. No silent loss was found, checking lines in both directions and test names.
+  - **Main's drafting plan** (`drafting-and-preview.md`, ADR-0019/0020): every task and acceptance item is present. One deviation came from main itself: `campaigns test --list --yes` skipped the local read and the 20-member refusal, where that plan has `--yes` skip only the question. The CLI now always reads and refuses, and a test covers both paths.
+  - **Wiki:** the either/or-flag note said RC112; it is RC117 now, and still true.
+  - **Stale evidence:** main's T13 prod plan predates the merge and the beta.79 upgrade, so prod needs a fresh plan before any deploy.
+  - **Outside both plans:** `queued-campaign-cancellation.md` (2026-09-17) is still Partial. Its T6 CLI walkthrough was never run, and ADR-0016 is Accepted but not Confirmed, although its live cases pass in every full suite here.
 
 ## Handoff
 

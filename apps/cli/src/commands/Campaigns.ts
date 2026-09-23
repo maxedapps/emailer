@@ -270,7 +270,7 @@ const campaignsTest = Command.make(
       return yield* refuse("Pass --to (repeatable) or --list, one of the two");
     }
 
-    if (Option.isSome(input.list) && !input.yes) {
+    if (Option.isSome(input.list)) {
       const listId = input.list.value;
 
       // Its own request, so the time the operator takes to answer is not charged to the send's.
@@ -291,9 +291,11 @@ const campaignsTest = Command.make(
         );
       }
 
-      const confirmed = yield* confirm(
-        `Send a test of "${audience.campaign.subject}" to ${audience.members.items.length} members of "${audience.list.name}"?`,
-      );
+      const confirmed =
+        input.yes ||
+        (yield* confirm(
+          `Send a test of "${audience.campaign.subject}" to ${audience.members.items.length} members of "${audience.list.name}"?`,
+        ));
 
       if (!confirmed) {
         return;
