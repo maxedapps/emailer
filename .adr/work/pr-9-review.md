@@ -6,7 +6,7 @@ title: Segmentation without a second list
 footer: Reviewed 9378cdf against origin/main 9cd7e40. Independent second opinion; source unchanged. AWS deployment evidence is author-reported.
 ---
 
-[PR #9](https://github.com/maxedapps/emailer/pull/9) lets an operator narrow a campaign to contacts whose attributes match every supplied equality. This review traces a filtered send, explains the delivery guarantees, and separates code findings from rollout and operating risks.
+PR #9 lets an operator narrow a campaign to contacts whose attributes match every supplied equality. This review traces a filtered send, explains the delivery guarantees, and separates code findings from rollout and operating risks.
 
 > [!good]
 > **Verdict: merge-ready. No material code findings.**
@@ -138,7 +138,7 @@ Author-reported, not rerun
 - No throughput benchmark establishes a practical limit for large filters or sparse audiences.
 ```
 
-The default local `pnpm check` reached unit tests twice and timed out on two different pre-existing CLI cases. Each run passed the other 604 tests. The CLI suite passed in isolation with all 26 tests; a subsequent full run with `--maxWorkers=1` passed all 605 tests across 29 files, and the import check passed. No source or timeout was changed. Concurrent work was running on the shared host; that is consistent with resource contention but does not prove the timeout's cause. The [CI check](https://github.com/maxedapps/emailer/actions/runs/35214259697/job/105178854320) passed. The adjacent `pr-9-review-evidence.md` records execution details and the plan matrix.
+The default local `pnpm check` reached unit tests twice and timed out on two different pre-existing CLI cases. Each run passed the other 604 tests. The CLI suite passed in isolation with all 26 tests; a subsequent full run with `--maxWorkers=1` passed all 605 tests across 29 files, and the import check passed. No source or timeout was changed. Concurrent work was running on the shared host; that is consistent with resource contention but does not prove the timeout's cause. The CI check passed. The adjacent `pr-9-review-evidence.md` records execution details and the plan matrix.
 
 This is a second opinion after the implementation review committed on the branch. That earlier report had no material findings. This review adds independent execution, unusual-input checks, and the mixed-version/storage-cost analysis above.
 
@@ -150,4 +150,4 @@ This is a second opinion after the implementation review committed on the branch
 - **Treat the local gate honestly** — CI and all 605 tests with one worker passed; local default runs encountered CLI timeouts.
 ```
 
-For a quick source check, open [Dispatching.ts](https://github.com/maxedapps/emailer/blob/9378cdfbce273ec92d5166c6f8c7b2b1c3899d7e/apps/backend/src/Dispatching.ts#L177), [Storage/Campaigns.ts](https://github.com/maxedapps/emailer/blob/9378cdfbce273ec92d5166c6f8c7b2b1c3899d7e/apps/backend/src/Storage/Campaigns.ts#L255), and [Api.integration.test.ts](https://github.com/maxedapps/emailer/blob/9378cdfbce273ec92d5166c6f8c7b2b1c3899d7e/apps/backend/src/Api.integration.test.ts#L252). They show the exclusion branch, the durable predicate, and the test that distinguishes two intended recipients from three actual sends.
+For a quick source check, open Dispatching.ts, Storage/Campaigns.ts, and Api.integration.test.ts. They show the exclusion branch, the durable predicate, and the test that distinguishes two intended recipients from three actual sends.

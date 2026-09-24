@@ -189,7 +189,7 @@ PR #10 follow-up: [strict calendar validation](campaign-scheduling-input-validat
 
 ## Handoff
 
-- **Next action:** None for this lane. [PR #10](https://github.com/maxedapps/emailer/pull/10) is merged and pushed. PR #9 remains open; scheduling has no runtime dependency on segmentation. When merging PR #9, first sync current `main` into its branch and preserve both features in the overlapping files listed below.
+- **Next action:** None for this lane. PR #10 is merged and pushed. PR #9 remains open; scheduling has no runtime dependency on segmentation. When merging PR #9, first sync current `main` into its branch and preserve both features in the overlapping files listed below.
 - **Resources:** scheduling worktree and local/remote branch removed after verifying the pushed merge. Stages `test-sched` and `test` were destroyed and their inventories confirmed empty. The removed worktree's `.env.test` differed from the retained main-checkout copy only in six destroyed-stage output values. Lane D's worktree and branch remain untouched. No live processes retained.
 - **Original merge protocol (historical order; shared-file resolutions still apply):** the certain conflicts and their resolutions, all "keep both sides", with the same substance as the list in [campaign-segmentation](campaign-segmentation.md):
   - `packages/api/src/Schemas.ts`: D adds `filter: Schema.optionalKey(ContactAttributes)` on `CreateCampaignPayload` and `CampaignSummary`; C adds the `scheduled` member, `ScheduleCampaignPayload` and `SendAtNotInFuture`.

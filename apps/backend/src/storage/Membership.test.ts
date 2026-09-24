@@ -353,7 +353,7 @@ describe("listMembers", () => {
 });
 
 describe("deleteContact", () => {
-  const email = "max@example.com";
+  const email = "sam@example.com";
 
   const contactMeta = {
     pk: { S: `CONTACT#${contactId}` },
@@ -626,11 +626,11 @@ describe("importContacts", () => {
   it("creates a contact, reserves its address and joins it, in one transaction", () =>
     Effect.runPromise(
       Effect.gen(function* () {
-        const { table, run } = importInto({}, [candidate(contactId, "max@example.com")]);
+        const { table, run } = importInto({}, [candidate(contactId, "sam@example.com")]);
 
         expect(yield* run).toStrictEqual({
           outcome: "imported",
-          contacts: [{ email: "max@example.com", contactId, member: true }],
+          contacts: [{ email: "sam@example.com", contactId, member: true }],
         });
 
         const items = table.transactionRequests[0]?.TransactItems ?? [];
@@ -642,7 +642,7 @@ describe("importContacts", () => {
           ConditionExpression: "attribute_exists(pk)",
         });
         expect(items[1]?.Put?.Item?.["pk"]).toStrictEqual({ S: `CONTACT#${contactId}` });
-        expect(items[2]?.Put?.Item?.["pk"]).toStrictEqual({ S: "EMAIL#max@example.com" });
+        expect(items[2]?.Put?.Item?.["pk"]).toStrictEqual({ S: "EMAIL#sam@example.com" });
         expect(items[3]?.Update?.Key).toStrictEqual({
           pk: { S: `LIST#${listId}` },
           sk: { S: `MEMBER#${contactId}` },
@@ -662,17 +662,17 @@ describe("importContacts", () => {
             batchGetItem: [
               Effect.succeed({
                 Responses: {
-                  [physicalName]: [reservationFor("max@example.com", otherContactId)],
+                  [physicalName]: [reservationFor("sam@example.com", otherContactId)],
                 },
               }),
             ],
           },
-          [candidate(contactId, "max@example.com")],
+          [candidate(contactId, "sam@example.com")],
         );
 
         expect(yield* run).toStrictEqual({
           outcome: "imported",
-          contacts: [{ email: "max@example.com", contactId: otherContactId, member: true }],
+          contacts: [{ email: "sam@example.com", contactId: otherContactId, member: true }],
         });
 
         const items = table.transactionRequests[0]?.TransactItems ?? [];
@@ -687,7 +687,7 @@ describe("importContacts", () => {
         // import would add it to the list under an address it has since moved off.
         expect(items[2]?.ConditionCheck).toStrictEqual({
           Table: tableLogicalId,
-          Key: { pk: { S: "EMAIL#max@example.com" }, sk: { S: "META" } },
+          Key: { pk: { S: "EMAIL#sam@example.com" }, sk: { S: "META" } },
           ConditionExpression: "contactId = :holder",
           ExpressionAttributeValues: { ":holder": { S: otherContactId } },
         });
@@ -701,15 +701,15 @@ describe("importContacts", () => {
         const reserved: ScriptedReplies = {
           batchGetItem: [
             Effect.succeed({
-              Responses: { [physicalName]: [reservationFor("max@example.com", contactId)] },
+              Responses: { [physicalName]: [reservationFor("sam@example.com", contactId)] },
             }),
           ],
         };
 
-        const first = importInto(reserved, [candidate(contactId, "max@example.com")]);
+        const first = importInto(reserved, [candidate(contactId, "sam@example.com")]);
         const firstResult = yield* first.run;
 
-        const second = importInto(reserved, [candidate(otherContactId, "max@example.com")]);
+        const second = importInto(reserved, [candidate(otherContactId, "sam@example.com")]);
         const secondResult = yield* second.run;
 
         expect(secondResult).toStrictEqual(firstResult);
@@ -728,7 +728,7 @@ describe("importContacts", () => {
   it("keeps the original join time when a member is imported again", () =>
     Effect.runPromise(
       Effect.gen(function* () {
-        const { table, run } = importInto({}, [candidate(contactId, "max@example.com")]);
+        const { table, run } = importInto({}, [candidate(contactId, "sam@example.com")]);
 
         yield* run;
 
@@ -744,7 +744,7 @@ describe("importContacts", () => {
         const candidates = Array.from({ length: 20 }, (_, index) =>
           candidate(
             `0195f0a0-1111-4222-8333-4444444${String(index).padStart(5, "0")}`,
-            `max${index}@example.com`,
+            `contact${index}@example.com`,
           ),
         );
 
@@ -765,7 +765,7 @@ describe("importContacts", () => {
               cancelled("ConditionalCheckFailed", "None", "None", "None", "None"),
             ],
           },
-          [candidate(contactId, "max@example.com")],
+          [candidate(contactId, "sam@example.com")],
         );
 
         expect(yield* run).toStrictEqual({ outcome: "list-missing" });
@@ -779,12 +779,12 @@ describe("importContacts", () => {
           {
             batchGetItem: [
               Effect.succeed({
-                Responses: { [physicalName]: [reservationFor("max@example.com", contactId)] },
+                Responses: { [physicalName]: [reservationFor("sam@example.com", contactId)] },
               }),
             ],
             transactWriteItems: [cancelled("None", "ConditionalCheckFailed", "None", "None")],
           },
-          [candidate(contactId, "max@example.com")],
+          [candidate(contactId, "sam@example.com")],
         );
 
         expect(failureOf(yield* Effect.result(run)).reason).toBe("unavailable");

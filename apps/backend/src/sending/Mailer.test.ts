@@ -88,7 +88,7 @@ const unsubscribeBase = "https://unsub.lambda-url.eu-central-1.on.aws";
 
 const unsubscribeSecret = "8f14e45fceea167a5a36dedd4bea2543a1b2c3d4e5f60718293a4b5c6d7e8f90";
 
-const recipient = "max@example.com";
+const recipient = "sam@example.com";
 
 const unsubscribeUrl = `${unsubscribeBase}/unsubscribe/${mintToken(Redacted.make(unsubscribeSecret), recipient)}`;
 
@@ -148,7 +148,7 @@ describe("makeSend", () => {
 
         expect(request).toStrictEqual({
           FromEmailAddress: "news@example.com",
-          Destination: { ToAddresses: ["max@example.com"] },
+          Destination: { ToAddresses: ["sam@example.com"] },
           Content: {
             Simple: {
               Subject: { Data: "Grüße 😀", Charset: "UTF-8" },
@@ -190,7 +190,7 @@ describe("makeSend", () => {
 
         expect(request).toStrictEqual({
           FromEmailAddress: "news@example.com",
-          Destination: { ToAddresses: ["max@example.com"] },
+          Destination: { ToAddresses: ["sam@example.com"] },
           Content: {
             Simple: {
               Subject: { Data: "Grüße 😀", Charset: "UTF-8" },
@@ -230,7 +230,7 @@ describe("makeSend", () => {
 
         expect(request).toStrictEqual({
           FromEmailAddress: "news@example.com",
-          Destination: { ToAddresses: ["max@example.com"] },
+          Destination: { ToAddresses: ["sam@example.com"] },
           Content: {
             Simple: {
               Subject: { Data: "Grüße 😀", Charset: "UTF-8" },
@@ -292,7 +292,7 @@ describe("makeSend", () => {
           const send = yield* AWS.SES.SendEmail(identity, configurationSet);
 
           return yield* send({
-            Destination: { ToAddresses: ["max@example.com"] },
+            Destination: { ToAddresses: ["sam@example.com"] },
             Content: { Simple: { Subject: { Data: "x" }, Body: { Text: { Data: "y" } } } },
           });
         }).pipe(
@@ -433,7 +433,7 @@ describe("Retry.none", () => {
           const send = yield* AWS.SES.SendEmail(identity, configurationSet);
 
           return yield* send({
-            Destination: { ToAddresses: ["max@example.com"] },
+            Destination: { ToAddresses: ["sam@example.com"] },
             Content: { Simple: { Subject: { Data: "x" }, Body: { Text: { Data: "y" } } } },
           }).pipe(Retry.none);
         }).pipe(Effect.provide(sendEmailLayer(transport)), Effect.exit);

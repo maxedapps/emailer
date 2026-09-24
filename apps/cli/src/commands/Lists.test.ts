@@ -50,7 +50,7 @@ describe("list management from the command line", () => {
         const file = `${tmpdir()}/emailer-import-${randomUUID()}.json`;
 
         const contents = yield* toJson({
-          contacts: [{ email: "Max@example.com" }, { email: "max@EXAMPLE.com" }],
+          contacts: [{ email: "Sam@example.com" }, { email: "sam@EXAMPLE.com" }],
         });
 
         yield* Effect.promise(() => writeFile(file, contents));
@@ -72,7 +72,7 @@ describe("list management from the command line", () => {
         const service = inMemoryService(token);
 
         const contents = yield* toJson({
-          contacts: [{ email: "max@example.com", attributes: { plan: "pro" } }],
+          contacts: [{ email: "sam@example.com", attributes: { plan: "pro" } }],
         });
 
         const result = yield* withService(service, (baseUrl) =>
@@ -87,7 +87,7 @@ describe("list management from the command line", () => {
 
         expect(result.exitCode).toBe(0);
         expect(yield* parseJson(result.stdout)).toMatchObject({
-          contacts: [{ email: "max@example.com", member: true }],
+          contacts: [{ email: "sam@example.com", member: true }],
         });
       }).pipe(Effect.provide(NodeServices.layer)),
     ));
@@ -98,7 +98,7 @@ describe("list management from the command line", () => {
         const service = inMemoryService(token);
 
         const contents = yield* toJson({
-          contacts: [{ email: "max@example.com", attributs: { plan: "pro" } }],
+          contacts: [{ email: "sam@example.com", attributs: { plan: "pro" } }],
         });
 
         const result = yield* withTempFile("json", contents, (file) =>

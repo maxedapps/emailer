@@ -1,6 +1,6 @@
 # Contact management — implementation review (PR #1)
 
-> **Target:** branch `contact-list` → `main` ([PR #1](https://github.com/maxedapps/emailer/pull/1)), 46 files, +7806/−1858, reviewed at `b4c15e7`
+> **Target:** branch `contact-list` → `main` (PR #1), 46 files, +7806/−1858, reviewed at `b4c15e7`
 > **Authority:** [slice plan](contact-list.md), [ADR-0005](../0005-contact-identity-and-membership-access-paths.md) (Accepted), and the two pre-implementation records — [adversarial review](contact-list-review.md) and [complexity triage](contact-list-decomplex.md)
 > **Verdict:** **Changes required** — three material defects, one records defect. **Closure:** F2, F3 and F4 fixed on this branch; F1 deferred by the author, then fixed after merge in [the follow-up](consent-identity-and-storage-cleanup.md). No defect in the cascades, the transaction arithmetic or the `membershipVersion` invariant.
 > **Date:** 2026-09-12

@@ -11,12 +11,12 @@ describe("address status and un-suppress from the command line", () => {
         const service = inMemoryService(token);
 
         const result = yield* withService(service, (baseUrl) =>
-          runCli(baseUrl, token, ["addresses", "status", "--email", "Max@Example.com"]),
+          runCli(baseUrl, token, ["addresses", "status", "--email", "Sam@Example.com"]),
         );
 
         expect(result.exitCode).toBe(0);
         expect(yield* parseJson(result.stdout)).toStrictEqual({
-          email: "Max@Example.com",
+          email: "Sam@Example.com",
           status: "suppressed",
           suppression: { reason: "bounce", suppressedAt: "2026-09-15T10:00:00.000Z" },
           transientBounces: [],
@@ -31,12 +31,12 @@ describe("address status and un-suppress from the command line", () => {
         const service = inMemoryService(token);
 
         const result = yield* withService(service, (baseUrl) =>
-          runCli(baseUrl, token, ["addresses", "unsuppress", "--email", "max@example.com"]),
+          runCli(baseUrl, token, ["addresses", "unsuppress", "--email", "sam@example.com"]),
         );
 
         expect(result.exitCode).toBe(0);
         expect(yield* parseJson(result.stdout)).toStrictEqual({
-          email: "max@example.com",
+          email: "sam@example.com",
           status: "mailable",
           transientBounces: [],
           accountSuppression: null,

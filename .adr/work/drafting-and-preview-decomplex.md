@@ -157,7 +157,7 @@ None of the findings touches:
   - The Feedback change is plan-derived.
 - **Current-need evidence:**
   - `MailerLive` is the repository's only `AWS.SES.SendEmail` binding (`Mailer.ts:221`). `ReplayFeedback.ts` re-invokes the Feedback Lambda with the original events.
-  - `handleEvent` drops events from other configuration sets (`Feedback.ts:138-143`), which covers EmailOctopus on the shared account.
+  - `handleEvent` drops events from other configuration sets (`Feedback.ts:138-143`), which covers the other sender on the shared account.
   - After T3, the typed `purpose` union guarantees that every campaign send carries `campaignId`.
   - An event without `campaignId` on this configuration set can therefore only be a test send. The tag distinguishes a case from itself.
 - **Added burden:**

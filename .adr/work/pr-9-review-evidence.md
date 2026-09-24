@@ -18,7 +18,7 @@
 | Import smoke check | `pnpm check:imports` passed after the CLI rerun |
 | Default `pnpm check`, attempt 2 | 604/605 passed; different existing CLI case `never writes diagnostics to stdout` timed out; run took 213.61 seconds |
 | Full suite with one worker | `pnpm exec vitest run --project unit --maxWorkers=1`: 605/605 tests across 29 files passed in 152.14 seconds; subsequent `pnpm check:imports` passed |
-| GitHub CI | `check` SUCCESS at the reviewed head; [run](https://github.com/maxedapps/emailer/actions/runs/35214259697/job/105178854320) |
+| GitHub CI | `check` SUCCESS at the reviewed head |
 | Dispatch lane automated checks | 70/70 passed across Dispatching, Storage/Membership and Storage/RateLimit |
 | Manual help | `pnpm emailer campaigns create --help` passed and documents repeatable `--filter key=value` |
 | Manual CLI against local HTTP server | Repeated filters and own prototype-name keys survive to the request; absent filter remains absent; malformed/bounds-invalid flags fail before HTTP |

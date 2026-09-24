@@ -11,7 +11,7 @@ class LeakySdkError extends Data.TaggedError("LeakySdkError")<{
   readonly token: string;
 }> {}
 
-const mailbox = "max@example.com";
+const mailbox = "sam@example.com";
 
 interface Entry {
   readonly level: string;

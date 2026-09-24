@@ -77,7 +77,7 @@ A manual CLI run under `TZ=Europe/Berlin` sent both zone-less `09:00` and `11:00
 
 ### F1. Reject impossible dates before any scheduling mutation {medium #invalid-date}
 
-**P2 · S2/C3 — medium severity, confirmed application behavior.** Location: [new ScheduleCampaignPayload, line 319](https://github.com/maxedapps/emailer/blob/0516864d3419af564f6267de581500a5d591b2f4/packages/api/src/Schemas.ts#L319), with the future check in [Campaigns.schedule, line 175](https://github.com/maxedapps/emailer/blob/0516864d3419af564f6267de581500a5d591b2f4/apps/backend/src/Campaigns.ts#L175).
+**P2 · S2/C3 — medium severity, confirmed application behavior.** Location: new ScheduleCampaignPayload, line 319, with the future check in Campaigns.schedule, line 175.
 
 The timestamp schema checks the string's shape, not its calendar validity. Both of these pass:
 
@@ -88,7 +88,7 @@ The timestamp schema checks the string's shape, not its calendar validity. Both 
 
 Neither is rejected by `Date.parse(sendAt) <= now`. Starting with an already scheduled campaign, both requests replaced its stored timestamp and run token and reached the schedule service. A controlled service rejection produced HTTP 503 `StorageUnavailable`, with the invalid replacement still stored. The control input `nonsense` produced HTTP 400 and no mutation.
 
-The production adapter then makes the problem destructive: [Api.ts:222](https://github.com/maxedapps/emailer/blob/0516864d3419af564f6267de581500a5d591b2f4/apps/backend/src/Api.ts#L222) deletes the existing timer before passing the original invalid date to `CreateSchedule`. A rejected replacement loses the previously working scheduled send. The old token is already invalid even if an earlier fire remains in the queue.
+The production adapter then makes the problem destructive: Api.ts:222 deletes the existing timer before passing the original invalid date to `CreateSchedule`. A rejected replacement loses the previously working scheduled send. The old token is already invalid even if an earlier fire remains in the queue.
 
 The AWS rejection itself was not called live in this review. Its documented date-expression requirements and `ValidationException` support that downstream failure; the admission and state mutation were reproduced locally through production router/domain code. [CreateSchedule contract](https://docs.aws.amazon.com/scheduler/latest/APIReference/API_CreateSchedule.html)
 

@@ -18,8 +18,8 @@ const createdAt = "2026-09-11T10:00:00.000Z";
 
 const contact: Schemas.Contact = {
   id: contactId,
-  email: "max@example.com",
-  name: "Max",
+  email: "sam@example.com",
+  name: "Sam",
   attributes: { tier: "gold" },
   createdAt,
 };
@@ -108,8 +108,8 @@ describe("stored contact items", () => {
         expect(stored).toMatchObject({
           v: recordVersion,
           id: contactId,
-          email: "max@example.com",
-          name: "Max",
+          email: "sam@example.com",
+          name: "Sam",
           attributes: { tier: "gold" },
           createdAt,
         });
@@ -119,7 +119,7 @@ describe("stored contact items", () => {
   it("omits an optional field the writer never wrote rather than reading it as undefined", () =>
     Effect.runPromise(
       Effect.gen(function* () {
-        const item = contactItem({ id: contactId, email: "max@example.com", createdAt });
+        const item = contactItem({ id: contactId, email: "sam@example.com", createdAt });
 
         const stored = yield* decodeContactItem(item);
 

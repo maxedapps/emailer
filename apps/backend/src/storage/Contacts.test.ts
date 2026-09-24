@@ -20,7 +20,7 @@ import type { ScriptedReplies } from "./Testing.ts";
 
 const operationsFor = (table: Table) => contactOperations(primitivesFor(table));
 
-const email = "max@example.com";
+const email = "sam@example.com";
 
 const contactItem = {
   pk: { S: `CONTACT#${contactId}` },
@@ -30,7 +30,7 @@ const contactItem = {
   v: { N: "1" },
   id: { S: contactId },
   email: { S: email },
-  name: { S: "Max" },
+  name: { S: "Sam" },
   createdAt: { S: createdAt },
 };
 
@@ -101,15 +101,15 @@ describe("createContact", () => {
 
         yield* operationsFor(table).createContact({
           id: contactId,
-          email: "Max.S@example.com",
+          email: "Sam.R@example.com",
           createdAt,
         });
 
         expect(table.transactionRequests[0]?.TransactItems[1]?.Put?.Item?.["pk"]).toStrictEqual({
-          S: "EMAIL#max.s@example.com",
+          S: "EMAIL#sam.r@example.com",
         });
         expect(table.transactionRequests[0]?.TransactItems[0]?.Put?.Item?.["email"]).toStrictEqual({
-          S: "Max.S@example.com",
+          S: "Sam.R@example.com",
         });
       }),
     ));
@@ -185,7 +185,7 @@ describe("getContact", () => {
         expect(Option.getOrUndefined(contact)).toStrictEqual({
           id: contactId,
           email,
-          name: "Max",
+          name: "Sam",
           createdAt,
         });
       }),
@@ -259,7 +259,7 @@ describe("getContactByEmail", () => {
           ],
         });
 
-        const found = yield* operationsFor(table).getContactByEmail("MAX@example.com");
+        const found = yield* operationsFor(table).getContactByEmail("SAM@example.com");
 
         expect(table.getItemRequests[0]?.Key).toStrictEqual({
           pk: { S: `EMAIL#${email}` },
@@ -361,7 +361,7 @@ describe("updateContact", () => {
 
         expect(yield* run).toStrictEqual({
           outcome: "updated",
-          contact: { id: contactId, email, name: "Max", attributes: { city: "Berlin" }, createdAt },
+          contact: { id: contactId, email, name: "Sam", attributes: { city: "Berlin" }, createdAt },
         });
 
         const request = table.updateItemRequests[0];
@@ -433,7 +433,7 @@ describe("updateContact", () => {
 
         expect(yield* run).toStrictEqual({
           outcome: "updated",
-          contact: { id: contactId, email, name: "Max", createdAt },
+          contact: { id: contactId, email, name: "Sam", createdAt },
         });
         expect(table.updateItemRequests).toStrictEqual([]);
         expect(table.transactionRequests).toStrictEqual([]);
@@ -447,7 +447,7 @@ describe("updateContact", () => {
 
         expect(yield* run).toStrictEqual({
           outcome: "updated",
-          contact: { id: contactId, email: "new@example.com", name: "Max", createdAt },
+          contact: { id: contactId, email: "new@example.com", name: "Sam", createdAt },
         });
 
         expect(table.transactionRequests).toStrictEqual([
@@ -517,11 +517,11 @@ describe("updateContact", () => {
   it("takes the plain path when only the spelling of the address changes", () =>
     Effect.runPromise(
       Effect.gen(function* () {
-        const { table, run } = update(found, { email: "MAX@example.com" });
+        const { table, run } = update(found, { email: "SAM@example.com" });
 
         expect(yield* run).toStrictEqual({
           outcome: "updated",
-          contact: { id: contactId, email: "MAX@example.com", name: "Max", createdAt },
+          contact: { id: contactId, email: "SAM@example.com", name: "Sam", createdAt },
         });
         expect(table.transactionRequests).toStrictEqual([]);
         expect(table.updateItemRequests[0]?.UpdateExpression).toBe("SET #email = :email");

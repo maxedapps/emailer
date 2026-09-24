@@ -75,7 +75,7 @@ No material findings. Live T2 plan/deploy/SES reads and T3 the operator mailbox/
   - `pnpm exec oxlint --type-aware --type-check --deny-warnings stacks/sending-identity.ts` — 0 warnings / 0 errors.
   - Python relative-link check over `README.md`, `.adr/**/*.md`, `wiki/**/*.md` — **379** links resolved, **0** broken (ellipsis placeholders skipped). Work-document claim was 385; the zero-broken result is what T4 Verify requires.
   - `.env.test`: `EMAILER_SENDER_IDENTITY=mail.example.com`; first `EMAILER_ALLOWED_RECIPIENTS` entry `dmarc@reports.example.net`.
-  - Public `dig` (authoritative `@ns-637.awsdns-15.net`, then `@8.8.8.8`):
+  - Public `dig` (the zone's authoritative Route 53 name server, then `@8.8.8.8`):
     - `bounce.mail.example.com MX` → `10 feedback-smtp.us-east-1.amazonses.com.` and nothing else (TTL 1800).
     - `bounce.mail.example.com TXT` → `"v=spf1 include:amazonses.com ~all"`.
     - `_dmarc.mail.example.com TXT` → `"v=DMARC1; p=none; rua=mailto:dmarc@reports.example.net"` (no `aspf`, no `sp`).
