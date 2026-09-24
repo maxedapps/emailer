@@ -4,8 +4,6 @@ import { Context, Duration, Effect, Layer, Schema } from "effect";
 
 import { unavailable } from "../storage/Errors.ts";
 
-import type { StorageFailure } from "../storage/Errors.ts";
-
 /**
  * Campaign wake-up queue, message and sender. This module must not grow a Function class: the API
  * and the dispatcher both import it to wake campaigns, and an inline Function would pull the
@@ -109,25 +107,22 @@ export const encodeDispatchMessage = Schema.encodeUnknownEffect(
 );
 
 /** Wakes a campaign's dispatcher run: the API when a send starts, the dispatcher per next slice. */
-export class CampaignWake extends Context.Service<
-  CampaignWake,
-  {
-    readonly enqueue: (campaignId: string, runToken: string) => Effect.Effect<void, StorageFailure>;
-  }
->()("emailer/backend/CampaignWake") {}
-
-export const CampaignWakeLive = Layer.effect(CampaignWake)(
-  Effect.gen(function* () {
+export class CampaignWake extends Context.Service<CampaignWake>()("emailer/backend/CampaignWake", {
+  make: Effect.gen(function* () {
     const sendMessage = yield* AWS.SQS.SendMessage(yield* dispatchQueue);
 
-    return CampaignWake.of({
-      enqueue: (campaignId, runToken) =>
+    return {
+      enqueue: (campaignId: string, runToken: string) =>
         encodeDispatchMessage({ campaignId, runToken }).pipe(
           Effect.orDie,
           Effect.flatMap((MessageBody) => sendMessage({ MessageBody })),
           Effect.mapError(unavailable("dispatch")),
           Effect.asVoid,
         ),
-    });
+    } as const;
   }),
-).pipe(Layer.provide(AWS.SQS.SendMessageHttp));
+}) {}
+
+export const CampaignWakeLive = Layer.effect(CampaignWake)(CampaignWake.make).pipe(
+  Layer.provide(AWS.SQS.SendMessageHttp),
+);

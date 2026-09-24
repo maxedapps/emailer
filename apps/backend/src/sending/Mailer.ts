@@ -47,18 +47,6 @@ const rejectionCodes: Partial<Record<sesv2.SendEmailError["_tag"], Schemas.Rejec
   LimitExceededException: "rate-limited",
 };
 
-export class Mailer extends Context.Service<
-  Mailer,
-  {
-    readonly send: (
-      recipient: string,
-      content: MessageContent,
-      unsubscribeUrl: string,
-      purpose: SendPurpose,
-    ) => Effect.Effect<SubmissionOutcome>;
-  }
->()("emailer/backend/Mailer") {}
-
 export const feedbackPublishing = Effect.gen(function* () {
   const mail = yield* configurationSet;
   const { accountId, region } = yield* AWS.AWSEnvironment.current;
@@ -148,8 +136,8 @@ export const makeSend =
       );
     });
 
-export const MailerLive = Layer.effect(Mailer)(
-  Effect.gen(function* () {
+export class Mailer extends Context.Service<Mailer>()("emailer/backend/Mailer", {
+  make: Effect.gen(function* () {
     const settings = yield* senderSettings;
 
     const identity = yield* sendingIdentity;
@@ -157,7 +145,7 @@ export const MailerLive = Layer.effect(Mailer)(
     const mail = yield* configurationSet;
     const sendEmail = yield* AWS.SES.SendEmail(identity, mail);
 
-    return Mailer.of({
+    return {
       send: Effect.fn("Mailer.send")(
         makeSend(
           sendEmail,
@@ -165,6 +153,10 @@ export const MailerLive = Layer.effect(Mailer)(
           settings.postalAddress,
         ),
       ),
-    });
+    } as const;
   }),
-).pipe(Layer.provide(AWS.SES.SendEmailHttp));
+}) {}
+
+export const MailerLive = Layer.effect(Mailer)(Mailer.make).pipe(
+  Layer.provide(AWS.SES.SendEmailHttp),
+);

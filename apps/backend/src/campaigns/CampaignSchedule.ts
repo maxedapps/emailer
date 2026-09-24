@@ -10,31 +10,13 @@ import {
 } from "../sending/Dispatch.ts";
 import { unavailable } from "../storage/Errors.ts";
 
-import type { StorageFailure } from "../storage/Errors.ts";
-
-/**
- * One-shot EventBridge schedules that wake a campaign at its send time, each named by its run
- * token. Nothing deletes one: it deletes itself once it has fired, and the fire of a schedule its
- * campaign has moved on from is discarded as stale.
- */
-export class CampaignSchedule extends Context.Service<
-  CampaignSchedule,
-  {
-    readonly create: (
-      campaignId: string,
-      runToken: string,
-      sendAt: string,
-    ) => Effect.Effect<void, StorageFailure>;
-  }
->()("emailer/backend/CampaignSchedule") {}
-
 export const campaignSchedule = (
   createSchedule: (
     request: AWS.Scheduler.CreateScheduleRequest,
   ) => Effect.Effect<scheduler.CreateScheduleOutput, scheduler.CreateScheduleError>,
   queueArn: Effect.Effect<string>,
 ) =>
-  CampaignSchedule.of({
+  ({
     create: (campaignId: string, runToken: string, sendAt: string) =>
       encodeDispatchMessage({ campaignId, runToken }).pipe(
         Effect.orDie,
@@ -54,16 +36,28 @@ export const campaignSchedule = (
         Effect.mapError(unavailable("schedule")),
         Effect.asVoid,
       ),
-  });
+  }) as const;
 
-export const CampaignScheduleLive = Layer.effect(CampaignSchedule)(
-  Effect.gen(function* () {
-    const group = yield* scheduleGroup;
-    const queue = yield* dispatchQueue;
+/**
+ * One-shot EventBridge schedules that wake a campaign at its send time, each named by its run
+ * token. Nothing deletes one: it deletes itself once it has fired, and the fire of a schedule its
+ * campaign has moved on from is discarded as stale.
+ */
+export class CampaignSchedule extends Context.Service<CampaignSchedule>()(
+  "emailer/backend/CampaignSchedule",
+  {
+    make: Effect.gen(function* () {
+      const group = yield* scheduleGroup;
+      const queue = yield* dispatchQueue;
 
-    return campaignSchedule(
-      yield* AWS.Scheduler.CreateSchedule(yield* schedulerRole, group),
-      yield* queue.queueArn,
-    );
-  }),
-).pipe(Layer.provide(AWS.Scheduler.CreateScheduleHttp));
+      return campaignSchedule(
+        yield* AWS.Scheduler.CreateSchedule(yield* schedulerRole, group),
+        yield* queue.queueArn,
+      );
+    }),
+  },
+) {}
+
+export const CampaignScheduleLive = Layer.effect(CampaignSchedule)(CampaignSchedule.make).pipe(
+  Layer.provide(AWS.Scheduler.CreateScheduleHttp),
+);

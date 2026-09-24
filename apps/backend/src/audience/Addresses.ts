@@ -12,28 +12,20 @@ import type { StorageFailure } from "../storage/Errors.ts";
  * Account-list lookup and delete. These are SES callables, not a storage capability; the Live
  * layer binds them.
  */
-export class AccountSuppression extends Context.Service<
-  AccountSuppression,
+export class AccountSuppression extends Context.Service<AccountSuppression>()(
+  "emailer/backend/AccountSuppression",
   {
-    readonly getSuppressedDestination: (
-      request: sesv2.GetSuppressedDestinationRequest,
-    ) => Effect.Effect<sesv2.GetSuppressedDestinationResponse, sesv2.GetSuppressedDestinationError>;
-    readonly deleteSuppressedDestination: (
-      request: sesv2.DeleteSuppressedDestinationRequest,
-    ) => Effect.Effect<
-      sesv2.DeleteSuppressedDestinationResponse,
-      sesv2.DeleteSuppressedDestinationError
-    >;
-  }
->()("emailer/backend/AccountSuppression") {}
+    make: Effect.gen(function* () {
+      return {
+        getSuppressedDestination: yield* AWS.SES.GetSuppressedDestination(),
+        deleteSuppressedDestination: yield* AWS.SES.DeleteSuppressedDestination(),
+      } as const;
+    }),
+  },
+) {}
 
 export const AccountSuppressionLive = Layer.effect(AccountSuppression)(
-  Effect.gen(function* () {
-    return AccountSuppression.of({
-      getSuppressedDestination: yield* AWS.SES.GetSuppressedDestination(),
-      deleteSuppressedDestination: yield* AWS.SES.DeleteSuppressedDestination(),
-    });
-  }),
+  AccountSuppression.make,
 ).pipe(
   Layer.provide(
     Layer.mergeAll(AWS.SES.GetSuppressedDestinationHttp, AWS.SES.DeleteSuppressedDestinationHttp),
