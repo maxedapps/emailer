@@ -143,3 +143,16 @@ Completed on 2026-09-24 on the branch `simplify`.
   - Prod still runs the code from before #4. Deploy with `--force` and check each function's `CodeSha256`.
   - Prod's `FeedbackFailures` must be empty first. The Lambda failure records the old destination wrote cannot be redriven by the new path.
   - The deploy creates `emailer-prod-feedback-events` and the rule `emailer-prod-ses-feedback`. It deletes the old generated-name rule, the feedback function's event-invoke config and the `FeedbackDestinationDeliveryFailures` alarm. While the rules swap, an event may be missed or delivered twice. Both are safe: publication is best effort (ADR-0003), and the writes are idempotent.
+- **Prod deploy:** on 2026-09-24, PR #7 merged as `791ea5a`, and prod was deployed from it with `--force`. That deploy also brought #4 and #6 to prod.
+  - `FeedbackFailures` was empty right before the deploy.
+  - The plan matched the expected upgrade:
+    - created: the queue, the rule, the queue policy and the event-source mapping;
+    - deleted: the old rule, its invoke permission and the `FeedbackDestinationDeliveryFailures` alarm;
+    - the API lost its `DeleteSchedule` binding.
+  - All five functions have a new `CodeSha256`. The unsubscribe and preview keys were kept, because Alchemy's `Random` keeps its stored value on update.
+  - On AWS:
+    - the rule targets the queue, and the policy admits only that rule;
+    - the mapping is enabled at batch size 1;
+    - the feedback function has no event-invoke config;
+    - the queue dead-letters after five receives.
+  - A `[Test]` copy of the prod draft went to a labelled bounce-simulator address. SES accepted it, and the feedback function suppressed the address locally within about ten seconds, from the queue. The address was then unsuppressed, and no simulator entry is left on the account suppression list.
