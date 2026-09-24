@@ -6,7 +6,7 @@ import { Context, Data, Duration, Effect, Layer } from "effect";
 
 import { describeCause } from "../Diagnostics.ts";
 import { sendingIdentity } from "../identity/SendingIdentity.ts";
-import { compose, senderSettings } from "./Message.ts";
+import { compose, fromHeader, senderSettings } from "./Message.ts";
 
 import type { MessageContent } from "./Message.ts";
 
@@ -85,7 +85,7 @@ export const makeSend =
     sendEmail: (
       request: AWS.SES.SendEmailRequest,
     ) => Effect.Effect<sesv2.SendEmailResponse, sesv2.SendEmailError>,
-    sender: string,
+    from: string,
     postal: string,
   ) =>
   (
@@ -99,7 +99,7 @@ export const makeSend =
       const text = { Text: { Data: message.text, Charset: "UTF-8" } };
 
       const request: AWS.SES.SendEmailRequest = {
-        FromEmailAddress: sender,
+        FromEmailAddress: from,
         Destination: { ToAddresses: [recipient] },
         Content: {
           Simple: {
@@ -161,7 +161,13 @@ export const MailerLive = Layer.effect(Mailer)(
     const sendEmail = yield* AWS.SES.SendEmail(identity, mail);
 
     return Mailer.of({
-      send: Effect.fn("Mailer.send")(makeSend(sendEmail, settings.sender, settings.postalAddress)),
+      send: Effect.fn("Mailer.send")(
+        makeSend(
+          sendEmail,
+          fromHeader(settings.sender, settings.senderName),
+          settings.postalAddress,
+        ),
+      ),
     });
   }),
 ).pipe(Layer.provide(AWS.SES.SendEmailHttp));

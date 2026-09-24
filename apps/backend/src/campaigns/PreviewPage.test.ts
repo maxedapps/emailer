@@ -16,6 +16,7 @@ const campaignId = "0195f0a0-1111-4222-8333-4444444ca409";
 
 const settings = {
   sender: "news@example.com",
+  senderName: Option.none<string>(),
   postalAddress: "Example GmbH, Example Street 1, 12345 Example City",
 };
 
@@ -42,12 +43,12 @@ const tokenFor = (id: string, offset = 3600, key = signingKey) =>
     mintPreviewToken(Redacted.make(key), id, expiresAt),
   );
 
-const pageFor = (stored: Option.Option<Schemas.Campaign>, token: string) => {
+const pageFor = (stored: Option.Option<Schemas.Campaign>, token: string, sender = settings) => {
   const reads: Array<string> = [];
   const scope = Scope.makeUnsafe();
 
   const handle = Effect.runSync(
-    makePreviewHandler(settings).pipe(
+    makePreviewHandler(sender).pipe(
       Effect.provide(configuration),
       Effect.provideService(Scope.Scope, scope),
     ),
@@ -112,6 +113,18 @@ describe("GET /previews/:token", () => {
         expect(body).toContain(
           `<pre>Hello &lt;there&gt;${footerFor(placeholderUnsubscribeUrl, settings.postalAddress)}</pre>`,
         );
+      }),
+    ));
+
+  it("shows the sender's name as a mail client would, not encoded", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const { body } = yield* pageFor(Option.some(campaign), yield* tokenFor(campaignId), {
+          ...settings,
+          senderName: Option.some("Café Example"),
+        });
+
+        expect(body).toContain("<dd>Café Example &lt;news@example.com&gt;</dd>");
       }),
     ));
 

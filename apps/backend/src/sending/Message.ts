@@ -1,5 +1,5 @@
 import * as Schemas from "@emailer/api/Schemas";
-import { Config, Data, Effect, Schema } from "effect";
+import { Config, Data, Effect, Encoding, Option, Schema } from "effect";
 
 /**
  * What a message says before it is addressed to anyone: a campaign's stored draft, or a test copy
@@ -36,16 +36,35 @@ const postalAddress = Config.schema(
   "EMAILER_POSTAL_ADDRESS",
 );
 
+/**
+ * The name recipients see beside the From address. Quotes, backslashes and control characters are
+ * refused, so a plain name needs no escaping inside its quotes. A name beyond printable ASCII is
+ * sent as one RFC 2047 encoded word, which may be at most 75 characters, and 45 UTF-8 bytes always
+ * fit in one.
+ */
+const senderName = Config.option(
+  Config.schema(
+    Schema.Trim.check(
+      Schema.isNonEmpty(),
+      Schema.isPattern(/^[^"\\\p{Cc}]*$/u),
+      Schemas.utf8ByteCeiling(45),
+    ),
+    "EMAILER_FROM_NAME",
+  ),
+);
+
 const decodeAddress = Schema.decodeUnknownEffect(Schemas.EmailAddress);
 
 /**
- * The From address and the postal address every footer carries. A sender outside the verified
- * identity, or an empty postal address, is a deployment defect rather than a per-message failure.
+ * The From address, its optional display name and the postal address every footer carries. A
+ * sender outside the verified identity, an invalid name or an empty postal address is a deployment
+ * defect rather than a per-message failure.
  */
 export const senderSettings = Effect.gen(function* () {
   const raw = yield* Config.all({
     identity: Config.String("EMAILER_SENDER_IDENTITY"),
     sender: Config.String("EMAILER_FROM_EMAIL"),
+    senderName,
     postalAddress,
   });
 
@@ -56,8 +75,23 @@ export const senderSettings = Effect.gen(function* () {
     return yield* Effect.die(new SenderNotOnIdentity({ identity }));
   }
 
-  return { sender, postalAddress: raw.postalAddress };
+  return { sender, senderName: raw.senderName, postalAddress: raw.postalAddress };
 });
+
+const printableAscii = /^[\x20-\x7E]*$/;
+
+/**
+ * The From value SES sends, which must be 7-bit ASCII. A plain name goes out quoted; any other is
+ * base64 in an RFC 2047 encoded word, because encoding a name that needs none is a spam signal.
+ */
+export const fromHeader = (sender: string, name: Option.Option<string>): string =>
+  Option.match(name, {
+    onNone: () => sender,
+    onSome: (name) =>
+      printableAscii.test(name)
+        ? `"${name}" <${sender}>`
+        : `=?UTF-8?B?${Encoding.encodeBase64(name)}?= <${sender}>`,
+  });
 
 export const footerFor = (unsubscribeUrl: string, postal: string): string =>
   `\n\n---\nUnsubscribe from these emails: ${unsubscribeUrl}\n\n${postal}`;

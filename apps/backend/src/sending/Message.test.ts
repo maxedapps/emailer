@@ -1,10 +1,11 @@
-import { Cause, ConfigProvider, Effect, Exit, Result } from "effect";
+import { Cause, ConfigProvider, Effect, Exit, Option, Result } from "effect";
 import { describe, expect, it } from "vitest";
 
 import {
   belongsToIdentity,
   compose,
   footerFor,
+  fromHeader,
   htmlFooterFor,
   senderSettings,
   SenderNotOnIdentity,
@@ -172,4 +173,89 @@ describe("senderSettings", () => {
         );
       }),
     ));
+});
+
+describe("the sender's name", () => {
+  const baseEnv = {
+    EMAILER_SENDER_IDENTITY: "example.com",
+    EMAILER_FROM_EMAIL: "no-reply@example.com",
+    EMAILER_POSTAL_ADDRESS: postalAddress,
+  };
+
+  const settingsFrom = (env: Readonly<Record<string, string>>) =>
+    Effect.result(senderSettings).pipe(
+      Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromEnvRecord(env)),
+    );
+
+  const nameFrom = (name: string) => settingsFrom({ ...baseEnv, EMAILER_FROM_NAME: name });
+
+  it.each([
+    ["unset", settingsFrom(baseEnv)],
+    ["blank", nameFrom("")],
+  ])("is absent when %s, so mail goes out from the bare address", (_label, resolving) =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const outcome = yield* resolving;
+
+        expect(Result.isSuccess(outcome) && outcome.success.senderName).toStrictEqual(
+          Option.none(),
+        );
+      }),
+    ),
+  );
+
+  it.each([
+    ["trimmed", "  Example News  ", "Example News"],
+    ["45 UTF-8 bytes long", `${"ü".repeat(22)}x`, `${"ü".repeat(22)}x`],
+  ])("is accepted %s", (_label, name, expected) =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const outcome = yield* nameFrom(name);
+
+        expect(Result.isSuccess(outcome) && outcome.success.senderName).toStrictEqual(
+          Option.some(expected),
+        );
+      }),
+    ),
+  );
+
+  it.each([
+    ["only whitespace", "   "],
+    ["a double quote", 'The "Example" News'],
+    ["a backslash", "Back\\slash"],
+    ["a line break", "Example News\r\nBcc: someone@example.com"],
+    ["more than 45 UTF-8 bytes", "ü".repeat(23)],
+  ])("is refused at startup when it holds %s", (_label, name) =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        expect(Result.isFailure(yield* nameFrom(name))).toBe(true);
+      }),
+    ),
+  );
+});
+
+describe("fromHeader", () => {
+  const sender = "no-reply@example.com";
+
+  it("is the bare address without a name", () => {
+    expect(fromHeader(sender, Option.none())).toBe(sender);
+  });
+
+  it("quotes a printable ASCII name, specials included", () => {
+    expect(fromHeader(sender, Option.some("Example, Inc."))).toBe(
+      '"Example, Inc." <no-reply@example.com>',
+    );
+  });
+
+  it("sends any other name as a base64 RFC 2047 encoded word", () => {
+    expect(fromHeader(sender, Option.some("Café Example"))).toBe(
+      "=?UTF-8?B?Q2Fmw6kgRXhhbXBsZQ==?= <no-reply@example.com>",
+    );
+  });
+
+  it("keeps the longest accepted name within one 75-character encoded word", () => {
+    const [word = ""] = fromHeader(sender, Option.some(`${"ü".repeat(22)}x`)).split(" ");
+
+    expect(word.length).toBeLessThanOrEqual(75);
+  });
 });

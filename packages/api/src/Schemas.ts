@@ -36,7 +36,7 @@ const utf8 = new TextEncoder();
 
 export const utf8ByteLength = (value: string): number => utf8.encode(value).length;
 
-const utf8ByteCeiling = (maxBytes: number) =>
+export const utf8ByteCeiling = (maxBytes: number) =>
   Schema.makeFilter((value: string) =>
     utf8ByteLength(value) <= maxBytes ? undefined : `Expected at most ${maxBytes} UTF-8 bytes`,
   );
