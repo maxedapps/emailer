@@ -1,7 +1,7 @@
 import { NodeServices } from "@effect/platform-node";
+import { describe, expect, it } from "@effect/vitest";
 import * as Schemas from "@emailer/api/Schemas";
 import { Effect, Layer, Result } from "effect";
-import { describe, expect, it } from "vitest";
 
 import { CampaignSchedule } from "./CampaignSchedule.ts";
 import * as Campaigns from "./Campaigns.ts";
@@ -404,195 +404,183 @@ const failureOf = <A, E>(attempt: Result.Result<A, E>): E => {
 };
 
 describe("create", () => {
-  it("refuses a campaign for a list that does not exist", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const fix = fixture();
+  it.effect("refuses a campaign for a list that does not exist", () =>
+    Effect.gen(function* () {
+      const fix = fixture();
 
-        fix.world.lists.clear();
+      fix.world.lists.clear();
 
-        const attempt = yield* runWith(
-          fix,
-          Campaigns.create({ listId, subject: "Hi", text: "There" }),
-        );
+      const attempt = yield* runWith(
+        fix,
+        Campaigns.create({ listId, subject: "Hi", text: "There" }),
+      );
 
-        expect(failureOf(attempt)).toBeInstanceOf(Schemas.NotFound);
-      }),
-    ));
+      expect(failureOf(attempt)).toBeInstanceOf(Schemas.NotFound);
+    }),
+  );
 
-  it("creates a draft", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const fix = fixture();
+  it.effect("creates a draft", () =>
+    Effect.gen(function* () {
+      const fix = fixture();
 
-        const attempt = yield* runWith(
-          fix,
-          Campaigns.create({ listId, subject: "Hi", text: "There" }),
-        );
+      const attempt = yield* runWith(
+        fix,
+        Campaigns.create({ listId, subject: "Hi", text: "There" }),
+      );
 
-        const created = Result.isSuccess(attempt) ? attempt.success : undefined;
+      const created = Result.isSuccess(attempt) ? attempt.success : undefined;
 
-        expect(created?.submission).toStrictEqual({ state: "draft" });
-        expect(created).not.toHaveProperty("html");
-        expect(created).not.toHaveProperty("filter");
-      }),
-    ));
+      expect(created?.submission).toStrictEqual({ state: "draft" });
+      expect(created).not.toHaveProperty("html");
+      expect(created).not.toHaveProperty("filter");
+    }),
+  );
 
-  it("creates a draft carrying html", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const fix = fixture();
-        const html = "<p>Hello there</p>";
+  it.effect("creates a draft carrying html", () =>
+    Effect.gen(function* () {
+      const fix = fixture();
+      const html = "<p>Hello there</p>";
 
-        const attempt = yield* runWith(
-          fix,
-          Campaigns.create({ listId, subject: "Hi", text: "There", html }),
-        );
+      const attempt = yield* runWith(
+        fix,
+        Campaigns.create({ listId, subject: "Hi", text: "There", html }),
+      );
 
-        expect(Result.isSuccess(attempt) && attempt.success.html).toBe(html);
-        expect(Result.isSuccess(attempt) && attempt.success.submission).toStrictEqual({
-          state: "draft",
-        });
-      }),
-    ));
+      expect(Result.isSuccess(attempt) && attempt.success.html).toBe(html);
+      expect(Result.isSuccess(attempt) && attempt.success.submission).toStrictEqual({
+        state: "draft",
+      });
+    }),
+  );
 
-  it("creates a draft carrying a filter", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const fix = fixture();
-        const filter = { plan: "pro" };
+  it.effect("creates a draft carrying a filter", () =>
+    Effect.gen(function* () {
+      const fix = fixture();
+      const filter = { plan: "pro" };
 
-        const attempt = yield* runWith(
-          fix,
-          Campaigns.create({ listId, subject: "Hi", text: "There", filter }),
-        );
+      const attempt = yield* runWith(
+        fix,
+        Campaigns.create({ listId, subject: "Hi", text: "There", filter }),
+      );
 
-        expect(Result.isSuccess(attempt) && attempt.success.filter).toStrictEqual(filter);
-        expect(Result.isSuccess(attempt) && attempt.success.submission).toStrictEqual({
-          state: "draft",
-        });
-      }),
-    ));
+      expect(Result.isSuccess(attempt) && attempt.success.filter).toStrictEqual(filter);
+      expect(Result.isSuccess(attempt) && attempt.success.submission).toStrictEqual({
+        state: "draft",
+      });
+    }),
+  );
 });
 
 describe("send", () => {
-  it("enqueues a draft once and returns queued", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const fix = fixture();
+  it.effect("enqueues a draft once and returns queued", () =>
+    Effect.gen(function* () {
+      const fix = fixture();
 
-        const attempt = yield* runWith(fix, Campaigns.send(campaignId));
-        const sent = Result.isSuccess(attempt) ? attempt.success : undefined;
+      const attempt = yield* runWith(fix, Campaigns.send(campaignId));
+      const sent = Result.isSuccess(attempt) ? attempt.success : undefined;
 
-        expect(sent?.submission.state).toBe("queued");
-        expect(fix.wake.messages).toHaveLength(1);
-        expect(fix.wake.messages[0]?.campaignId).toBe(campaignId);
-        expect(fix.world.runTokens.get(campaignId)).toBe(fix.wake.messages[0]?.runToken);
-        expect(storedCampaign(fix).submission.state).toBe("queued");
-      }),
-    ));
-
-  it("queues a draft that retains a token under a fresh one", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const fix = fixture({ runToken: existingRunToken });
-
-        const attempt = yield* runWith(fix, Campaigns.send(campaignId));
-
-        expect(Result.isSuccess(attempt) && attempt.success?.submission.state).toBe("queued");
-        expect(fix.wake.messages).toHaveLength(1);
-        expect(fix.wake.messages[0]?.runToken).not.toBe(existingRunToken);
-        expect(fix.world.order).toStrictEqual(["newRun:queued", "enqueue"]);
-      }),
-    ));
-
-  it("re-enqueues a queued campaign with its stored run token", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const fix = fixture({ campaign: queuedCampaign, runToken: existingRunToken });
-
-        const attempt = yield* runWith(fix, Campaigns.send(campaignId));
-
-        expect(Result.isSuccess(attempt) && attempt.success.submission).toStrictEqual({
-          state: "queued",
-          queuedAt,
-        });
-        expect(fix.wake.messages).toStrictEqual([{ campaignId, runToken: existingRunToken }]);
-      }),
-    ));
-
-  it.each([
-    ["sending", sendingCampaign],
-    ["completed", completedCampaign],
-  ] as const)("enqueues nothing when the campaign is %s", (_label, campaign) =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const fix = fixture({ campaign });
-
-        const attempt = yield* runWith(fix, Campaigns.send(campaignId));
-
-        expect(Result.isSuccess(attempt) && attempt.success).toStrictEqual(campaign);
-        expect(fix.wake.messages).toHaveLength(0);
-      }),
-    ),
+      expect(sent?.submission.state).toBe("queued");
+      expect(fix.wake.messages).toHaveLength(1);
+      expect(fix.wake.messages[0]?.campaignId).toBe(campaignId);
+      expect(fix.world.runTokens.get(campaignId)).toBe(fix.wake.messages[0]?.runToken);
+      expect(storedCampaign(fix).submission.state).toBe("queued");
+    }),
   );
 
-  it("fails StorageUnavailable when the wake fails after the queued write", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const fix = fixture({
-          wakeFailure: new StorageFailure({
-            operationId: "dispatch",
-            reason: "unavailable",
-            cause: "lost",
-          }),
-        });
+  it.effect("queues a draft that retains a token under a fresh one", () =>
+    Effect.gen(function* () {
+      const fix = fixture({ runToken: existingRunToken });
 
-        const attempt = yield* runPublicly(fix, Campaigns.send(campaignId));
+      const attempt = yield* runWith(fix, Campaigns.send(campaignId));
 
-        expect(failureOf(attempt)).toStrictEqual(
-          new Schemas.StorageUnavailable({ operationId: "dispatch" }),
-        );
-        expect(fix.wake.messages).toHaveLength(0);
-        expect(storedCampaign(fix).submission.state).toBe("queued");
-      }),
-    ));
+      expect(Result.isSuccess(attempt) && attempt.success?.submission.state).toBe("queued");
+      expect(fix.wake.messages).toHaveLength(1);
+      expect(fix.wake.messages[0]?.runToken).not.toBe(existingRunToken);
+      expect(fix.world.order).toStrictEqual(["newRun:queued", "enqueue"]);
+    }),
+  );
 
-  it("queues a scheduled campaign under a fresh token and wakes it", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const fix = fixture({ campaign: scheduledCampaign, runToken: existingRunToken });
+  it.effect("re-enqueues a queued campaign with its stored run token", () =>
+    Effect.gen(function* () {
+      const fix = fixture({ campaign: queuedCampaign, runToken: existingRunToken });
 
-        const attempt = yield* runWith(fix, Campaigns.send(campaignId));
-        const sent = Result.isSuccess(attempt) ? attempt.success : undefined;
+      const attempt = yield* runWith(fix, Campaigns.send(campaignId));
 
-        expect(sent?.submission.state).toBe("queued");
-        expect(fix.wake.messages).toHaveLength(1);
-        expect(fix.wake.messages[0]?.campaignId).toBe(campaignId);
-        expect(fix.wake.messages[0]?.runToken).not.toBe(existingRunToken);
-        expect(fix.world.runTokens.get(campaignId)).toBe(fix.wake.messages[0]?.runToken);
-        expect(storedCampaign(fix).submission.state).toBe("queued");
-        expect(fix.world.order).toStrictEqual(["newRun:queued", "enqueue"]);
-      }),
-    ));
+      expect(Result.isSuccess(attempt) && attempt.success.submission).toStrictEqual({
+        state: "queued",
+        queuedAt,
+      });
+      expect(fix.wake.messages).toStrictEqual([{ campaignId, runToken: existingRunToken }]);
+    }),
+  );
 
-  it("returns the current campaign without publishing when enqueue loses the source", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const fix = fixture();
+  it.effect.each([
+    ["sending", sendingCampaign],
+    ["completed", completedCampaign],
+  ] as const)("enqueues nothing when the campaign is %s", ([_label, campaign]) =>
+    Effect.gen(function* () {
+      const fix = fixture({ campaign });
 
-        fix.world.beforeWrite = Effect.sync(() => {
-          fix.world.campaigns.set(campaignId, sendingCampaign);
-          fix.world.runTokens.set(campaignId, existingRunToken);
-        });
+      const attempt = yield* runWith(fix, Campaigns.send(campaignId));
 
-        const attempt = yield* runWith(fix, Campaigns.send(campaignId));
+      expect(Result.isSuccess(attempt) && attempt.success).toStrictEqual(campaign);
+      expect(fix.wake.messages).toHaveLength(0);
+    }),
+  );
 
-        expect(Result.isSuccess(attempt) && attempt.success).toStrictEqual(sendingCampaign);
-        expect(fix.wake.messages).toHaveLength(0);
-        expect(fix.world.order).toHaveLength(0);
-      }),
-    ));
+  it.effect("fails StorageUnavailable when the wake fails after the queued write", () =>
+    Effect.gen(function* () {
+      const fix = fixture({
+        wakeFailure: new StorageFailure({
+          operationId: "dispatch",
+          reason: "unavailable",
+          cause: "lost",
+        }),
+      });
+
+      const attempt = yield* runPublicly(fix, Campaigns.send(campaignId));
+
+      expect(failureOf(attempt)).toStrictEqual(
+        new Schemas.StorageUnavailable({ operationId: "dispatch" }),
+      );
+      expect(fix.wake.messages).toHaveLength(0);
+      expect(storedCampaign(fix).submission.state).toBe("queued");
+    }),
+  );
+
+  it.effect("queues a scheduled campaign under a fresh token and wakes it", () =>
+    Effect.gen(function* () {
+      const fix = fixture({ campaign: scheduledCampaign, runToken: existingRunToken });
+
+      const attempt = yield* runWith(fix, Campaigns.send(campaignId));
+      const sent = Result.isSuccess(attempt) ? attempt.success : undefined;
+
+      expect(sent?.submission.state).toBe("queued");
+      expect(fix.wake.messages).toHaveLength(1);
+      expect(fix.wake.messages[0]?.campaignId).toBe(campaignId);
+      expect(fix.wake.messages[0]?.runToken).not.toBe(existingRunToken);
+      expect(fix.world.runTokens.get(campaignId)).toBe(fix.wake.messages[0]?.runToken);
+      expect(storedCampaign(fix).submission.state).toBe("queued");
+      expect(fix.world.order).toStrictEqual(["newRun:queued", "enqueue"]);
+    }),
+  );
+
+  it.effect("returns the current campaign without publishing when enqueue loses the source", () =>
+    Effect.gen(function* () {
+      const fix = fixture();
+
+      fix.world.beforeWrite = Effect.sync(() => {
+        fix.world.campaigns.set(campaignId, sendingCampaign);
+        fix.world.runTokens.set(campaignId, existingRunToken);
+      });
+
+      const attempt = yield* runWith(fix, Campaigns.send(campaignId));
+
+      expect(Result.isSuccess(attempt) && attempt.success).toStrictEqual(sendingCampaign);
+      expect(fix.wake.messages).toHaveLength(0);
+      expect(fix.world.order).toHaveLength(0);
+    }),
+  );
 });
 
 describe("update", () => {
@@ -602,158 +590,155 @@ describe("update", () => {
     filter: { plan: "pro" },
   };
 
-  it("merges the change: absent fields stay, null removes the html and the filter", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const fix = fixture({ campaign: filtered });
+  it.effect("merges the change: absent fields stay, null removes the html and the filter", () =>
+    Effect.gen(function* () {
+      const fix = fixture({ campaign: filtered });
 
-        const attempt = yield* runWith(
-          fix,
-          Campaigns.update(campaignId, { subject: "New subject", html: null, filter: null }),
-        );
+      const attempt = yield* runWith(
+        fix,
+        Campaigns.update(campaignId, { subject: "New subject", html: null, filter: null }),
+      );
 
-        const expected: Schemas.Campaign = { ...draftCampaign, subject: "New subject" };
+      const expected: Schemas.Campaign = { ...draftCampaign, subject: "New subject" };
 
-        expect(Result.isSuccess(attempt) && attempt.success).toStrictEqual(expected);
-        expect(storedCampaign(fix)).toStrictEqual(expected);
-      }),
-    ));
-
-  it("replaces the body and the filter it is given, keeping the rest", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const fix = fixture({ campaign: filtered });
-
-        yield* runWith(
-          fix,
-          Campaigns.update(campaignId, { text: "New text", html: "<p>New</p>", filter: {} }),
-        );
-
-        expect(storedCampaign(fix)).toStrictEqual({
-          ...filtered,
-          text: "New text",
-          html: "<p>New</p>",
-          filter: {},
-        });
-      }),
-    ));
-
-  it("moves the draft to another list only when that list exists", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const fix = fixture();
-        const otherList = "0195f0a0-1111-4222-8333-44444444109f";
-
-        const missing = yield* runWith(fix, Campaigns.update(campaignId, { listId: otherList }));
-
-        expect(failureOf(missing)).toStrictEqual(new Schemas.NotFound({ entity: "list" }));
-        expect(fix.world.order).toHaveLength(0);
-
-        fix.world.lists.set(otherList, {
-          id: otherList,
-          name: "Others",
-          createdAt: "2026-09-11T09:00:00.000Z",
-        });
-
-        yield* runWith(fix, Campaigns.update(campaignId, { listId: otherList }));
-
-        expect(storedCampaign(fix).listId).toBe(otherList);
-      }),
-    ));
-
-  it("answers NotFound for a campaign that does not exist", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const fix = fixture();
-
-        fix.world.campaigns.clear();
-
-        const attempt = yield* runWith(fix, Campaigns.update(campaignId, { subject: "x" }));
-
-        expect(failureOf(attempt)).toStrictEqual(new Schemas.NotFound({ entity: "campaign" }));
-      }),
-    ));
-
-  it.each([scheduledCampaign, queuedCampaign, sendingCampaign, pausedCampaign, completedCampaign])(
-    "refuses to edit a $submission.state campaign",
-    (campaign) =>
-      Effect.runPromise(
-        Effect.gen(function* () {
-          const fix = fixture({ campaign });
-
-          const attempt = yield* runWith(fix, Campaigns.update(campaignId, { subject: "x" }));
-
-          expect(failureOf(attempt)).toStrictEqual(
-            new Schemas.CampaignStateConflict({ state: campaign.submission.state }),
-          );
-          expect(storedCampaign(fix)).toStrictEqual(campaign);
-        }),
-      ),
+      expect(Result.isSuccess(attempt) && attempt.success).toStrictEqual(expected);
+      expect(storedCampaign(fix)).toStrictEqual(expected);
+    }),
   );
 
-  it("reports the state a concurrent send left when the write loses", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const fix = fixture();
+  it.effect("replaces the body and the filter it is given, keeping the rest", () =>
+    Effect.gen(function* () {
+      const fix = fixture({ campaign: filtered });
 
-        fix.world.beforeWrite = Effect.sync(() => {
-          fix.world.campaigns.set(campaignId, queuedCampaign);
-        });
+      yield* runWith(
+        fix,
+        Campaigns.update(campaignId, { text: "New text", html: "<p>New</p>", filter: {} }),
+      );
 
-        const attempt = yield* runWith(fix, Campaigns.update(campaignId, { subject: "x" }));
+      expect(storedCampaign(fix)).toStrictEqual({
+        ...filtered,
+        text: "New text",
+        html: "<p>New</p>",
+        filter: {},
+      });
+    }),
+  );
 
-        expect(failureOf(attempt)).toStrictEqual(
-          new Schemas.CampaignStateConflict({ state: "queued" }),
-        );
-        expect(storedCampaign(fix)).toStrictEqual(queuedCampaign);
-      }),
-    ));
+  it.effect("moves the draft to another list only when that list exists", () =>
+    Effect.gen(function* () {
+      const fix = fixture();
+      const otherList = "0195f0a0-1111-4222-8333-44444444109f";
+
+      const missing = yield* runWith(fix, Campaigns.update(campaignId, { listId: otherList }));
+
+      expect(failureOf(missing)).toStrictEqual(new Schemas.NotFound({ entity: "list" }));
+      expect(fix.world.order).toHaveLength(0);
+
+      fix.world.lists.set(otherList, {
+        id: otherList,
+        name: "Others",
+        createdAt: "2026-09-11T09:00:00.000Z",
+      });
+
+      yield* runWith(fix, Campaigns.update(campaignId, { listId: otherList }));
+
+      expect(storedCampaign(fix).listId).toBe(otherList);
+    }),
+  );
+
+  it.effect("answers NotFound for a campaign that does not exist", () =>
+    Effect.gen(function* () {
+      const fix = fixture();
+
+      fix.world.campaigns.clear();
+
+      const attempt = yield* runWith(fix, Campaigns.update(campaignId, { subject: "x" }));
+
+      expect(failureOf(attempt)).toStrictEqual(new Schemas.NotFound({ entity: "campaign" }));
+    }),
+  );
+
+  it.effect.each([
+    scheduledCampaign,
+    queuedCampaign,
+    sendingCampaign,
+    pausedCampaign,
+    completedCampaign,
+  ])("refuses to edit a $submission.state campaign", (campaign) =>
+    Effect.gen(function* () {
+      const fix = fixture({ campaign });
+
+      const attempt = yield* runWith(fix, Campaigns.update(campaignId, { subject: "x" }));
+
+      expect(failureOf(attempt)).toStrictEqual(
+        new Schemas.CampaignStateConflict({ state: campaign.submission.state }),
+      );
+      expect(storedCampaign(fix)).toStrictEqual(campaign);
+    }),
+  );
+
+  it.effect("reports the state a concurrent send left when the write loses", () =>
+    Effect.gen(function* () {
+      const fix = fixture();
+
+      fix.world.beforeWrite = Effect.sync(() => {
+        fix.world.campaigns.set(campaignId, queuedCampaign);
+      });
+
+      const attempt = yield* runWith(fix, Campaigns.update(campaignId, { subject: "x" }));
+
+      expect(failureOf(attempt)).toStrictEqual(
+        new Schemas.CampaignStateConflict({ state: "queued" }),
+      );
+      expect(storedCampaign(fix)).toStrictEqual(queuedCampaign);
+    }),
+  );
 });
 
 describe("remove", () => {
-  it("deletes a draft", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const fix = fixture();
+  it.effect("deletes a draft", () =>
+    Effect.gen(function* () {
+      const fix = fixture();
 
-        const attempt = yield* runWith(fix, Campaigns.remove(campaignId));
+      const attempt = yield* runWith(fix, Campaigns.remove(campaignId));
 
-        expect(Result.isSuccess(attempt)).toBe(true);
-        expect(fix.world.campaigns.has(campaignId)).toBe(false);
-      }),
-    ));
-
-  it.each([scheduledCampaign, queuedCampaign, sendingCampaign, pausedCampaign, completedCampaign])(
-    "refuses to delete a $submission.state campaign",
-    (campaign) =>
-      Effect.runPromise(
-        Effect.gen(function* () {
-          const fix = fixture({ campaign, runToken: existingRunToken });
-
-          const attempt = yield* runWith(fix, Campaigns.remove(campaignId));
-
-          expect(failureOf(attempt)).toStrictEqual(
-            new Schemas.CampaignStateConflict({ state: campaign.submission.state }),
-          );
-          expect(storedCampaign(fix)).toStrictEqual(campaign);
-        }),
-      ),
+      expect(Result.isSuccess(attempt)).toBe(true);
+      expect(fix.world.campaigns.has(campaignId)).toBe(false);
+    }),
   );
 
-  it("answers NotFound when a concurrent delete removed the draft first", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const fix = fixture();
+  it.effect.each([
+    scheduledCampaign,
+    queuedCampaign,
+    sendingCampaign,
+    pausedCampaign,
+    completedCampaign,
+  ])("refuses to delete a $submission.state campaign", (campaign) =>
+    Effect.gen(function* () {
+      const fix = fixture({ campaign, runToken: existingRunToken });
 
-        fix.world.beforeWrite = Effect.sync(() => {
-          fix.world.campaigns.delete(campaignId);
-        });
+      const attempt = yield* runWith(fix, Campaigns.remove(campaignId));
 
-        const attempt = yield* runWith(fix, Campaigns.remove(campaignId));
+      expect(failureOf(attempt)).toStrictEqual(
+        new Schemas.CampaignStateConflict({ state: campaign.submission.state }),
+      );
+      expect(storedCampaign(fix)).toStrictEqual(campaign);
+    }),
+  );
 
-        expect(failureOf(attempt)).toStrictEqual(new Schemas.NotFound({ entity: "campaign" }));
-      }),
-    ));
+  it.effect("answers NotFound when a concurrent delete removed the draft first", () =>
+    Effect.gen(function* () {
+      const fix = fixture();
+
+      fix.world.beforeWrite = Effect.sync(() => {
+        fix.world.campaigns.delete(campaignId);
+      });
+
+      const attempt = yield* runWith(fix, Campaigns.remove(campaignId));
+
+      expect(failureOf(attempt)).toStrictEqual(new Schemas.NotFound({ entity: "campaign" }));
+    }),
+  );
 });
 
 describe("queued wake repair", () => {
@@ -771,272 +756,253 @@ describe("queued wake repair", () => {
     pausedReason: undefined,
   });
 
-  it.each(["send", "resume"] as const)(
+  it.effect.each(["send", "resume"] as const)(
     "%s re-wakes only the token observed with queued state",
     (command) =>
-      Effect.runPromise(
-        Effect.gen(function* () {
-          const fix = fixture({ campaign: queuedCampaign, runToken: existingRunToken });
-
-          const attempt = yield* runWith(fix, queuedRepair[command](campaignId));
-
-          expect(Result.isSuccess(attempt) && attempt.success).toStrictEqual(queuedCampaign);
-          expect(fix.wake.messages).toStrictEqual([{ campaignId, runToken: existingRunToken }]);
-        }),
-      ),
-  );
-
-  it.each(["send", "resume"] as const)(
-    "%s does not enqueue a replacement scheduled token presented after the queued observation",
-    (command) =>
-      Effect.runPromise(
-        Effect.gen(function* () {
-          const fix = fixture({ campaign: queuedCampaign, runToken: existingRunToken });
-
-          fix.world.control.set(campaignId, [
-            queuedControl(existingRunToken),
-            {
-              state: "scheduled",
-              runToken: replacementToken,
-              startedAt: undefined,
-              pausedReason: undefined,
-            },
-          ]);
-
-          const attempt = yield* runWith(fix, queuedRepair[command](campaignId));
-
-          expect(Result.isSuccess(attempt) && attempt.success).toStrictEqual(queuedCampaign);
-          expect(fix.wake.messages).toStrictEqual([{ campaignId, runToken: existingRunToken }]);
-          expect(fix.world.control.get(campaignId)).toStrictEqual([
-            {
-              state: "scheduled",
-              runToken: replacementToken,
-              startedAt: undefined,
-              pausedReason: undefined,
-            },
-          ]);
-        }),
-      ),
-  );
-
-  it.each(["send", "resume"] as const)(
-    "%s does not treat a later cancelled draft snapshot as corruption",
-    (command) =>
-      Effect.runPromise(
-        Effect.gen(function* () {
-          const fix = fixture({ campaign: queuedCampaign, runToken: existingRunToken });
-
-          fix.world.control.set(campaignId, [
-            queuedControl(existingRunToken),
-            {
-              state: "draft",
-              runToken: undefined,
-              startedAt: undefined,
-              pausedReason: undefined,
-            },
-          ]);
-
-          const attempt = yield* runWith(fix, queuedRepair[command](campaignId));
-
-          expect(Result.isSuccess(attempt) && attempt.success).toStrictEqual(queuedCampaign);
-          expect(fix.wake.messages).toStrictEqual([{ campaignId, runToken: existingRunToken }]);
-        }),
-      ),
-  );
-
-  it.each(["send", "resume"] as const)(
-    "%s reports corruption when control is still queued without a run token",
-    (command) =>
-      Effect.runPromise(
-        Effect.gen(function* () {
-          const fix = fixture({ campaign: queuedCampaign });
-
-          const attempt = yield* runWith(fix, queuedRepair[command](campaignId));
-
-          expect(failureOf(attempt)).toStrictEqual(
-            new StorageFailure({
-              operationId: "getCampaignControl",
-              reason: "corrupt",
-              cause: "queued campaign has no run token",
-            }),
-          );
-          expect(fix.wake.messages).toHaveLength(0);
-        }),
-      ),
-  );
-});
-
-describe("resume", () => {
-  it("enqueues a paused campaign and returns queued", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const fix = fixture({ campaign: pausedCampaign, runToken: existingRunToken });
-
-        const attempt = yield* runWith(fix, Campaigns.resume(campaignId));
-        const resumed = Result.isSuccess(attempt) ? attempt.success : undefined;
-
-        expect(resumed?.submission.state).toBe("queued");
-        expect(fix.wake.messages).toHaveLength(1);
-        expect(fix.wake.messages[0]?.campaignId).toBe(campaignId);
-        expect(fix.wake.messages[0]?.runToken).not.toBe(existingRunToken);
-        expect(fix.world.runTokens.get(campaignId)).toBe(fix.wake.messages[0]?.runToken);
-        expect(fix.schedules.created).toHaveLength(0);
-        expect(storedCampaign(fix).submission.state).toBe("queued");
-      }),
-    ));
-
-  it("re-sends the wake-up for a queued campaign, as send does", () =>
-    Effect.runPromise(
       Effect.gen(function* () {
         const fix = fixture({ campaign: queuedCampaign, runToken: existingRunToken });
 
-        const attempt = yield* runWith(fix, Campaigns.resume(campaignId));
+        const attempt = yield* runWith(fix, queuedRepair[command](campaignId));
 
         expect(Result.isSuccess(attempt) && attempt.success).toStrictEqual(queuedCampaign);
         expect(fix.wake.messages).toStrictEqual([{ campaignId, runToken: existingRunToken }]);
       }),
-    ));
+  );
 
-  it.each([
+  it.effect.each(["send", "resume"] as const)(
+    "%s does not enqueue a replacement scheduled token presented after the queued observation",
+    (command) =>
+      Effect.gen(function* () {
+        const fix = fixture({ campaign: queuedCampaign, runToken: existingRunToken });
+
+        fix.world.control.set(campaignId, [
+          queuedControl(existingRunToken),
+          {
+            state: "scheduled",
+            runToken: replacementToken,
+            startedAt: undefined,
+            pausedReason: undefined,
+          },
+        ]);
+
+        const attempt = yield* runWith(fix, queuedRepair[command](campaignId));
+
+        expect(Result.isSuccess(attempt) && attempt.success).toStrictEqual(queuedCampaign);
+        expect(fix.wake.messages).toStrictEqual([{ campaignId, runToken: existingRunToken }]);
+        expect(fix.world.control.get(campaignId)).toStrictEqual([
+          {
+            state: "scheduled",
+            runToken: replacementToken,
+            startedAt: undefined,
+            pausedReason: undefined,
+          },
+        ]);
+      }),
+  );
+
+  it.effect.each(["send", "resume"] as const)(
+    "%s does not treat a later cancelled draft snapshot as corruption",
+    (command) =>
+      Effect.gen(function* () {
+        const fix = fixture({ campaign: queuedCampaign, runToken: existingRunToken });
+
+        fix.world.control.set(campaignId, [
+          queuedControl(existingRunToken),
+          {
+            state: "draft",
+            runToken: undefined,
+            startedAt: undefined,
+            pausedReason: undefined,
+          },
+        ]);
+
+        const attempt = yield* runWith(fix, queuedRepair[command](campaignId));
+
+        expect(Result.isSuccess(attempt) && attempt.success).toStrictEqual(queuedCampaign);
+        expect(fix.wake.messages).toStrictEqual([{ campaignId, runToken: existingRunToken }]);
+      }),
+  );
+
+  it.effect.each(["send", "resume"] as const)(
+    "%s reports corruption when control is still queued without a run token",
+    (command) =>
+      Effect.gen(function* () {
+        const fix = fixture({ campaign: queuedCampaign });
+
+        const attempt = yield* runWith(fix, queuedRepair[command](campaignId));
+
+        expect(failureOf(attempt)).toStrictEqual(
+          new StorageFailure({
+            operationId: "getCampaignControl",
+            reason: "corrupt",
+            cause: "queued campaign has no run token",
+          }),
+        );
+        expect(fix.wake.messages).toHaveLength(0);
+      }),
+  );
+});
+
+describe("resume", () => {
+  it.effect("enqueues a paused campaign and returns queued", () =>
+    Effect.gen(function* () {
+      const fix = fixture({ campaign: pausedCampaign, runToken: existingRunToken });
+
+      const attempt = yield* runWith(fix, Campaigns.resume(campaignId));
+      const resumed = Result.isSuccess(attempt) ? attempt.success : undefined;
+
+      expect(resumed?.submission.state).toBe("queued");
+      expect(fix.wake.messages).toHaveLength(1);
+      expect(fix.wake.messages[0]?.campaignId).toBe(campaignId);
+      expect(fix.wake.messages[0]?.runToken).not.toBe(existingRunToken);
+      expect(fix.world.runTokens.get(campaignId)).toBe(fix.wake.messages[0]?.runToken);
+      expect(fix.schedules.created).toHaveLength(0);
+      expect(storedCampaign(fix).submission.state).toBe("queued");
+    }),
+  );
+
+  it.effect("re-sends the wake-up for a queued campaign, as send does", () =>
+    Effect.gen(function* () {
+      const fix = fixture({ campaign: queuedCampaign, runToken: existingRunToken });
+
+      const attempt = yield* runWith(fix, Campaigns.resume(campaignId));
+
+      expect(Result.isSuccess(attempt) && attempt.success).toStrictEqual(queuedCampaign);
+      expect(fix.wake.messages).toStrictEqual([{ campaignId, runToken: existingRunToken }]);
+    }),
+  );
+
+  it.effect.each([
     ["draft", draftCampaign],
     ["scheduled", scheduledCampaign],
     ["sending", sendingCampaign],
     ["completed", completedCampaign],
-  ] as const)("returns a %s campaign unchanged", (_label, campaign) =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const fix = fixture({ campaign });
+  ] as const)("returns a %s campaign unchanged", ([_label, campaign]) =>
+    Effect.gen(function* () {
+      const fix = fixture({ campaign });
 
-        const attempt = yield* runWith(fix, Campaigns.resume(campaignId));
+      const attempt = yield* runWith(fix, Campaigns.resume(campaignId));
 
-        expect(Result.isSuccess(attempt) && attempt.success).toStrictEqual(campaign);
-        expect(fix.wake.messages).toHaveLength(0);
-      }),
-    ),
+      expect(Result.isSuccess(attempt) && attempt.success).toStrictEqual(campaign);
+      expect(fix.wake.messages).toHaveLength(0);
+    }),
   );
 
-  it("returns the current campaign without waking when resume loses the paused token", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const fix = fixture({ campaign: pausedCampaign, runToken: existingRunToken });
+  it.effect("returns the current campaign without waking when resume loses the paused token", () =>
+    Effect.gen(function* () {
+      const fix = fixture({ campaign: pausedCampaign, runToken: existingRunToken });
 
-        fix.world.beforeWrite = Effect.sync(() => {
-          fix.world.campaigns.set(campaignId, sendingCampaign);
-        });
+      fix.world.beforeWrite = Effect.sync(() => {
+        fix.world.campaigns.set(campaignId, sendingCampaign);
+      });
 
-        const attempt = yield* runWith(fix, Campaigns.resume(campaignId));
+      const attempt = yield* runWith(fix, Campaigns.resume(campaignId));
 
-        expect(Result.isSuccess(attempt) && attempt.success).toStrictEqual(sendingCampaign);
-        expect(fix.wake.messages).toHaveLength(0);
-        expect(fix.world.order).toHaveLength(0);
-      }),
-    ));
+      expect(Result.isSuccess(attempt) && attempt.success).toStrictEqual(sendingCampaign);
+      expect(fix.wake.messages).toHaveLength(0);
+      expect(fix.world.order).toHaveLength(0);
+    }),
+  );
 });
 
 describe("schedule", () => {
-  it("moves a draft to scheduled with sendAt, mints a token, and creates a schedule", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const fix = fixture();
+  it.effect("moves a draft to scheduled with sendAt, mints a token, and creates a schedule", () =>
+    Effect.gen(function* () {
+      const fix = fixture();
 
-        const attempt = yield* runWith(fix, Campaigns.schedule(campaignId, futureSendAt));
-        const scheduled = Result.isSuccess(attempt) ? attempt.success : undefined;
+      const attempt = yield* runWith(fix, Campaigns.schedule(campaignId, futureSendAt));
+      const scheduled = Result.isSuccess(attempt) ? attempt.success : undefined;
 
-        expect(scheduled?.submission).toStrictEqual({ state: "scheduled", sendAt: futureSendAt });
-        expect(fix.schedules.created).toHaveLength(1);
-        expect(fix.schedules.created[0]?.campaignId).toBe(campaignId);
-        expect(fix.schedules.created[0]?.sendAt).toBe(futureSendAt);
-        expect(fix.world.runTokens.get(campaignId)).toBe(fix.schedules.created[0]?.runToken);
-        expect(storedCampaign(fix).submission).toStrictEqual({
-          state: "scheduled",
-          sendAt: futureSendAt,
-        });
-        expect(fix.world.order).toStrictEqual(["newRun:scheduled", "create"]);
-      }),
-    ));
+      expect(scheduled?.submission).toStrictEqual({ state: "scheduled", sendAt: futureSendAt });
+      expect(fix.schedules.created).toHaveLength(1);
+      expect(fix.schedules.created[0]?.campaignId).toBe(campaignId);
+      expect(fix.schedules.created[0]?.sendAt).toBe(futureSendAt);
+      expect(fix.world.runTokens.get(campaignId)).toBe(fix.schedules.created[0]?.runToken);
+      expect(storedCampaign(fix).submission).toStrictEqual({
+        state: "scheduled",
+        sendAt: futureSendAt,
+      });
+      expect(fix.world.order).toStrictEqual(["newRun:scheduled", "create"]);
+    }),
+  );
 
-  it("reschedules under a fresh generation and leaves the predecessor schedule alone", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const fix = fixture({ campaign: scheduledCampaign, runToken: existingRunToken });
-        const sendAt = "2099-06-01T00:00:00.000Z";
+  it.effect("reschedules under a fresh generation and leaves the predecessor schedule alone", () =>
+    Effect.gen(function* () {
+      const fix = fixture({ campaign: scheduledCampaign, runToken: existingRunToken });
+      const sendAt = "2099-06-01T00:00:00.000Z";
 
-        const attempt = yield* runWith(fix, Campaigns.schedule(campaignId, sendAt));
-        const scheduled = Result.isSuccess(attempt) ? attempt.success : undefined;
-        const createdToken = fix.schedules.created[0]?.runToken;
+      const attempt = yield* runWith(fix, Campaigns.schedule(campaignId, sendAt));
+      const scheduled = Result.isSuccess(attempt) ? attempt.success : undefined;
+      const createdToken = fix.schedules.created[0]?.runToken;
 
-        expect(scheduled?.submission).toStrictEqual({ state: "scheduled", sendAt });
-        expect(fix.schedules.created).toHaveLength(1);
-        expect(fix.schedules.created[0]?.sendAt).toBe(sendAt);
-        expect(createdToken).not.toBe(existingRunToken);
-        expect(fix.world.runTokens.get(campaignId)).toBe(createdToken);
-        expect(fix.world.order).toStrictEqual(["newRun:scheduled", "create"]);
-      }),
-    ));
+      expect(scheduled?.submission).toStrictEqual({ state: "scheduled", sendAt });
+      expect(fix.schedules.created).toHaveLength(1);
+      expect(fix.schedules.created[0]?.sendAt).toBe(sendAt);
+      expect(createdToken).not.toBe(existingRunToken);
+      expect(fix.world.runTokens.get(campaignId)).toBe(createdToken);
+      expect(fix.world.order).toStrictEqual(["newRun:scheduled", "create"]);
+    }),
+  );
 
-  it("refuses a sendAt at or before now", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const fix = fixture();
+  // Live: `now` is the wall clock, which is past the fixture's 2026 timestamps.
+  it.live("refuses a sendAt at or before now", () =>
+    Effect.gen(function* () {
+      const fix = fixture();
 
-        const attempt = yield* runWith(fix, Campaigns.schedule(campaignId, queuedAt));
+      const attempt = yield* runWith(fix, Campaigns.schedule(campaignId, queuedAt));
 
-        expect(failureOf(attempt)).toStrictEqual(
-          new Schemas.SendAtNotInFuture({ sendAt: queuedAt }),
-        );
-        expect(fix.schedules.created).toHaveLength(0);
-        expect(storedCampaign(fix)).toStrictEqual(draftCampaign);
-        expect(fix.world.runTokens.has(campaignId)).toBe(false);
-        expect(fix.world.order).toHaveLength(0);
-      }),
-    ));
+      expect(failureOf(attempt)).toStrictEqual(new Schemas.SendAtNotInFuture({ sendAt: queuedAt }));
+      expect(fix.schedules.created).toHaveLength(0);
+      expect(storedCampaign(fix)).toStrictEqual(draftCampaign);
+      expect(fix.world.runTokens.has(campaignId)).toBe(false);
+      expect(fix.world.order).toHaveLength(0);
+    }),
+  );
 
-  it.each([
+  it.effect.each([
     ["queued", queuedCampaign],
     ["sending", sendingCampaign],
     ["paused", pausedCampaign],
     ["completed", completedCampaign],
-  ] as const)("returns a %s campaign unchanged", (_label, campaign) =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const fix = fixture({ campaign });
+  ] as const)("returns a %s campaign unchanged", ([_label, campaign]) =>
+    Effect.gen(function* () {
+      const fix = fixture({ campaign });
 
-        const attempt = yield* runWith(fix, Campaigns.schedule(campaignId, futureSendAt));
+      const attempt = yield* runWith(fix, Campaigns.schedule(campaignId, futureSendAt));
 
-        expect(Result.isSuccess(attempt) && attempt.success).toStrictEqual(campaign);
-        expect(fix.schedules.created).toHaveLength(0);
-        expect(fix.world.order).toHaveLength(0);
-      }),
-    ),
+      expect(Result.isSuccess(attempt) && attempt.success).toStrictEqual(campaign);
+      expect(fix.schedules.created).toHaveLength(0);
+      expect(fix.world.order).toHaveLength(0);
+    }),
   );
 
-  it("fails StorageUnavailable when the schedule service fails after the write", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const fix = fixture({
-          scheduleFailure: new StorageFailure({
-            operationId: "schedule",
-            reason: "unavailable",
-            cause: "lost",
-          }),
-        });
+  it.effect("fails StorageUnavailable when the schedule service fails after the write", () =>
+    Effect.gen(function* () {
+      const fix = fixture({
+        scheduleFailure: new StorageFailure({
+          operationId: "schedule",
+          reason: "unavailable",
+          cause: "lost",
+        }),
+      });
 
-        const attempt = yield* runPublicly(fix, Campaigns.schedule(campaignId, futureSendAt));
+      const attempt = yield* runPublicly(fix, Campaigns.schedule(campaignId, futureSendAt));
 
-        expect(failureOf(attempt)).toStrictEqual(
-          new Schemas.StorageUnavailable({ operationId: "schedule" }),
-        );
-        expect(fix.schedules.created).toHaveLength(0);
-        expect(storedCampaign(fix).submission).toStrictEqual({
-          state: "scheduled",
-          sendAt: futureSendAt,
-        });
-        expect(fix.world.order).toStrictEqual(["newRun:scheduled"]);
-      }),
-    ));
+      expect(failureOf(attempt)).toStrictEqual(
+        new Schemas.StorageUnavailable({ operationId: "schedule" }),
+      );
+      expect(fix.schedules.created).toHaveLength(0);
+      expect(storedCampaign(fix).submission).toStrictEqual({
+        state: "scheduled",
+        sendAt: futureSendAt,
+      });
+      expect(fix.world.order).toStrictEqual(["newRun:scheduled"]);
+    }),
+  );
 
-  it("returns the current campaign without creating a schedule when the write loses the source", () =>
-    Effect.runPromise(
+  it.effect(
+    "returns the current campaign without creating a schedule when the write loses the source",
+    () =>
       Effect.gen(function* () {
         const fix = fixture();
 
@@ -1051,7 +1017,7 @@ describe("schedule", () => {
         expect(fix.schedules.created).toHaveLength(0);
         expect(fix.world.order).toHaveLength(0);
       }),
-    ));
+  );
 });
 
 describe("cancel", () => {
@@ -1093,125 +1059,117 @@ describe("cancel", () => {
     });
   };
 
-  it("returns a scheduled campaign to draft and retains the token", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const fix = fixture({ campaign: scheduledCampaign, runToken: existingRunToken });
+  it.effect("returns a scheduled campaign to draft and retains the token", () =>
+    Effect.gen(function* () {
+      const fix = fixture({ campaign: scheduledCampaign, runToken: existingRunToken });
 
-        const attempt = yield* runWith(fix, Campaigns.cancel(campaignId));
+      const attempt = yield* runWith(fix, Campaigns.cancel(campaignId));
 
-        expect(Result.isSuccess(attempt) && attempt.success).toStrictEqual(draftCampaign);
-        expect(fix.world.runTokens.get(campaignId)).toBe(existingRunToken);
-        expect(storedCampaign(fix).submission).toStrictEqual({ state: "draft" });
-        expect(fix.world.order).toStrictEqual(["cancelCampaign"]);
-      }),
-    ));
+      expect(Result.isSuccess(attempt) && attempt.success).toStrictEqual(draftCampaign);
+      expect(fix.world.runTokens.get(campaignId)).toBe(existingRunToken);
+      expect(storedCampaign(fix).submission).toStrictEqual({ state: "draft" });
+      expect(fix.world.order).toStrictEqual(["cancelCampaign"]);
+    }),
+  );
 
-  it("returns a never-started queued campaign to draft and retains the token", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const fix = fixture({ campaign: queuedCampaign, runToken: existingRunToken });
+  it.effect("returns a never-started queued campaign to draft and retains the token", () =>
+    Effect.gen(function* () {
+      const fix = fixture({ campaign: queuedCampaign, runToken: existingRunToken });
 
-        const attempt = yield* runWith(fix, Campaigns.cancel(campaignId));
+      const attempt = yield* runWith(fix, Campaigns.cancel(campaignId));
 
-        expect(Result.isSuccess(attempt) && attempt.success).toStrictEqual(draftCampaign);
-        expect(fix.world.runTokens.get(campaignId)).toBe(existingRunToken);
-        expect(storedCampaign(fix).submission).toStrictEqual({ state: "draft" });
-        expect(fix.world.order).toStrictEqual(["cancelCampaign"]);
-      }),
-    ));
+      expect(Result.isSuccess(attempt) && attempt.success).toStrictEqual(draftCampaign);
+      expect(fix.world.runTokens.get(campaignId)).toBe(existingRunToken);
+      expect(storedCampaign(fix).submission).toStrictEqual({ state: "draft" });
+      expect(fix.world.order).toStrictEqual(["cancelCampaign"]);
+    }),
+  );
 
-  it("pauses a queued resume as manual and preserves startedAt, progress and feedback", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const fix = fixture({
-          campaign: queuedCampaign,
-          runToken: existingRunToken,
-          startedAt,
-          history: resumedHistory,
-        });
+  it.effect("pauses a queued resume as manual and preserves startedAt, progress and feedback", () =>
+    Effect.gen(function* () {
+      const fix = fixture({
+        campaign: queuedCampaign,
+        runToken: existingRunToken,
+        startedAt,
+        history: resumedHistory,
+      });
 
-        const attempt = yield* runWith(fix, Campaigns.cancel(campaignId));
+      const attempt = yield* runWith(fix, Campaigns.cancel(campaignId));
 
-        expect(Result.isSuccess(attempt) && attempt.success?.submission).toStrictEqual({
-          state: "paused",
-          queuedAt,
-          startedAt,
-          progress,
-          feedback,
-          reason: "manual",
-        });
-        expect(fix.world.runTokens.get(campaignId)).toBe(existingRunToken);
-        expect(fix.world.order).toStrictEqual(["cancelCampaign"]);
-      }),
-    ));
+      expect(Result.isSuccess(attempt) && attempt.success?.submission).toStrictEqual({
+        state: "paused",
+        queuedAt,
+        startedAt,
+        progress,
+        feedback,
+        reason: "manual",
+      });
+      expect(fix.world.runTokens.get(campaignId)).toBe(existingRunToken);
+      expect(fix.world.order).toStrictEqual(["cancelCampaign"]);
+    }),
+  );
 
-  it.each([
+  it.effect.each([
     ["draft", draftCampaign],
     ["paused", pausedCampaign],
   ] as const)(
     "returns an already-inactive %s campaign unchanged and keeps its token",
-    (_label, campaign) =>
-      Effect.runPromise(
-        Effect.gen(function* () {
-          const fix = fixture({ campaign, runToken: existingRunToken });
-
-          const attempt = yield* runWith(fix, Campaigns.cancel(campaignId));
-
-          expect(Result.isSuccess(attempt) && attempt.success).toStrictEqual(campaign);
-          expect(fix.world.order).toHaveLength(0);
-          expect(fix.world.runTokens.get(campaignId)).toBe(existingRunToken);
-        }),
-      ),
-  );
-
-  it.each([
-    ["sending", sendingCampaign],
-    ["completed", completedCampaign],
-  ] as const)("conflicts with a %s campaign without mutating it", (_label, campaign) =>
-    Effect.runPromise(
+    ([_label, campaign]) =>
       Effect.gen(function* () {
         const fix = fixture({ campaign, runToken: existingRunToken });
 
         const attempt = yield* runWith(fix, Campaigns.cancel(campaignId));
 
-        expect(failureOf(attempt)).toStrictEqual(
-          new Schemas.CampaignStateConflict({ state: campaign.submission.state }),
-        );
-        expect(storedCampaign(fix)).toStrictEqual(campaign);
+        expect(Result.isSuccess(attempt) && attempt.success).toStrictEqual(campaign);
         expect(fix.world.order).toHaveLength(0);
+        expect(fix.world.runTokens.get(campaignId)).toBe(existingRunToken);
       }),
-    ),
   );
 
-  it.each([
+  it.effect.each([
+    ["sending", sendingCampaign],
+    ["completed", completedCampaign],
+  ] as const)("conflicts with a %s campaign without mutating it", ([_label, campaign]) =>
+    Effect.gen(function* () {
+      const fix = fixture({ campaign, runToken: existingRunToken });
+
+      const attempt = yield* runWith(fix, Campaigns.cancel(campaignId));
+
+      expect(failureOf(attempt)).toStrictEqual(
+        new Schemas.CampaignStateConflict({ state: campaign.submission.state }),
+      );
+      expect(storedCampaign(fix)).toStrictEqual(campaign);
+      expect(fix.world.order).toHaveLength(0);
+    }),
+  );
+
+  it.effect.each([
     ["draft", draftCampaign],
     ["paused", pausedCampaign],
     ["sending", sendingCampaign],
-  ] as const)("conflicts with a replacement %s generation", (_label, replacement) =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const fix = fixture({ campaign: scheduledCampaign, runToken: existingRunToken });
+  ] as const)("conflicts with a replacement %s generation", ([_label, replacement]) =>
+    Effect.gen(function* () {
+      const fix = fixture({ campaign: scheduledCampaign, runToken: existingRunToken });
 
-        fix.world.beforeWrite = Effect.sync(() => {
-          fix.world.campaigns.set(campaignId, replacement);
-          fix.world.runTokens.set(campaignId, replacementToken);
-          rememberHistory(fix.world, replacement);
-        });
+      fix.world.beforeWrite = Effect.sync(() => {
+        fix.world.campaigns.set(campaignId, replacement);
+        fix.world.runTokens.set(campaignId, replacementToken);
+        rememberHistory(fix.world, replacement);
+      });
 
-        const attempt = yield* runWith(fix, Campaigns.cancel(campaignId));
+      const attempt = yield* runWith(fix, Campaigns.cancel(campaignId));
 
-        expect(failureOf(attempt)).toStrictEqual(
-          new Schemas.CampaignStateConflict({ state: replacement.submission.state }),
-        );
-        expect(storedCampaign(fix)).toStrictEqual(replacement);
-        expect(fix.world.runTokens.get(campaignId)).toBe(replacementToken);
-      }),
-    ),
+      expect(failureOf(attempt)).toStrictEqual(
+        new Schemas.CampaignStateConflict({ state: replacement.submission.state }),
+      );
+      expect(storedCampaign(fix)).toStrictEqual(replacement);
+      expect(fix.world.runTokens.get(campaignId)).toBe(replacementToken);
+    }),
   );
 
-  it("succeeds idempotently when a concurrent cancel already drafted the same scheduled token", () =>
-    Effect.runPromise(
+  it.effect(
+    "succeeds idempotently when a concurrent cancel already drafted the same scheduled token",
+    () =>
       Effect.gen(function* () {
         const fix = fixture({ campaign: scheduledCampaign, runToken: existingRunToken });
 
@@ -1224,10 +1182,11 @@ describe("cancel", () => {
         expect(Result.isSuccess(attempt) && attempt.success).toStrictEqual(draftCampaign);
         expect(fix.world.runTokens.get(campaignId)).toBe(existingRunToken);
       }),
-    ));
+  );
 
-  it("succeeds idempotently when a concurrent cancel already paused the same resumed token as manual", () =>
-    Effect.runPromise(
+  it.effect(
+    "succeeds idempotently when a concurrent cancel already paused the same resumed token as manual",
+    () =>
       Effect.gen(function* () {
         const manualPaused: Schemas.Campaign = {
           ...draftCampaign,
@@ -1257,10 +1216,11 @@ describe("cancel", () => {
         expect(Result.isSuccess(attempt) && attempt.success).toStrictEqual(manualPaused);
         expect(fix.world.runTokens.get(campaignId)).toBe(existingRunToken);
       }),
-    ));
+  );
 
-  it("conflicts when a worker pauses a never-started queued run before the cancel reread", () =>
-    Effect.runPromise(
+  it.effect(
+    "conflicts when a worker pauses a never-started queued run before the cancel reread",
+    () =>
       Effect.gen(function* () {
         const fix = fixture({ campaign: queuedCampaign, runToken: existingRunToken });
 
@@ -1283,10 +1243,11 @@ describe("cancel", () => {
         });
         expect(fix.world.runTokens.get(campaignId)).toBe(existingRunToken);
       }),
-    ));
+  );
 
-  it("conflicts when a worker pauses a queued resume before the cancel reread and keeps its history", () =>
-    Effect.runPromise(
+  it.effect(
+    "conflicts when a worker pauses a queued resume before the cancel reread and keeps its history",
+    () =>
       Effect.gen(function* () {
         const historic: RunHistory = {
           queuedAt,
@@ -1321,29 +1282,28 @@ describe("cancel", () => {
         });
         expect(fix.world.runTokens.get(campaignId)).toBe(existingRunToken);
       }),
-    ));
+  );
 
-  it("conflicts when begin wins the generation before cancel commits", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const fix = fixture({ campaign: queuedCampaign, runToken: existingRunToken });
+  it.effect("conflicts when begin wins the generation before cancel commits", () =>
+    Effect.gen(function* () {
+      const fix = fixture({ campaign: queuedCampaign, runToken: existingRunToken });
 
-        fix.world.beforeWrite = Effect.sync(() => {
-          const campaign = storedCampaign(fix);
+      fix.world.beforeWrite = Effect.sync(() => {
+        const campaign = storedCampaign(fix);
 
-          fix.world.startedAt.set(campaignId, startedAt);
-          fix.world.campaigns.set(campaignId, {
-            ...campaign,
-            submission: { state: "sending", queuedAt, startedAt, progress, feedback },
-          });
+        fix.world.startedAt.set(campaignId, startedAt);
+        fix.world.campaigns.set(campaignId, {
+          ...campaign,
+          submission: { state: "sending", queuedAt, startedAt, progress, feedback },
         });
+      });
 
-        const attempt = yield* runWith(fix, Campaigns.cancel(campaignId));
+      const attempt = yield* runWith(fix, Campaigns.cancel(campaignId));
 
-        expect(failureOf(attempt)).toStrictEqual(
-          new Schemas.CampaignStateConflict({ state: "sending" }),
-        );
-        expect(storedCampaign(fix).submission.state).toBe("sending");
-      }),
-    ));
+      expect(failureOf(attempt)).toStrictEqual(
+        new Schemas.CampaignStateConflict({ state: "sending" }),
+      );
+      expect(storedCampaign(fix).submission.state).toBe("sending");
+    }),
+  );
 });
