@@ -1,8 +1,8 @@
 # Queued campaign cancellation
 
-> **Status:** Partial — implementation T1–T5 verified; T6 live acceptance blocked on AWS Lambda KMS errors after a credentials-misconfigured first live run
+> **Status:** Complete. T1–T5 are verified. On 2026-09-23 the user decided to close T6 on recorded evidence instead of repeating its walkthrough (see T6).
 > **ADRs:** [Accepted ADR-0016](../0016-cancelling-pending-campaign-runs.md); constrained by [0011](../0011-open-recipient-set-and-paced-dispatch.md), [0013](../0013-repeat-safe-writes.md), [0014](../0014-campaign-body-item-and-summaries.md) and [0015](../0015-one-shot-scheduler-per-campaign.md)
-> **Updated:** 2026-09-17
+> **Updated:** 2026-09-24
 > **Baseline:** `a5e66c6` on `queued-campaign-cancellation` from `main` (`4b78381` planning baseline; source unchanged since then except this plan commit)
 
 ## Outcome and boundaries
@@ -179,7 +179,7 @@ Use a fresh ephemeral `Emailer/test` deployment. The last recorded test deployme
   - Complete independent implementation review, then commit the finished change; if implementation uses a worktree, its owner handles authorized integration and removes it after preserving all work.
 - **Starts at:** `package.json:check`; `README.md` deployment/recovery runbook; `alchemy.run.ts`; this plan and ADR-0016.
 - **Depends on:** T5
-- **Status:** Blocked
+- **Status:** Closed by the user's decision of 2026-09-23. The live suite, including `CampaignCancellation.integration.test.ts`, passed in ADR-0020's run on stage `test` (40 cases) and in the [review-fixes](review-fixes.md) live gate on `test-review` on 2026-09-24 (41 cases); both stages were destroyed. The queued-cancel CLI walkthrough below was not run separately.
 - **Evidence:** `pnpm check` passed in the worktree (728 unit tests, format, lint, typecheck, imports). Alchemy plan for `--stage test` created only existing resource types (28 creates, Scheduler Create/Delete bindings unchanged). Live deploy succeeded once (28 resources, alert subscriptions 0) then integration failed because the suite ran without AWS credentials (`unset AWS_PROFILE`). A later deploy retry hit AWS `InvalidParameterValueException: Internal KMS service error` on Lambda create (Api/Dispatcher/Unsubscribe). Failure-safe destroy completed 28/28; leftover IAM roles `Emailer-Api-test-*` and `Emailer-Unsubscribe-test-*` from interrupted creates were deleted. No `emailer-test` functions, tables, queues, schedule groups, log groups, alarms, or SNS topics remain. Shared `EmailerSending/shared` identity retained. Live integration and CLI walkthrough not green; T6 cannot Confirm ADR-0016.
 - **Tests:** `pnpm check` covers format, lint, typecheck, all unit tests and imports. The full integration project covers scheduling, segmentation, HTML, unsubscribe, feedback, pacing and cancellation together. Manual CLI acceptance covers the actual operator path and resource inventory; simulator acceptance does not establish inbox placement or rendering.
 - **Verify:** Run the exact commands and acceptance procedure below; expect no required skips, no unexplained runtime errors, no unintended recipients or alert subscriptions, no new resource type, and no remaining owned ephemeral resources.

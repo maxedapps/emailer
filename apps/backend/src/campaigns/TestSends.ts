@@ -5,10 +5,9 @@ import { unsubscribeLink } from "../consent/Unsubscribe.ts";
 import { Mailer } from "../sending/Mailer.ts";
 import { consumeSlot, SendGuard } from "../sending/SendGuard.ts";
 import { AudienceStore } from "../storage/Audience.ts";
-import { unavailable } from "../storage/Errors.ts";
 import { get } from "./Campaigns.ts";
 
-import type { SubmissionOutcome } from "../sending/Mailer.ts";
+import type { SubmissionOutcome, SubmissionUncertain } from "../sending/Mailer.ts";
 
 /**
  * A list's members, if a test may reach them all. One member past the limit is requested, and a
@@ -32,7 +31,7 @@ const listRecipients = Effect.fn("TestSends.listRecipients")(function* (listId: 
 
 const outcomeOf = (
   email: string,
-  sent: Result.Result<SubmissionOutcome, unknown>,
+  sent: Result.Result<SubmissionOutcome, SubmissionUncertain>,
 ): Schemas.TestSendOutcome => {
   if (Result.isFailure(sent)) {
     return { email, outcome: "uncertain" };
@@ -86,7 +85,7 @@ export const sendTest = Effect.fn("TestSends.sendTest")(function* (
     }
 
     const unsubscribeUrl = yield* unsubscribeLink(email).pipe(Effect.orDie);
-    const delay = yield* consumeSlot(allowance.limit).pipe(Effect.mapError(unavailable("pacing")));
+    const delay = yield* consumeSlot(allowance.limit);
 
     yield* Effect.sleep(delay);
 

@@ -3,7 +3,10 @@ import { Config, Context, Effect, Layer, Option } from "effect";
 import { RateLimiter } from "effect/unstable/persistence";
 
 import { reputationAlarms } from "./Reputation.ts";
+import { unavailable } from "../storage/Errors.ts";
 import { RateLimitStoreLive } from "../storage/RateLimit.ts";
+
+import type { StorageFailure } from "../storage/Errors.ts";
 
 export interface SendQuota {
   readonly MaxSendRate?: number | undefined;
@@ -34,7 +37,7 @@ export interface SendAllowance {
 export class SendGuard extends Context.Service<
   SendGuard,
   {
-    readonly current: Effect.Effect<SendAllowance>;
+    readonly current: Effect.Effect<SendAllowance, StorageFailure>;
   }
 >()("emailer/backend/SendGuard") {}
 
@@ -78,15 +81,19 @@ export const SendGuardLive = Layer.effect(SendGuard)(
     // daily ceiling wants: the value is fixed for the function's lifetime.
     const ceiling = Option.getOrUndefined(yield* dailySendCeiling);
 
-    // The binding types its failure as `any`; like the account read, it is a defect here.
-    const alarmStates: Effect.Effect<AlarmStates> = Effect.orDie(describeAlarms());
+    // The binding types its failure as `any`; mapping it here restores a typed failure.
+    const alarmStates: Effect.Effect<AlarmStates, StorageFailure> = Effect.mapError(
+      describeAlarms(),
+      unavailable("describeAlarms"),
+    );
 
     return SendGuard.of({
       // Two independent reads; neither depends on the other.
-      current: Effect.zip(getAccount(), alarmStates, { concurrent: true }).pipe(
-        Effect.map(([account, alarms]) => sendGuard(account, alarms, ceiling)),
-        Effect.orDie,
-      ),
+      current: Effect.zip(
+        getAccount().pipe(Effect.mapError(unavailable("getAccount"))),
+        alarmStates,
+        { concurrent: true },
+      ).pipe(Effect.map(([account, alarms]) => sendGuard(account, alarms, ceiling))),
     });
   }),
 ).pipe(Layer.provide(Layer.mergeAll(AWS.SES.GetAccountHttp, AWS.CloudWatch.DescribeAlarmsHttp)));
@@ -112,4 +119,4 @@ export const consumeSlot = (limit: number) =>
     });
 
     return consumed.delay;
-  });
+  }).pipe(Effect.mapError(unavailable("pacing")));

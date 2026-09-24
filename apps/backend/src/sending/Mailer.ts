@@ -38,17 +38,17 @@ export class SubmissionUncertain extends Data.TaggedError("SubmissionUncertain")
   readonly cause: unknown;
 }> {}
 
-const rejectionCodes = new Map<string, Schemas.RejectionCode>([
-  ["MessageRejected", "message-rejected"],
-  ["BadRequestException", "invalid-request"],
-  ["MailFromDomainNotVerifiedException", "identity-not-verified"],
-  ["NotFoundException", "identity-not-verified"],
-  ["SendingPausedException", "sending-paused"],
-  ["AccountSuspendedException", "sending-paused"],
-  ["TooManyRequestsException", "rate-limited"],
-  ["ThrottlingException", "rate-limited"],
-  ["LimitExceededException", "rate-limited"],
-]);
+const rejectionCodes: Partial<Record<sesv2.SendEmailError["_tag"], Schemas.RejectionCode>> = {
+  MessageRejected: "message-rejected",
+  BadRequestException: "invalid-request",
+  MailFromDomainNotVerifiedException: "identity-not-verified",
+  NotFoundException: "identity-not-verified",
+  SendingPausedException: "sending-paused",
+  AccountSuspendedException: "sending-paused",
+  TooManyRequestsException: "rate-limited",
+  ThrottlingException: "rate-limited",
+  LimitExceededException: "rate-limited",
+};
 
 export class Mailer extends Context.Service<
   Mailer,
@@ -119,7 +119,7 @@ export const makeSend =
         Retry.none,
         Effect.matchEffect({
           onFailure: (error): Effect.Effect<SubmissionOutcome, SubmissionUncertain> => {
-            const rejectionCode = rejectionCodes.get(error._tag);
+            const rejectionCode = rejectionCodes[error._tag];
 
             return rejectionCode === undefined
               ? Effect.fail(new SubmissionUncertain({ reason: "transport", cause: error }))

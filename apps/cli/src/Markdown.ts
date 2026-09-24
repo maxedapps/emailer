@@ -133,7 +133,9 @@ const htmlRenderer = new Marked({
   },
 });
 
-// A backslash escape reaches the text renderer as an HTML entity; everything else stays raw.
+// marked keeps a named entity such as `&amp;` in a text token as written (the HTML part leaves it to
+// the client), so the text part decodes the basic ones in text and in raw HTML itself; `&amp;` goes
+// last so each entity is decoded once.
 const unescapeHtml = (value: string): string =>
   value
     .replaceAll("&lt;", "<")
@@ -142,10 +144,82 @@ const unescapeHtml = (value: string): string =>
     .replaceAll("&#39;", "'")
     .replaceAll("&amp;", "&");
 
+/** A link as text: its label and URL, or the URL alone when that is the label. */
+const linkText = (label: string, href: string): string =>
+  label === href ? href : `${label} (${href})`;
+
+/** A raw `<a href>` with its label, found anywhere in a block or at the start of inline source. */
+const rawLink = String.raw`<a\s[^>]*?href="([^"]*)"[^>]*>([\s\S]*?)<\/a>`;
+
+const rawLinks = new RegExp(rawLink, "gi");
+
+const rawLinkAtStart = new RegExp(`^${rawLink}`, "i");
+
+// Table cells count: a raw HTML table in an email lays out columns, which text stacks.
+const lineEnding = /<\/?(?:br|p|div|li|tr|t[dh]|h[1-6]|table|ul|ol|blockquote|hr)\b[^>]*>/gi;
+
+/**
+ * Raw HTML as text reads the way the HTML part does: a link keeps its URL, a tag that ends a line
+ * there ends one here, and whitespace flows as in HTML. Style and script contents are not text, so
+ * they go.
+ */
+const htmlText = (html: string): string =>
+  unescapeHtml(
+    html
+      .replaceAll(/<(style|script)\b[\s\S]*?<\/\1>/gi, "")
+      .replaceAll(rawLinks, (_, href: string, label: string) => linkText(label, href))
+      .replaceAll(/\s+/g, " ")
+      .replaceAll(lineEnding, "\n")
+      .replaceAll(/<[^>]*>/g, ""),
+  );
+
 const textRenderer = new Marked({
+  extensions: [
+    // Inline, marked hands over `<a href>`, its label and `</a>` as three separate tokens, so the
+    // link is read whole here, before it is split.
+    {
+      name: "rawLink",
+      level: "inline",
+      start: (source) => source.match(/<a\s/i)?.index,
+      tokenizer(source) {
+        const match = rawLinkAtStart.exec(source);
+
+        if (match === null) {
+          return undefined;
+        }
+
+        const [raw, href = "", label = ""] = match;
+
+        return {
+          type: "rawLink",
+          raw,
+          href: unescapeHtml(href),
+          tokens: this.lexer.inlineTokens(label),
+        };
+      },
+      renderer(token) {
+        return linkText(this.parser.parseInline(token.tokens ?? []), String(token["href"]));
+      },
+    },
+    // A `<br>` ends the line, and like Markdown's own hard break it takes the source line break
+    // after it along, so `team<br>` at the end of a line does not leave a blank line.
+    {
+      name: "rawBreak",
+      level: "inline",
+      start: (source) => source.match(/<br\b/i)?.index,
+      tokenizer(source) {
+        const match = /^<br\s*\/?>[ \t]*\n?/i.exec(source);
+
+        return match === null ? undefined : { type: "rawBreak", raw: match[0] };
+      },
+      renderer() {
+        return "\n";
+      },
+    },
+  ],
   renderer: {
     heading({ tokens }) {
-      return `${this.parser.parseInline(tokens).toUpperCase()}\n\n`;
+      return `${this.parser.parseInline(tokens)}\n\n`;
     },
     paragraph({ tokens }) {
       return `${this.parser.parseInline(tokens)}\n\n`;
@@ -170,12 +244,10 @@ const textRenderer = new Marked({
         return this.parser.parseInline(token.tokens);
       }
 
-      return "escaped" in token && token.escaped === true ? unescapeHtml(token.text) : token.text;
+      return unescapeHtml(token.text);
     },
     link({ href, tokens }) {
-      const label = this.parser.parseInline(tokens);
-
-      return label === href ? href : `${label} (${href})`;
+      return linkText(this.parser.parseInline(tokens), href);
     },
     image({ text }) {
       return text === "" ? "" : `[${text}]`;
@@ -186,7 +258,15 @@ const textRenderer = new Marked({
       const items = token.items.map((item, index) => {
         const marker = token.ordered ? `${first + index}.` : "-";
 
-        return `${marker} ${this.parser.parse(item.tokens).trim()}`;
+        const box = item.task ? (item.checked === true ? "[x] " : "[ ] ") : "";
+
+        const body = item.tokens
+          .map((block) => this.parser.parse([block]).trim())
+          .filter((block) => block !== "")
+          .join("\n")
+          .replaceAll("\n", `\n${" ".repeat(marker.length + 1)}`);
+
+        return `${marker} ${box}${body}`;
       });
 
       return `${items.join("\n")}\n\n`;
@@ -208,8 +288,21 @@ const textRenderer = new Marked({
 
       return `${[row(token.header), ...token.rows.map(row)].join("\n")}\n\n`;
     },
-    html({ text }) {
-      return text;
+    // The box comes from the list item, so the token itself renders nothing, in tight and loose lists.
+    checkbox() {
+      return "";
+    },
+    html({ text, block }) {
+      if (!block) {
+        return htmlText(text);
+      }
+
+      const lines = htmlText(text)
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line !== "");
+
+      return `${lines.join("\n")}\n\n`;
     },
     space() {
       return "";

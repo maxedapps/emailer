@@ -18,9 +18,7 @@ const emailerClient = Effect.gen(function* () {
   return yield* makeEmailerClient(url, token);
 });
 
-export const withClient = <A>(
-  use: (client: EmailerClient) => Effect.Effect<A, { readonly _tag: string }>,
-) =>
+export const withClient = <A, E>(use: (client: EmailerClient) => Effect.Effect<A, E>) =>
   Effect.gen(function* () {
     const client = yield* emailerClient;
 

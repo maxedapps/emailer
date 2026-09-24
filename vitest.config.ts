@@ -26,7 +26,7 @@ export default defineConfig({
           testTimeout: 120_000,
           hookTimeout: 120_000,
           // One live deployment, one shared account suppression list, labelled simulator addresses, and one
-          // case that temporarily changes a function's concurrency. Files running in parallel
+          // case that temporarily disables the dispatcher's event-source mapping. Files running in parallel
           // would be several suites editing the same few contacts and the same function at once,
           // and the failures that produces look like product bugs rather than test interference.
           // Concurrency *within* a file stays available, because some cases are about it.

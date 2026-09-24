@@ -6,6 +6,7 @@
 - Confirmed: 2026-09-17. Live gate on ephemeral stage `test-sched` passed (26 integration cases including fire and cancel); the stage was destroyed.
 - Authority: The user decided on 2026-09-17 that scheduling gets a dedicated `POST /campaigns/:id/schedule` with a `sendAt` instant plus a cancel, that `send` stays "now", that the run token is minted when scheduling, and that a schedule group per stage is mandatory. Accepted by the user on 2026-09-17 after independent review and re-review of [the plan](work/campaign-scheduling.md); the plan's live gate confirms the implementation.
 - Extends: [ADR-0011](0011-open-recipient-set-and-paced-dispatch.md) (the dispatcher and its wake-up are unchanged; a fire is a wake-up), [ADR-0013](0013-repeat-safe-writes.md) (the three new or changed transitions follow its repeat-safe forms), [ADR-0014](0014-campaign-body-item-and-summaries.md) (the schedule intent lives on `META`).
+- Superseded in part: [ADR-0016](0016-cancelling-pending-campaign-runs.md), for schedule naming and cancellation: a schedule is named by its run token, cancel keeps the token, and a replacement deletes only its own generation's schedule.
 
 ## Context
 

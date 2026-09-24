@@ -11,6 +11,7 @@ import {
   Inspectable,
   Layer,
   Option,
+  Predicate,
   Runtime,
   Schema,
 } from "effect";
@@ -242,13 +243,38 @@ const command = Command.make(
   }),
 ).pipe(Command.withDescription("Replay feedback events Lambda could not process"));
 
+const messageOf = (cause: unknown): string =>
+  Predicate.hasProperty(cause, "message") && Predicate.isString(cause.message) ? cause.message : "";
+
+/**
+ * A failure's message, then the message of each cause down a chain of `Error`s. Anything else ends
+ * the chain: a `ConfigError` is not an `Error`, and its message already includes its cause.
+ */
+const messages = (cause: unknown): ReadonlyArray<string> => [
+  messageOf(cause),
+  ...(cause instanceof Error ? messages(cause.cause) : []),
+];
+
 /**
  * A refusal's fields *are* the diagnostic — which message, and why. `Cause.pretty` renders a tagged
  * error as its bare name and a stack trace through this file, which tells an operator nothing, so
- * an expected failure is inspected and only an unexpected one gets the trace.
+ * an expected failure is inspected and only an unexpected one gets the trace. A refusal's message
+ * is empty; a failure that has one, such as a schema or transport failure, is said in its messages
+ * instead, because inspected it is a whole schema tree or an empty cause.
  */
-export const renderCause = (cause: Cause.Cause<unknown>): string =>
-  Cause.hasFails(cause) ? Inspectable.toStringUnknown(Cause.squash(cause)) : Cause.pretty(cause);
+export const renderCause = (cause: Cause.Cause<unknown>): string => {
+  if (!Cause.hasFails(cause)) {
+    return Cause.pretty(cause);
+  }
+
+  const failure = Cause.squash(cause);
+
+  return messageOf(failure) === ""
+    ? Inspectable.toStringUnknown(failure)
+    : messages(failure)
+        .filter((message) => message !== "")
+        .join(": ");
+};
 
 /**
  * Whether this tool should say anything at all. The operator's own Ctrl-C is not a fault, and a

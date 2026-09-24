@@ -19,12 +19,10 @@ const contentFlags = {
   ),
   text: Flag.FileText("text").pipe(
     Flag.withDescription("Path to a file holding the plain-text body"),
-    Flag.withSchema(Schemas.CampaignText),
     Flag.optional,
   ),
   html: Flag.FileText("html").pipe(
     Flag.withDescription("Path to a file holding the HTML body; needs --text"),
-    Flag.withSchema(Schemas.CampaignHtml),
     Flag.optional,
   ),
 };
@@ -69,19 +67,23 @@ const chooseContent = (
 const decodeBody = Schema.decodeUnknownEffect(Schemas.CampaignBody);
 
 /**
- * The body to send. Markdown renders here, titled by the subject, and its output meets the same
- * limits as a file's. The subject is only read when a Markdown body needs it.
+ * The body to send. Markdown renders here, titled by the subject, and a file's body and rendered
+ * Markdown meet the same limits, checked before the request. A refusal names the part and the limit,
+ * never the content, which can be a whole file. The subject is only read when a Markdown body needs
+ * it.
  */
-const bodyOf = <E>(content: Content, subject: Effect.Effect<string, E>) =>
-  content.kind === "body"
-    ? Effect.succeed(content.body)
-    : Effect.flatMap(subject, (title) =>
-        decodeBody(renderMarkdown(content.markdown, title)).pipe(
-          Effect.mapError(() =>
-            refuse("The rendered Markdown exceeds the service's body size limits"),
-          ),
-        ),
-      );
+const bodyOf = <E>(content: Content, subject: Effect.Effect<string, E>) => {
+  const body: Effect.Effect<unknown, E> =
+    content.kind === "body"
+      ? Effect.succeed(content.body)
+      : Effect.map(subject, (title) => renderMarkdown(content.markdown, title));
+
+  return Effect.flatMap(body, (value) =>
+    decodeBody(value).pipe(
+      Effect.mapError((failure) => refuse(`The campaign body is refused: ${failure.message}`)),
+    ),
+  );
+};
 
 const campaignsCreate = Command.make(
   "create",
