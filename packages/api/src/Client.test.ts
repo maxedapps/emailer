@@ -1,6 +1,6 @@
-import { Effect, Redacted, Result } from "effect";
+import { describe, expect, it } from "@effect/vitest";
+import { Effect, Redacted, Result, Schema } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
-import { describe, expect, it } from "vitest";
 
 import { makeEmailerClient } from "./Client.ts";
 import * as Schemas from "./Schemas.ts";
@@ -53,26 +53,26 @@ const withTransport = <A, E>(
   transport: Transport,
   use: (client: Effect.Success<ReturnType<typeof makeEmailerClient>>) => Effect.Effect<A, E>,
 ) =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const client = yield* makeEmailerClient(baseUrl, Redacted.make(token));
+  Effect.gen(function* () {
+    const client = yield* makeEmailerClient(baseUrl, Redacted.make(token));
 
-      return yield* Effect.result(use(client));
-    }).pipe(
-      Effect.provide(FetchHttpClient.layer),
-      Effect.provideService(FetchHttpClient.Fetch, transport.fetch),
-    ),
+    return yield* Effect.result(use(client));
+  }).pipe(
+    Effect.provide(FetchHttpClient.layer),
+    Effect.provideService(FetchHttpClient.Fetch, transport.fetch),
   );
 
 describe("makeEmailerClient", () => {
-  it("attaches the bearer credential and encodes the request body", () => {
-    const transport = transportReplying(() =>
-      json(201, JSON.stringify({ id: contactId, email: "sam@example.com", createdAt })),
-    );
+  it.effect("attaches the bearer credential and encodes the request body", () =>
+    Effect.gen(function* () {
+      const transport = transportReplying(() =>
+        json(201, JSON.stringify({ id: contactId, email: "sam@example.com", createdAt })),
+      );
 
-    return withTransport(transport, (client) =>
-      client.contacts.create({ payload: { email: "sam@example.com" } }),
-    ).then((result) => {
+      const result = yield* withTransport(transport, (client) =>
+        client.contacts.create({ payload: { email: "sam@example.com" } }),
+      );
+
       expect(Result.isSuccess(result)).toBe(true);
       expect(transport.recorded).toHaveLength(1);
 
@@ -81,94 +81,108 @@ describe("makeEmailerClient", () => {
       expect(sent?.method).toBe("POST");
       expect(sent?.url).toBe(`${baseUrl}/contacts`);
       expect(sent?.authorization).toBe(`Bearer ${token}`);
-      expect(JSON.parse(sent?.body ?? "")).toStrictEqual({ email: "sam@example.com" });
-    });
-  });
+      expect(
+        yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))(sent?.body),
+      ).toStrictEqual({ email: "sam@example.com" });
+    }),
+  );
 
-  it("decodes a successful response through the shared schema", () => {
-    const transport = transportReplying(() =>
-      json(
-        201,
-        JSON.stringify({ id: contactId, email: "sam@example.com", name: "Sam", createdAt }),
-      ),
-    );
+  it.effect("decodes a successful response through the shared schema", () =>
+    Effect.gen(function* () {
+      const transport = transportReplying(() =>
+        json(
+          201,
+          JSON.stringify({ id: contactId, email: "sam@example.com", name: "Sam", createdAt }),
+        ),
+      );
 
-    return withTransport(transport, (client) =>
-      client.contacts.create({ payload: { email: "sam@example.com", name: "Sam" } }),
-    ).then((result) => {
+      const result = yield* withTransport(transport, (client) =>
+        client.contacts.create({ payload: { email: "sam@example.com", name: "Sam" } }),
+      );
+
       expect(Result.isSuccess(result) && result.success).toStrictEqual({
         id: contactId,
         email: "sam@example.com",
         name: "Sam",
         createdAt,
       });
-    });
-  });
+    }),
+  );
 
-  it("surfaces a declared public error as a typed failure", () => {
-    const notFoundBody = '{"_tag":"NotFound","entity":"contact"}';
+  it.effect("surfaces a declared public error as a typed failure", () =>
+    Effect.gen(function* () {
+      const notFoundBody = '{"_tag":"NotFound","entity":"contact"}';
 
-    const transport = transportReplying(() => json(404, notFoundBody));
+      const transport = transportReplying(() => json(404, notFoundBody));
 
-    return withTransport(transport, (client) =>
-      client.contacts.get({ params: { id: contactId } }),
-    ).then((result) => {
+      const result = yield* withTransport(transport, (client) =>
+        client.contacts.get({ params: { id: contactId } }),
+      );
+
       expect(Result.isFailure(result) ? result.failure : undefined).toBeInstanceOf(
         Schemas.NotFound,
       );
       expect(Result.isFailure(result) && result.failure).toMatchObject({ entity: "contact" });
-    });
-  });
+    }),
+  );
 
-  it("surfaces a cancellation conflict as a typed failure", () => {
-    const conflictBody = '{"_tag":"CampaignStateConflict","state":"sending"}';
+  it.effect("surfaces a cancellation conflict as a typed failure", () =>
+    Effect.gen(function* () {
+      const conflictBody = '{"_tag":"CampaignStateConflict","state":"sending"}';
 
-    const transport = transportReplying(() => json(409, conflictBody));
+      const transport = transportReplying(() => json(409, conflictBody));
 
-    return withTransport(transport, (client) =>
-      client.campaigns.cancel({ params: { id: contactId } }),
-    ).then((result) => {
+      const result = yield* withTransport(transport, (client) =>
+        client.campaigns.cancel({ params: { id: contactId } }),
+      );
+
       expect(Result.isFailure(result) ? result.failure : undefined).toBeInstanceOf(
         Schemas.CampaignStateConflict,
       );
       expect(Result.isFailure(result) && result.failure).toMatchObject({ state: "sending" });
       expect(Result.isFailure(result) && result.failure).not.toHaveProperty("runToken");
-    });
-  });
+    }),
+  );
 
-  it("fails instead of accepting a malformed success body", () => {
-    const transport = transportReplying(() =>
-      json(201, JSON.stringify({ id: contactId, createdAt })),
-    );
+  it.effect("fails instead of accepting a malformed success body", () =>
+    Effect.gen(function* () {
+      const transport = transportReplying(() =>
+        json(201, JSON.stringify({ id: contactId, createdAt })),
+      );
 
-    return withTransport(transport, (client) =>
-      client.contacts.create({ payload: { email: "sam@example.com" } }),
-    ).then((result) => {
+      const result = yield* withTransport(transport, (client) =>
+        client.contacts.create({ payload: { email: "sam@example.com" } }),
+      );
+
       expect(Result.isFailure(result)).toBe(true);
-    });
-  });
+    }),
+  );
 
-  it("does not retry a mutation when the service fails", () => {
-    const transport = transportReplying(() => json(500, JSON.stringify({ error: "boom" })));
+  it.effect("does not retry a mutation when the service fails", () =>
+    Effect.gen(function* () {
+      const transport = transportReplying(() => json(500, JSON.stringify({ error: "boom" })));
 
-    return withTransport(transport, (client) =>
-      client.campaigns.send({ params: { id: contactId } }),
-    ).then((result) => {
-      expect(Result.isFailure(result)).toBe(true);
-      expect(transport.recorded).toHaveLength(1);
-    });
-  });
+      const result = yield* withTransport(transport, (client) =>
+        client.campaigns.send({ params: { id: contactId } }),
+      );
 
-  it("does not retry a mutation when the transport fails", () => {
-    const transport = transportReplying(() => {
-      throw new Error("connection reset");
-    });
-
-    return withTransport(transport, (client) =>
-      client.contacts.create({ payload: { email: "sam@example.com" } }),
-    ).then((result) => {
       expect(Result.isFailure(result)).toBe(true);
       expect(transport.recorded).toHaveLength(1);
-    });
-  });
+    }),
+  );
+
+  it.effect("does not retry a mutation when the transport fails", () =>
+    Effect.gen(function* () {
+      const transport = transportReplying(() => {
+        throw new Error("connection reset");
+      });
+
+      const result = yield* withTransport(transport, (client) =>
+        client.contacts.create({ payload: { email: "sam@example.com" } }),
+      );
+
+      expect(Result.isFailure(result)).toBe(true);
+      expect(transport.recorded).toHaveLength(1);
+    }),
+  );
 });

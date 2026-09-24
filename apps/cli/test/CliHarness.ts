@@ -1,17 +1,10 @@
 import { NodeHttpServer, NodeServices } from "@effect/platform-node";
 import { Authorization, EmailerApi, Unauthorized } from "@emailer/api/Api";
 import * as Schemas from "@emailer/api/Schemas";
-import { Effect, Layer, PlatformError, Redacted, Schema, Stream } from "effect";
+import { Effect, FileSystem, Layer, PlatformError, Redacted, Schema, Stream } from "effect";
 import { HttpRouter, HttpServer } from "effect/unstable/http";
 import { HttpApiBuilder } from "effect/unstable/httpapi";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
-// oxlint-disable-next-line effecttsgo/node-builtin-import
-import { randomUUID } from "node:crypto";
-// oxlint-disable-next-line effecttsgo/node-builtin-import
-import { writeFile, rm } from "node:fs/promises";
-// oxlint-disable-next-line effecttsgo/node-builtin-import
-import { createServer } from "node:http";
-import { tmpdir } from "node:os";
 
 export const token = "3o4Xr7nJ1pQvKzB2sYtLwMhGfDcEaN9uRiVoP0qTzXY";
 
@@ -560,11 +553,7 @@ interface CliResult {
 }
 
 const collect = (stream: Stream.Stream<Uint8Array, PlatformError.PlatformError>) =>
-  Stream.runFold(
-    stream,
-    () => "",
-    (accumulated: string, chunk) => accumulated + new TextDecoder().decode(chunk),
-  );
+  stream.pipe(Stream.decodeText(), Stream.mkString);
 
 export const runCli = (
   baseUrl: string,
@@ -613,26 +602,21 @@ export const withService = <A, E>(
     return yield* use(baseUrl);
   }).pipe(
     Effect.scoped,
-    Effect.provide(
-      Layer.mergeAll(NodeHttpServer.layer(createServer, { port: 0 }), NodeServices.layer),
-    ),
+    Effect.provide(Layer.mergeAll(NodeHttpServer.layerTest, NodeServices.layer)),
   );
 
 export const parseJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
 
-/** A file for the CLI to read through a body flag, removed once `use` has settled. */
-export const withTempFile = <A, E, R>(
-  extension: string,
-  contents: string,
-  use: (file: string) => Effect.Effect<A, E, R>,
-) =>
-  Effect.acquireUseRelease(
-    Effect.sync(() => `${tmpdir()}/emailer-${randomUUID()}.${extension}`).pipe(
-      Effect.tap((file) => Effect.promise(() => writeFile(file, contents))),
-    ),
-    use,
-    (file) => Effect.promise(() => rm(file, { force: true })),
-  );
+/** A file for the CLI to read through a flag, removed when the enclosing scope closes. */
+export const tempFile = (extension: string, contents: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const file = yield* fs.makeTempFileScoped({ suffix: `.${extension}` });
+
+    yield* fs.writeFileString(file, contents);
+
+    return file;
+  });
 
 export const textBody = "Hello there";
 
