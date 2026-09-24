@@ -390,7 +390,17 @@ Status: Done. As built: the README lists every public error by status under "Wha
 
 ### T10 — Live gate
 
-Status: Not started
+Status: Done on 2026-09-24, on the ephemeral stage `test`, which was then destroyed. As run:
+
+- **Rehearsal:** `main` was deployed from a separate worktree. Through the old code, one simulator address opted out through its real link and one bounce-simulator test send was suppressed. One transient row with three recent bounces was seeded in the old shape. `addresses status` showed `unsubscribed`, `suppressed` and `bouncing`.
+  - Pass 1 merged 3 of 3 rows. A second opt-out then went through the old code, between the passes.
+  - The branch was deployed with `--force`; all five functions were redeployed. The event destination matches `BOUNCE` and `COMPLAINT` only, and the rule no longer routes delays (T8). With `--force` every resource reports "updated", so the check read the deployed configuration rather than the deploy log.
+  - Before pass 2 the new code reported the late opt-out as `mailable`, the gap the second pass exists for. Pass 2 merged 4 of 4, `--verify` found none unmerged, and `--delete-old` deleted 4. Only `ADDRESS#` items remained.
+  - `addresses status` showed the same states, including the late opt-out. A campaign to six members completed with 2 accepted and 4 skipped.
+- **Full suite:** 5 files, 41 cases passed on the branch deployment.
+- **Privacy:** a contact with a marker address and a malformed `createdAt` answered 500 with an empty body. The API's log group held `operation failed { error: 'CorruptItem', operation: 'getContact' }` and no occurrence of the marker.
+- **Teardown:** destroy succeeded, and the account inventory showed no `test` function, table, queue, alarm, log group, rule, topic, configuration set, schedule group or role.
+- **Found:** the README's table lookup assumed an `emailer-<stage>-` prefix; the table is named `Emailer-EmailerData-<stage>-…`, so the lookup now matches `EmailerData-<stage>-`. The migration script reads credentials from the environment: the AWS CLI's SSO profile is not readable by the SDK's chain, so the commands used exported credentials, as the deploys do.
 
 - **Migration rehearsal:**
   - deploy an ephemeral stage from `main`;
