@@ -214,7 +214,7 @@ Every command also accepts:
    pnpm emailer lists create --name "Readers"
    ```
 
-2. Put your contacts in a JSON file. `name` and `attributes` are optional:
+2. Put your contacts in a JSON file outside this repository, so their addresses never end up in a commit. `name` and `attributes` are optional:
 
    ```json
    {
@@ -228,7 +228,7 @@ Every command also accepts:
    Import it, at most 20 contacts per file:
 
    ```sh
-   pnpm emailer lists import <listId> --file contacts.json
+   pnpm emailer lists import <listId> --file ~/emailer/contacts.json
    ```
 
 3. Write the campaign as one Markdown file ([`apps/cli/test/newsletter.md`](apps/cli/test/newsletter.md) is a sample), and create a draft from it:
