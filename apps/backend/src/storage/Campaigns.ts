@@ -124,15 +124,18 @@ export type CancelSource =
   | { readonly state: "scheduled"; readonly runToken: string }
   | { readonly state: "queued"; readonly runToken: string; readonly started: boolean };
 
-const progressOf = (stored: typeof StoredCampaign.Type): Schemas.CampaignProgress => ({
-  accepted: stored.accepted,
-  rejected: stored.rejected,
-  uncertain: stored.uncertain,
-  skipped: stored.skipped,
-});
-
 const submissionOf = (stored: typeof StoredCampaign.Type) => {
-  const progress = progressOf(stored);
+  const run = {
+    queuedAt: stored.queuedAt,
+    startedAt: stored.startedAt,
+    progress: {
+      accepted: stored.accepted,
+      rejected: stored.rejected,
+      uncertain: stored.uncertain,
+      skipped: stored.skipped,
+    },
+    feedback: { bounced: stored.bounced, complained: stored.complained },
+  };
 
   switch (stored.state) {
     case "draft":
@@ -143,31 +146,11 @@ const submissionOf = (stored: typeof StoredCampaign.Type) => {
     case "queued":
       return { state: "queued" as const, queuedAt: stored.queuedAt };
     case "sending":
-      return {
-        state: "sending" as const,
-        queuedAt: stored.queuedAt,
-        startedAt: stored.startedAt,
-        progress,
-        feedback: { bounced: stored.bounced, complained: stored.complained },
-      };
+      return { state: "sending" as const, ...run };
     case "paused":
-      return {
-        state: "paused" as const,
-        queuedAt: stored.queuedAt,
-        startedAt: stored.startedAt,
-        progress,
-        feedback: { bounced: stored.bounced, complained: stored.complained },
-        reason: stored.pausedReason,
-      };
+      return { state: "paused" as const, ...run, reason: stored.pausedReason };
     case "completed":
-      return {
-        state: "completed" as const,
-        queuedAt: stored.queuedAt,
-        startedAt: stored.startedAt,
-        finishedAt: stored.finishedAt,
-        progress,
-        feedback: { bounced: stored.bounced, complained: stored.complained },
-      };
+      return { state: "completed" as const, ...run, finishedAt: stored.finishedAt };
   }
 };
 
@@ -239,6 +222,11 @@ const settlementWrite = (settlement: RecipientSettlement) => {
   }
 };
 
+const bodyItem = (campaign: Schemas.Campaign) =>
+  withOptional({ ...bodyKey(campaign.id), v: num(recordVersion), text: str(campaign.text) }, [
+    ["html", campaign.html],
+  ]);
+
 /** The two reads a campaign's content needs, and all the public preview function may do. */
 const campaignReads = (primitives: ReadPrimitives) => {
   const { readItem } = primitives;
@@ -295,17 +283,7 @@ export const campaignOperations = (
   const createCampaign = Effect.fn("Storage.createCampaign")(function* (
     campaign: Schemas.Campaign,
   ) {
-    yield* recordOnce(
-      "createCampaign",
-      withOptional(
-        {
-          ...bodyKey(campaign.id),
-          v: num(recordVersion),
-          text: str(campaign.text),
-        },
-        [["html", campaign.html]],
-      ),
-    );
+    yield* recordOnce("createCampaign", bodyItem(campaign));
 
     const item = {
       ...campaignKey(campaign.id),
@@ -707,23 +685,16 @@ export const campaignOperations = (
   ) {
     const alreadyMine = "(#cursor = :next AND sliceId = :slice)";
 
+    const from = previous === undefined ? "attribute_not_exists(#cursor)" : "#cursor = :previous";
+    const values = { ...sendingAndRun(runToken), ":next": str(next), ":slice": str(sliceId) };
+
     const outcome = yield* updateIf("checkpoint", {
       Key: campaignKey(id),
       UpdateExpression: "SET #cursor = :next, sliceId = :slice",
-      ConditionExpression:
-        previous === undefined
-          ? `#state = :sending AND runToken = :run AND (attribute_not_exists(#cursor) OR ${alreadyMine})`
-          : `#state = :sending AND runToken = :run AND (#cursor = :previous OR ${alreadyMine})`,
+      ConditionExpression: `#state = :sending AND runToken = :run AND (${from} OR ${alreadyMine})`,
       ExpressionAttributeNames: stateAndCursorNames,
       ExpressionAttributeValues:
-        previous === undefined
-          ? { ...sendingAndRun(runToken), ":next": str(next), ":slice": str(sliceId) }
-          : {
-              ...sendingAndRun(runToken),
-              ":next": str(next),
-              ":slice": str(sliceId),
-              ":previous": str(previous),
-            },
+        previous === undefined ? values : { ...values, ":previous": str(previous) },
     });
 
     return outcome.applied ? ("updated" as const) : ("condition-failed" as const);
@@ -755,6 +726,8 @@ export const campaignOperations = (
     reason: Schemas.PauseReason,
     cursor: string | undefined,
   ) {
+    const values = { ":paused": str("paused"), ":reason": str(reason), ...sendingAndRun(runToken) };
+
     const outcome = yield* updateIf(
       "pauseRun",
       cursor === undefined
@@ -763,33 +736,19 @@ export const campaignOperations = (
             UpdateExpression: "SET #state = :paused, pausedReason = :reason REMOVE #cursor",
             ConditionExpression: "#state = :sending AND runToken = :run",
             ExpressionAttributeNames: stateAndCursorNames,
-            ExpressionAttributeValues: {
-              ":paused": str("paused"),
-              ":reason": str(reason),
-              ...sendingAndRun(runToken),
-            },
+            ExpressionAttributeValues: values,
           }
         : {
             Key: campaignKey(id),
             UpdateExpression: "SET #state = :paused, pausedReason = :reason, #cursor = :cursor",
             ConditionExpression: "#state = :sending AND runToken = :run",
             ExpressionAttributeNames: stateAndCursorNames,
-            ExpressionAttributeValues: {
-              ":paused": str("paused"),
-              ":reason": str(reason),
-              ":cursor": str(cursor),
-              ...sendingAndRun(runToken),
-            },
+            ExpressionAttributeValues: { ...values, ":cursor": str(cursor) },
           },
     );
 
     return outcome.applied ? ("paused" as const) : ("stale" as const);
   });
-
-  const bodyItem = (campaign: Schemas.Campaign) =>
-    withOptional({ ...bodyKey(campaign.id), v: num(recordVersion), text: str(campaign.text) }, [
-      ["html", campaign.html],
-    ]);
 
   // One fixed shape: the caller merges the change into the whole draft, so META's editable fields
   // and BODY are rewritten together, and only while the campaign is still a draft. A campaign

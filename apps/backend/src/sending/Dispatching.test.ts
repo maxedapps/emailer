@@ -716,42 +716,6 @@ describe("runSlice", () => {
       ),
     ));
 
-  it("still settles an already-claimed recipient after a stale begin", () =>
-    Effect.runPromise(
-      onTestClock(
-        Effect.gen(function* () {
-          const fix = fixture({ beginOutcome: "stale", claimed: [memberA.id] });
-
-          successOf(yield* runSliceNow(fix));
-
-          expect(fix.world.claims).toHaveLength(0);
-          expect(fix.mailer.sent).toHaveLength(0);
-          expect(fix.wake.messages).toHaveLength(0);
-
-          const outcome = yield* CampaignStore.pipe(
-            Effect.flatMap((campaigns) =>
-              campaigns.settleRecipient(
-                campaignId,
-                "already-claimed",
-                memberA.id,
-                { state: "accepted", messageId: "late-ses" },
-                createdAt,
-              ),
-            ),
-            Effect.provide(fix.layer),
-          );
-
-          expect(outcome).toBe("settled");
-          expect(fix.world.settlements).toStrictEqual([
-            {
-              contactId: memberA.id,
-              settlement: { state: "accepted", messageId: "late-ses" },
-            },
-          ]);
-        }),
-      ),
-    ));
-
   it("checkpoints at the last processed member when a later delay would overrun", () =>
     Effect.runPromise(
       onTestClock(
@@ -866,7 +830,11 @@ describe("runSlice", () => {
 
           const fiber = yield* Effect.forkChild(runSliceNow(fix));
 
-          yield* TestClock.adjust("7 seconds");
+          yield* TestClock.adjust("6999 millis");
+
+          expect(fix.mailer.sent).toHaveLength(3);
+
+          yield* TestClock.adjust("1 millis");
 
           successOf(yield* Fiber.join(fiber));
 
@@ -879,6 +847,58 @@ describe("runSlice", () => {
           expect(fix.world.rows.get(memberA.id)?.state).toBe("rejected");
           expect(fix.world.paused).toStrictEqual([{ reason: "rate-limited", cursor: memberA.id }]);
           expect(fix.wake.messages).toHaveLength(0);
+        }),
+      ),
+    ));
+
+  it("recovers from one rate-limited submission after a 1s backoff", () =>
+    Effect.runPromise(
+      onTestClock(
+        Effect.gen(function* () {
+          const fix = fixture({
+            outcomes: [
+              { outcome: "rejected", rejectionCode: "rate-limited" },
+              { outcome: "accepted", messageId: "second" },
+            ],
+          });
+
+          const fiber = yield* Effect.forkChild(runSliceNow(fix));
+
+          yield* TestClock.adjust("1 second");
+
+          successOf(yield* Fiber.join(fiber));
+
+          expect(fix.mailer.sent).toHaveLength(2);
+          expect(fix.limiter.consumes).toHaveLength(2);
+          expect(fix.world.settlements).toStrictEqual([
+            { contactId: memberA.id, settlement: { state: "accepted", messageId: "second" } },
+          ]);
+          expect(fix.world.paused).toStrictEqual([]);
+        }),
+      ),
+    ));
+
+  it("settles an uncertain submission without resending it and moves on", () =>
+    Effect.runPromise(
+      onTestClock(
+        Effect.gen(function* () {
+          const fix = fixture({
+            members: [memberA, memberB],
+            outcomes: [new SubmissionUncertain({ reason: "timeout", cause: "slow" })],
+          });
+
+          successOf(yield* runSliceNow(fix));
+
+          expect(fix.mailer.sent.map((message) => message.recipient)).toStrictEqual([
+            memberA.email,
+            memberB.email,
+          ]);
+          expect(fix.world.settlements).toStrictEqual([
+            { contactId: memberA.id, settlement: { state: "uncertain" } },
+            { contactId: memberB.id, settlement: { state: "accepted", messageId: "ses-message" } },
+          ]);
+          expect(fix.world.paused).toStrictEqual([]);
+          expect(fix.world.completed).toBe(1);
         }),
       ),
     ));

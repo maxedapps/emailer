@@ -4,6 +4,7 @@
 - Date: 2026-09-23
 - Accepted: 2026-09-23
 - Confirmed: 2026-09-23. On the ephemeral stage `test`, a draft created from the reference newsletter rendered to about 5 KB of HTML. Its preview showed every element styled, the image at full card width, and the footer below the card, at desktop and at 390px width. A `[Test]` copy delivered to the operator's test inbox kept every inline style, and its text part carried no Markdown syntax. The stage was destroyed.
+- Amended: [review-fixes](work/review-fixes.md) — the plain-text part keeps a heading's own case (and its link's URL), reduces raw HTML to its text, decodes the basic entities, renders task items as `[x]`/`[ ]`, and indents a list item's further lines and nested lists under its marker.
 - Authority: On 2026-09-23 the user asked for Markdown authoring with email-conformant HTML output, and asked for MJML and other tools to be evaluated. After seeing the research, they followed the recommendation to use `marked` alone, in the CLI. See [the plan](work/drafting-and-preview.md).
 
 ## Context
@@ -24,7 +25,7 @@
   - **Layout:** the output goes into one fixed layout:
     - a fluid table with a 600px max width, plus an Outlook-only 600px wrapper;
     - `color-scheme: light`, `lang`, and the viewport and Apple reformatting metas.
-  - **Plain text:** a second instance renders the same tokens as text. Headings come out in capitals, links as `label (url)`, images as `[alt]` and tables as `a | b`.
+  - **Plain text:** a second instance renders the same tokens as text. Headings keep their text, links come out as `label (url)`, images as `[alt]`, tables as `a | b` and task items as `[x]`/`[ ]`. Raw HTML is reduced to its text.
 - **The backend footer is a self-contained styled block.** It is still inserted before the last `</body>`, so it renders cleanly below the layout and below hand-written HTML.
 - **`--text`/`--html` remain for hand-written bodies,** and are mutually exclusive with `--markdown`.
 

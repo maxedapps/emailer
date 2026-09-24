@@ -72,7 +72,7 @@ Three facts from Alchemy 2.0.0-beta.77 and AWS shape the design:
 
 ## Confirmation
 
-- **Unit tests** in `apps/backend/src/SendingDns.test.ts` pin:
+- **Unit tests** in `apps/backend/src/identity/SendingDns.test.ts` pin:
   - the exact records;
   - the refusal of a missing zone or a wrong token count;
   - mode decoding, including blank keys.

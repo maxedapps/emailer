@@ -14,6 +14,8 @@ import { SendGuardLive, SendPacingLive } from "./SendGuard.ts";
 
 const invocationTimeout = Duration.minutes(5);
 
+const sliceMargin = Duration.seconds(30);
+
 const dispatcherProps = Effect.gen(function* () {
   const { logGroupName, ...basics } = yield* lambdaBasics("Dispatcher", "dispatcher");
 
@@ -56,7 +58,11 @@ export default class DispatcherFunction extends AWS.Lambda.Function<DispatcherFu
           const message = yield* decodeDispatchMessage(record.body);
           const now = yield* Clock.currentTimeMillis;
 
-          yield* runSlice(message, now + Duration.toMillis(invocationTimeout));
+          // The reservation covers one attempt; the margin covers a rate-limited retry tail.
+          yield* runSlice(
+            message,
+            now + Duration.toMillis(invocationTimeout) - Duration.toMillis(sliceMargin),
+          );
         }),
       ).pipe(Effect.provideContext(services), reportedAndFatal),
     );

@@ -359,6 +359,27 @@ describe("renderCause", () => {
 
     expect(rendered).toContain("replay went wrong");
   });
+
+  it("prints a schema failure's message rather than its schema tree", () => {
+    const failure = Effect.runSync(
+      Effect.flip(Schema.decodeUnknownEffect(Schema.Struct({ id: Schema.String }))({ id: 1 })),
+    );
+
+    const rendered = renderCause(Cause.fail(failure));
+
+    expect(rendered).toContain('at ["id"]');
+    expect(rendered).not.toContain("~effect/Schema");
+  });
+
+  it("prints a failure's message followed by each cause's message", () => {
+    const rendered = renderCause(
+      Cause.fail(
+        new TypeError("fetch failed", { cause: new Error("connect ECONNREFUSED 127.0.0.1:443") }),
+      ),
+    );
+
+    expect(rendered).toBe("fetch failed: connect ECONNREFUSED 127.0.0.1:443");
+  });
 });
 
 describe("shouldReport", () => {

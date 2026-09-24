@@ -20,11 +20,11 @@ Email HTML is rendered by clients that never adopted most of the web platform. I
 
 `marked` (MIT, no dependencies, bundled types) renders Markdown to HTML with overridable renderers. The CLI creates **two instances** from the same source:
 - **HTML:** overrides for headings, paragraphs, links, images, lists, blockquotes, code spans, code blocks, rules and tables. Each writes its element with an inline `style`.
-- **Text:** overrides turn the same tokens into plain text: headings in capitals, links as `label (url)`, images as `[alt]`, table rows as `a | b`, quotes prefixed `> `.
+- **Text:** overrides turn the same tokens into plain text: headings as their own text, links as `label (url)`, images as `[alt]`, table rows as `a | b`, quotes prefixed `> `, task items as `[x]`/`[ ]`, and raw HTML reduced to its text.
 
 The HTML output is wrapped in one fixed layout. The reference newsletter renders to about 5 KB. [Renderer overrides](https://marked.js.org/using_pro#renderer)
 
-**The escaping trap.** `marked` escapes text only in its own renderers. An override that interpolates `href`, `alt`, a title or code text must escape each value itself. The first prototype's code-span override forgot this and passed `<`, `>` and `&` through as markup. Escape each value exactly once: a URL with a query string must come out with `&amp;`, never `&amp;amp;`. In the text instance the reverse applies. A backslash escape reaches the `text` renderer as an HTML entity (the token's `escaped` flag), so it must be unescaped there, and every other token is used raw.
+**The escaping trap.** `marked` escapes text only in its own renderers. An override that interpolates `href`, `alt`, a title or code text must escape each value itself. The first prototype's code-span override forgot this and passed `<`, `>` and `&` through as markup. Escape each value exactly once: a URL with a query string must come out with `&amp;`, never `&amp;amp;`. In the text instance the reverse applies. `marked` keeps a named entity such as `&amp;` in a text token as written, so the `text` renderer decodes the basic entities itself, `&amp;` last so each one is decoded once.
 
 `marked` passes raw HTML embedded in Markdown through without styling. That is acceptable for content an operator writes, not for untrusted input.
 

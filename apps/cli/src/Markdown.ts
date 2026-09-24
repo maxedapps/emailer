@@ -133,7 +133,9 @@ const htmlRenderer = new Marked({
   },
 });
 
-// A backslash escape reaches the text renderer as an HTML entity; everything else stays raw.
+// marked keeps a named entity such as `&amp;` in a text token as written (the HTML part leaves it to
+// the client), so the text part decodes the basic ones in text and in raw HTML itself; `&amp;` goes
+// last so each entity is decoded once.
 const unescapeHtml = (value: string): string =>
   value
     .replaceAll("&lt;", "<")
@@ -145,7 +147,7 @@ const unescapeHtml = (value: string): string =>
 const textRenderer = new Marked({
   renderer: {
     heading({ tokens }) {
-      return `${this.parser.parseInline(tokens).toUpperCase()}\n\n`;
+      return `${this.parser.parseInline(tokens)}\n\n`;
     },
     paragraph({ tokens }) {
       return `${this.parser.parseInline(tokens)}\n\n`;
@@ -170,7 +172,7 @@ const textRenderer = new Marked({
         return this.parser.parseInline(token.tokens);
       }
 
-      return "escaped" in token && token.escaped === true ? unescapeHtml(token.text) : token.text;
+      return unescapeHtml(token.text);
     },
     link({ href, tokens }) {
       const label = this.parser.parseInline(tokens);
@@ -186,7 +188,15 @@ const textRenderer = new Marked({
       const items = token.items.map((item, index) => {
         const marker = token.ordered ? `${first + index}.` : "-";
 
-        return `${marker} ${this.parser.parse(item.tokens).trim()}`;
+        const box = item.task ? (item.checked === true ? "[x] " : "[ ] ") : "";
+
+        const body = item.tokens
+          .map((block) => this.parser.parse([block]).trim())
+          .filter((block) => block !== "")
+          .join("\n")
+          .replaceAll("\n", `\n${" ".repeat(marker.length + 1)}`);
+
+        return `${marker} ${box}${body}`;
       });
 
       return `${items.join("\n")}\n\n`;
@@ -208,8 +218,14 @@ const textRenderer = new Marked({
 
       return `${[row(token.header), ...token.rows.map(row)].join("\n")}\n\n`;
     },
-    html({ text }) {
-      return text;
+    // The box comes from the list item, so the token itself renders nothing, in tight and loose lists.
+    checkbox() {
+      return "";
+    },
+    html({ text, block }) {
+      const stripped = unescapeHtml(text.replaceAll(/<[^>]*>/g, "")).trim();
+
+      return block ? `${stripped}\n\n` : stripped;
     },
     space() {
       return "";

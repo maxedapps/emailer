@@ -263,14 +263,14 @@ describe("listMembers", () => {
       }),
     ));
 
-  it("reads members from the base table and hydrates them into whole contacts", () =>
+  it("reads members from the base table and hydrates them into whole contacts in query order", () =>
     Effect.runPromise(
       Effect.gen(function* () {
         const table = scriptedTable({
           getItem: [Effect.succeed({ Item: listItem })],
           query: [
             Effect.succeed({
-              Items: [{ contactId: { S: otherContactId } }, { contactId: { S: contactId } }],
+              Items: [{ contactId: { S: contactId } }, { contactId: { S: otherContactId } }],
             }),
           ],
           batchGetItem: [

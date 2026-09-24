@@ -1,6 +1,6 @@
 import type * as dynamodb from "@distilled.cloud/aws/dynamodb";
 import * as Schemas from "@emailer/api/Schemas";
-import { Clock, Duration, Effect, Schema } from "effect";
+import { Clock, Duration, Effect, Schema, Struct } from "effect";
 
 import { corrupt, unavailable } from "./Errors.ts";
 import {
@@ -50,23 +50,6 @@ export interface AddressUnsubscribe {
 }
 
 export type AddressStatus = "mailable" | "unsubscribed" | "suppressed" | "bouncing";
-
-interface LocalSuppression {
-  reason: "bounce" | "complaint";
-  suppressedAt: string;
-  bounceSubType?: string;
-  complaintFeedbackType?: string;
-  complaintSubType?: string;
-}
-
-interface LocalAddressRecord {
-  email: string;
-  status: AddressStatus;
-  unsubscribedAt?: string;
-  suppression?: LocalSuppression;
-  transientBounces: ReadonlyArray<string>;
-  accountSuppression: null;
-}
 
 const StoredUnsubscribe = Schema.Struct({
   v: StoredVersionAttribute,
@@ -234,12 +217,12 @@ export const addressReads = (primitives: BatchPrimitives) => {
           ? "suppressed"
           : yield* bouncingStatus(rows.transient, "addressRecord");
 
-    const unsubscribedAt =
+    const unsubscribe =
       rows.unsubscribe === undefined
         ? undefined
-        : (yield* decodeStoredUnsubscribe(rows.unsubscribe).pipe(
+        : yield* decodeStoredUnsubscribe(rows.unsubscribe).pipe(
             Effect.mapError(corrupt("addressRecord")),
-          )).unsubscribedAt;
+          );
 
     const suppression =
       rows.suppression === undefined
@@ -255,39 +238,18 @@ export const addressReads = (primitives: BatchPrimitives) => {
             Effect.mapError(corrupt("addressRecord")),
           )).occurrences?.SS ?? []);
 
-    const record: LocalAddressRecord = {
-      email,
-      status,
-      transientBounces,
-      accountSuppression: null,
-    };
+    const record = { email, status, transientBounces, accountSuppression: null };
 
-    if (unsubscribedAt !== undefined) {
-      record.unsubscribedAt = unsubscribedAt;
-    }
+    const unsubscribed =
+      unsubscribe === undefined
+        ? record
+        : { ...record, unsubscribedAt: unsubscribe.unsubscribedAt };
 
-    if (suppression !== undefined) {
-      const row: LocalSuppression = {
-        reason: suppression.reason,
-        suppressedAt: suppression.suppressedAt,
-      };
-
-      if (suppression.bounceSubType !== undefined) {
-        row.bounceSubType = suppression.bounceSubType;
-      }
-
-      if (suppression.complaintFeedbackType !== undefined) {
-        row.complaintFeedbackType = suppression.complaintFeedbackType;
-      }
-
-      if (suppression.complaintSubType !== undefined) {
-        row.complaintSubType = suppression.complaintSubType;
-      }
-
-      record.suppression = row;
-    }
-
-    return record satisfies Schemas.AddressRecord;
+    return (
+      suppression === undefined
+        ? unsubscribed
+        : { ...unsubscribed, suppression: Struct.omit(suppression, ["v"]) }
+    ) satisfies Schemas.AddressRecord;
   });
 
   return { addressStatus, addressRecord } as const;
