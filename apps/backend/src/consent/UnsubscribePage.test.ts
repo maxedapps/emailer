@@ -1,7 +1,7 @@
+import { describe, expect, it } from "@effect/vitest";
 import * as Schemas from "@emailer/api/Schemas";
 import { ConfigProvider, Effect, Layer, Redacted, Scope } from "effect";
 import { HttpEffect } from "effect/unstable/http";
-import { describe, expect, it } from "vitest";
 
 import { StorageFailure } from "../storage/Errors.ts";
 import { UnsubscribeStore } from "../storage/Unsubscribe.ts";
@@ -95,8 +95,9 @@ const responding = (
 const bodyOf = (response: Response) => Effect.promise(() => response.text());
 
 describe("GET /unsubscribe/:token", () => {
-  it("offers the opt-out without performing it, so a scanner cannot unsubscribe anyone", () =>
-    Effect.runPromise(
+  it.effect(
+    "offers the opt-out without performing it, so a scanner cannot unsubscribe anyone",
+    () =>
       Effect.gen(function* () {
         const store = storeWith();
 
@@ -106,62 +107,58 @@ describe("GET /unsubscribe/:token", () => {
         expect(response.headers.get("content-type")).toContain("text/html");
         expect(store.written).toHaveLength(0);
       }),
-    ));
+  );
 
-  it("posts the confirmation to the current URL rather than interpolating the token", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const body = yield* bodyOf(yield* responding(storeWith(), "GET"));
+  it.effect("posts the confirmation to the current URL rather than interpolating the token", () =>
+    Effect.gen(function* () {
+      const body = yield* bodyOf(yield* responding(storeWith(), "GET"));
 
-        expect(body).toContain('method="post"');
-        expect(body).not.toContain("action=");
-        expect(body).not.toContain(validToken);
-      }),
-    ));
+      expect(body).toContain('method="post"');
+      expect(body).not.toContain("action=");
+      expect(body).not.toContain(validToken);
+    }),
+  );
 
-  it("refuses a forged signature rather than offering a button that cannot work", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const store = storeWith();
-        const forged = mintToken(Redacted.make("a different key"), email);
+  it.effect("refuses a forged signature rather than offering a button that cannot work", () =>
+    Effect.gen(function* () {
+      const store = storeWith();
+      const forged = mintToken(Redacted.make("a different key"), email);
 
-        const response = yield* responding(store, "GET", forged);
+      const response = yield* responding(store, "GET", forged);
 
-        expect(response.status).toBe(404);
-        expect(store.written).toHaveLength(0);
-      }),
-    ));
+      expect(response.status).toBe(404);
+      expect(store.written).toHaveLength(0);
+    }),
+  );
 
   // Verifying is not acting. The scanner-safety property is that a GET reaches
   // no storage at all, which a 200 alone would not show.
-  it("reads no storage even for a token it accepts", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const store = storeWith();
+  it.effect("reads no storage even for a token it accepts", () =>
+    Effect.gen(function* () {
+      const store = storeWith();
 
-        expect((yield* responding(store, "GET")).status).toBe(200);
-        expect(store.written).toHaveLength(0);
-      }),
-    ));
+      expect((yield* responding(store, "GET")).status).toBe(200);
+      expect(store.written).toHaveLength(0);
+    }),
+  );
 });
 
 describe("POST /unsubscribe/:token", () => {
-  it("writes the opt-out keyed by the mailbox the token named", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const store = storeWith();
+  it.effect("writes the opt-out keyed by the mailbox the token named", () =>
+    Effect.gen(function* () {
+      const store = storeWith();
 
-        const response = yield* responding(store, "POST");
+      const response = yield* responding(store, "POST");
 
-        expect(response.status).toBe(200);
-        expect(store.written).toHaveLength(1);
-        expect(store.written[0]?.email).toBe("sam@example.com");
-      }),
-    ));
+      expect(response.status).toBe(200);
+      expect(store.written).toHaveLength(1);
+      expect(store.written[0]?.email).toBe("sam@example.com");
+    }),
+  );
 
   // The body is never read, which is how both of RFC 8058's permitted encodings
   // are accepted without parsing either.
-  it.each([
+  it.effect.each([
     [
       "the form encoding RFC 8058 specifies",
       {
@@ -170,84 +167,77 @@ describe("POST /unsubscribe/:token", () => {
       },
     ],
     ["an empty body and no content type", { body: "" }],
-  ])("honours a one-click POST sent with %s", (_description, init) =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const store = storeWith();
+  ] as const)("honours a one-click POST sent with %s", ([_description, init]) =>
+    Effect.gen(function* () {
+      const store = storeWith();
 
-        const response = yield* responding(store, "POST", validToken, init);
+      const response = yield* responding(store, "POST", validToken, init);
 
-        expect(response.status).toBe(200);
-        expect(store.written).toHaveLength(1);
-      }),
-    ),
+      expect(response.status).toBe(200);
+      expect(store.written).toHaveLength(1);
+    }),
   );
 
-  it("accepts the longest link the address schema can produce", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const store = storeWith();
-        const token = tokenFor(longestAddress);
+  it.effect("accepts the longest link the address schema can produce", () =>
+    Effect.gen(function* () {
+      const store = storeWith();
+      const token = tokenFor(longestAddress);
 
-        expect(token).toHaveLength(maxTokenLength);
+      expect(token).toHaveLength(maxTokenLength);
 
-        const response = yield* responding(store, "POST", token);
+      const response = yield* responding(store, "POST", token);
 
-        expect(response.status).toBe(200);
-        expect(store.written[0]?.email).toBe(longestAddress);
-      }),
-    ));
+      expect(response.status).toBe(200);
+      expect(store.written[0]?.email).toBe(longestAddress);
+    }),
+  );
 
-  it("still confirms a repeated opt-out without writing again", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const store = storeWith();
+  it.effect("still confirms a repeated opt-out without writing again", () =>
+    Effect.gen(function* () {
+      const store = storeWith();
 
-        expect((yield* responding(store, "POST")).status).toBe(200);
-        expect((yield* responding(store, "POST")).status).toBe(200);
-        expect(store.written).toHaveLength(1);
-      }),
-    ));
+      expect((yield* responding(store, "POST")).status).toBe(200);
+      expect((yield* responding(store, "POST")).status).toBe(200);
+      expect(store.written).toHaveLength(1);
+    }),
+  );
 
-  it("refuses a forged signature with a 404 and writes nothing", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const store = storeWith();
-        const forged = mintToken(Redacted.make("a different key"), email);
+  it.effect("refuses a forged signature with a 404 and writes nothing", () =>
+    Effect.gen(function* () {
+      const store = storeWith();
+      const forged = mintToken(Redacted.make("a different key"), email);
 
-        expect((yield* responding(store, "POST", forged)).status).toBe(404);
-        expect(store.written).toHaveLength(0);
-      }),
-    ));
+      expect((yield* responding(store, "POST", forged)).status).toBe(404);
+      expect(store.written).toHaveLength(0);
+    }),
+  );
 
-  it("never claims an opt-out the write did not durably record", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const response = yield* responding(storeWith(true), "POST");
+  it.effect("never claims an opt-out the write did not durably record", () =>
+    Effect.gen(function* () {
+      const response = yield* responding(storeWith(true), "POST");
 
-        expect(response.status).toBe(500);
-        expect(yield* bodyOf(response)).not.toContain("unsubscribed");
-      }),
-    ));
+      expect(response.status).toBe(500);
+      expect(yield* bodyOf(response)).not.toContain("unsubscribed");
+    }),
+  );
 });
 
 describe("application lifetime", () => {
   // One built router answers many invocations, so a refusal must not be able to follow a success
   // or the other way round.
-  it("judges each consecutive request on its own token", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const store = storeWith();
-        const forged = mintToken(Redacted.make("a different key"), email);
+  it.effect("judges each consecutive request on its own token", () =>
+    Effect.gen(function* () {
+      const store = storeWith();
+      const forged = mintToken(Redacted.make("a different key"), email);
 
-        expect((yield* responding(store, "POST")).status).toBe(200);
-        expect((yield* responding(store, "POST", forged)).status).toBe(404);
-        expect((yield* responding(store, "POST", tokenFor("other@example.com"))).status).toBe(200);
+      expect((yield* responding(store, "POST")).status).toBe(200);
+      expect((yield* responding(store, "POST", forged)).status).toBe(404);
+      expect((yield* responding(store, "POST", tokenFor("other@example.com"))).status).toBe(200);
 
-        expect(store.written.map((entry) => entry.email)).toStrictEqual([
-          "sam@example.com",
-          "other@example.com",
-        ]);
-      }),
-    ));
+      expect(store.written.map((entry) => entry.email)).toStrictEqual([
+        "sam@example.com",
+        "other@example.com",
+      ]);
+    }),
+  );
 });

@@ -1,7 +1,7 @@
 import { NodeServices } from "@effect/platform-node";
+import { describe, expect, it } from "@effect/vitest";
 import type * as Schemas from "@emailer/api/Schemas";
 import { Effect, Layer } from "effect";
-import { describe, expect, it } from "vitest";
 
 import * as Contacts from "./Contacts.ts";
 import { AudienceStore } from "../storage/Audience.ts";
@@ -18,26 +18,25 @@ const answering = (operations: Partial<AudienceOperations>) =>
   );
 
 describe("create", () => {
-  it("carries bounded attributes through to the stored contact", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const written: Array<Schemas.Contact> = [];
+  it.effect("carries bounded attributes through to the stored contact", () =>
+    Effect.gen(function* () {
+      const written: Array<Schemas.Contact> = [];
 
-        const created = yield* Contacts.create({ email, attributes: { plan: "pro" } }).pipe(
-          Effect.provide(
-            answering({
-              createContact: (contact) =>
-                Effect.sync(() => {
-                  written.push(contact);
+      const created = yield* Contacts.create({ email, attributes: { plan: "pro" } }).pipe(
+        Effect.provide(
+          answering({
+            createContact: (contact) =>
+              Effect.sync(() => {
+                written.push(contact);
 
-                  return undefined;
-                }),
-            }),
-          ),
-        );
+                return undefined;
+              }),
+          }),
+        ),
+      );
 
-        expect(created.attributes).toStrictEqual({ plan: "pro" });
-        expect(written[0]?.attributes).toStrictEqual({ plan: "pro" });
-      }),
-    ));
+      expect(created.attributes).toStrictEqual({ plan: "pro" });
+      expect(written[0]?.attributes).toStrictEqual({ plan: "pro" });
+    }),
+  );
 });
