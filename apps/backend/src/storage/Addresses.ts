@@ -13,7 +13,6 @@ import {
   withOptional,
 } from "./Items.ts";
 
-import type { FeedbackKind } from "./Feedback.ts";
 import type { BatchPrimitives, TransactionPrimitives, WritePrimitives } from "./Primitives.ts";
 
 const suppressionKey = (email: string) => ({
@@ -35,7 +34,7 @@ const transientWindow = { occurrences: 3, days: 30 } as const;
 
 export interface AddressSuppression {
   readonly email: string;
-  readonly reason: FeedbackKind;
+  readonly reason: Schemas.SuppressionReason;
   readonly messageId: string;
   readonly feedbackId: string;
   readonly bounceSubType?: string | undefined;
@@ -49,8 +48,6 @@ export interface AddressUnsubscribe {
   readonly unsubscribedAt: string;
 }
 
-export type AddressStatus = "mailable" | "unsubscribed" | "suppressed" | "bouncing";
-
 const StoredUnsubscribe = Schema.Struct({
   v: StoredVersionAttribute,
   unsubscribedAt: attributeOf(Schemas.Timestamp),
@@ -58,7 +55,7 @@ const StoredUnsubscribe = Schema.Struct({
 
 const StoredSuppression = Schema.Struct({
   v: StoredVersionAttribute,
-  reason: attributeOf(Schema.Literals(["bounce", "complaint"])),
+  reason: attributeOf(Schemas.SuppressionReason),
   suppressedAt: attributeOf(Schemas.Timestamp),
   bounceSubType: Schema.optionalKey(attributeOf(Schema.String)),
   complaintFeedbackType: Schema.optionalKey(attributeOf(Schema.String)),
@@ -75,14 +72,6 @@ const decodeStoredUnsubscribe = Schema.decodeUnknownEffect(StoredUnsubscribe);
 const decodeStoredSuppression = Schema.decodeUnknownEffect(StoredSuppression);
 
 const decodeStoredTransient = Schema.decodeUnknownEffect(StoredTransient);
-
-const attributeString = (value: dynamodb.AttributeValue | undefined): string | undefined =>
-  value !== undefined && "S" in value ? value.S : undefined;
-
-const hasKey = (
-  item: dynamodb.AttributeMap,
-  key: { readonly pk: { readonly S: string }; readonly sk: { readonly S: string } },
-) => attributeString(item["pk"]) === key.pk.S && attributeString(item["sk"]) === key.sk.S;
 
 const inTransientWindow = (occurrence: string, now: number): boolean => {
   const separator = occurrence.indexOf("#");
@@ -157,21 +146,6 @@ export const unsubscribeWrites = (primitives: WritePrimitives) => {
 export const addressReads = (primitives: BatchPrimitives) => {
   const { readItems } = primitives;
 
-  const loadAddressItems = (operationId: string, email: string) =>
-    Effect.gen(function* () {
-      const items = yield* readItems(operationId, [
-        unsubscribeKey(email),
-        suppressionKey(email),
-        transientKey(email),
-      ]);
-
-      return {
-        unsubscribe: items.find((item) => hasKey(item, unsubscribeKey(email))),
-        suppression: items.find((item) => hasKey(item, suppressionKey(email))),
-        transient: items.find((item) => hasKey(item, transientKey(email))),
-      };
-    });
-
   const bouncingStatus = (transient: dynamodb.AttributeMap | undefined, operationId: string) =>
     Effect.gen(function* () {
       if (transient === undefined) {
@@ -193,29 +167,40 @@ export const addressReads = (primitives: BatchPrimitives) => {
         : ("mailable" as const);
     });
 
+  /**
+   * One mailbox's three rows, told apart by sort key, and the status they give. The status reads an
+   * unsubscribe or suppression row by its presence alone: the send path's check never decodes one,
+   * so a corrupt row still keeps its recipient from being mailed.
+   */
+  const loadAddressItems = (operationId: string, email: string) =>
+    Effect.gen(function* () {
+      const items = yield* readItems(operationId, [
+        unsubscribeKey(email),
+        suppressionKey(email),
+        transientKey(email),
+      ]);
+
+      const bySortKey = new Map(items.map((item) => [item.sk?.S, item] as const));
+      const unsubscribe = bySortKey.get("UNSUBSCRIBE");
+      const suppression = bySortKey.get("SUPPRESSION");
+      const transient = bySortKey.get("TRANSIENT");
+
+      const status =
+        unsubscribe !== undefined
+          ? ("unsubscribed" as const)
+          : suppression !== undefined
+            ? ("suppressed" as const)
+            : yield* bouncingStatus(transient, operationId);
+
+      return { unsubscribe, suppression, transient, status };
+    });
+
   const addressStatus = Effect.fn("Storage.addressStatus")(function* (email: string) {
-    const rows = yield* loadAddressItems("addressStatus", email);
-
-    if (rows.unsubscribe !== undefined) {
-      return "unsubscribed" as const;
-    }
-
-    if (rows.suppression !== undefined) {
-      return "suppressed" as const;
-    }
-
-    return yield* bouncingStatus(rows.transient, "addressStatus");
+    return (yield* loadAddressItems("addressStatus", email)).status;
   });
 
   const addressRecord = Effect.fn("Storage.addressRecord")(function* (email: string) {
     const rows = yield* loadAddressItems("addressRecord", email);
-
-    const status: AddressStatus =
-      rows.unsubscribe !== undefined
-        ? "unsubscribed"
-        : rows.suppression !== undefined
-          ? "suppressed"
-          : yield* bouncingStatus(rows.transient, "addressRecord");
 
     const unsubscribe =
       rows.unsubscribe === undefined
@@ -238,7 +223,7 @@ export const addressReads = (primitives: BatchPrimitives) => {
             Effect.mapError(corrupt("addressRecord")),
           )).occurrences?.SS ?? []);
 
-    const record = { email, status, transientBounces, accountSuppression: null };
+    const record = { email, status: rows.status, transientBounces, accountSuppression: null };
 
     const unsubscribed =
       unsubscribe === undefined

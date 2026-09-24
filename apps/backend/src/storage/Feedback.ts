@@ -18,7 +18,7 @@ import { dataTable } from "./Table.ts";
 import type { TableOperations } from "./Items.ts";
 import type { TransactionPrimitives, TransactionTokens } from "./Primitives.ts";
 
-export type FeedbackKind = "bounce" | "complaint";
+export type FeedbackKind = Schemas.SuppressionReason;
 
 export type FeedbackOutcome = "suppressed" | "recorded";
 

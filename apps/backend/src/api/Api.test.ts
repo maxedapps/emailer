@@ -34,7 +34,7 @@ import { unusedAudience, unusedCampaigns } from "../storage/Testing.ts";
 
 import type { SendPurpose } from "../sending/Mailer.ts";
 import type { SendAllowance } from "../sending/SendGuard.ts";
-import type { AddressStatus } from "../storage/Addresses.ts";
+import type { AddressStatus } from "@emailer/api/Schemas";
 
 const token = "3o4Xr7nJ1pQvKzB2sYtLwMhGfDcEaN9uRiVoP0qTzXY";
 

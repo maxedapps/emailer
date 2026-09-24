@@ -40,7 +40,9 @@ export const AccountSuppressionLive = Layer.effect(AccountSuppression)(
   ),
 );
 
-const accountReason = (reason: sesv2.SuppressionListReason): "bounce" | "complaint" | undefined => {
+const accountReason = (
+  reason: sesv2.SuppressionListReason,
+): Schemas.SuppressionReason | undefined => {
   switch (reason) {
     case "BOUNCE":
       return "bounce";

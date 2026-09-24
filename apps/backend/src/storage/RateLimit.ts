@@ -48,19 +48,10 @@ export const rateLimitOperations = (primitives: Pick<UpdatePrimitives, "updateIf
   const { updateIf } = primitives;
 
   const fromAttributes = (now: number, attributes: dynamodb.AttributeMap | undefined) =>
-    Effect.gen(function* () {
-      if (attributes === undefined) {
-        return yield* storeFailure(
-          new Error("fixedWindow response did not include count and expiresAt"),
-        );
-      }
-
-      const window = yield* decodeWindow(attributes).pipe(
-        Effect.mapError((cause) => storeFailure(cause)),
-      );
-
-      return [window.count, window.expiresAt - now] as const;
-    });
+    decodeWindow(attributes).pipe(
+      Effect.mapError(storeFailure),
+      Effect.map((window) => [window.count, window.expiresAt - now] as const),
+    );
 
   const claim = (request: AWS.DynamoDB.UpdateItemRequest) =>
     updateIf("fixedWindow", request).pipe(Effect.mapError(storeFailure));

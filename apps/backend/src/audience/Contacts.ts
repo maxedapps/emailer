@@ -3,6 +3,7 @@ import { Effect, Option } from "effect";
 
 import { newIdentifier, nowIso } from "../Identifiers.ts";
 import { AudienceStore } from "../storage/Audience.ts";
+import { contactOf } from "../storage/Contacts.ts";
 
 export const create = Effect.fn("Contacts.create")(function* (
   payload: Schemas.CreateContactPayload,
@@ -11,11 +12,7 @@ export const create = Effect.fn("Contacts.create")(function* (
   const id = yield* newIdentifier;
   const createdAt = yield* nowIso;
 
-  const identified = { id, email: payload.email, createdAt };
-  const named = payload.name === undefined ? identified : { ...identified, name: payload.name };
-
-  const contact: Schemas.Contact =
-    payload.attributes === undefined ? named : { ...named, attributes: payload.attributes };
+  const contact = contactOf(id, payload.email, payload.name, payload.attributes, createdAt);
 
   const outcome = yield* storage.createContact(contact);
 

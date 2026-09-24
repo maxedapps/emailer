@@ -16,7 +16,7 @@ import {
 
 import type { Table } from "./Testing.ts";
 
-import type { ImportCandidate } from "./Membership.ts";
+import type * as Schemas from "@emailer/api/Schemas";
 import type { ScriptedReplies } from "./Testing.ts";
 
 const operationsFor = (table: Table) => membershipOperations(primitivesFor(table));
@@ -605,7 +605,7 @@ describe("importContacts", () => {
 
   const otherContactId = "0195f0a0-1111-4222-8333-44444444c002";
 
-  const candidate = (id: string, email: string) => ({ id, email });
+  const candidate = (id: string, email: string) => ({ id, email, createdAt });
 
   const reservationFor = (email: string, holder: string) => ({
     pk: { S: `EMAIL#${email}` },
@@ -614,7 +614,7 @@ describe("importContacts", () => {
     contactId: { S: holder },
   });
 
-  const importInto = (replies: ScriptedReplies, candidates: ReadonlyArray<ImportCandidate>) => {
+  const importInto = (replies: ScriptedReplies, candidates: ReadonlyArray<Schemas.Contact>) => {
     const table = scriptedTable(replies);
 
     return {

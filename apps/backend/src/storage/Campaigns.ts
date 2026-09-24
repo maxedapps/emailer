@@ -1,6 +1,15 @@
 import * as Schemas from "@emailer/api/Schemas";
 import * as AWS from "alchemy/AWS";
-import { Context, Crypto, Effect, Layer, Option, Schema, SchemaTransformation } from "effect";
+import {
+  Context,
+  Crypto,
+  Effect,
+  Layer,
+  Option,
+  Schema,
+  SchemaTransformation,
+  Struct,
+} from "effect";
 
 import { corrupt } from "./Errors.ts";
 import {
@@ -47,9 +56,7 @@ const StoredCampaign = Schema.Struct({
   listId: attributeOf(Schemas.EntityId),
   subject: attributeOf(Schemas.CampaignSubject),
   createdAt: attributeOf(Schemas.Timestamp),
-  state: attributeOf(
-    Schema.Literals(["draft", "scheduled", "queued", "sending", "paused", "completed"]),
-  ),
+  state: attributeOf(Schemas.CampaignState),
   queuedAt: Schema.optionalKey(attributeOf(Schemas.Timestamp)),
   startedAt: Schema.optionalKey(attributeOf(Schemas.Timestamp)),
   finishedAt: Schema.optionalKey(attributeOf(Schemas.Timestamp)),
@@ -84,8 +91,6 @@ const decodeStoredCampaignBody = Schema.decodeUnknownEffect(StoredCampaignBody);
 
 const decodeSubmission = Schema.decodeUnknownEffect(Schemas.CampaignSubmission);
 
-export type SkipReason = "unsubscribed" | "suppressed" | "bouncing";
-
 export type RecipientSettlement =
   | { readonly state: "accepted"; readonly messageId: string }
   | { readonly state: "rejected"; readonly rejectionCode: Schemas.RejectionCode }
@@ -104,7 +109,7 @@ interface CampaignRun {
 }
 
 export interface CampaignControl {
-  readonly state: (typeof StoredCampaign.Type)["state"];
+  readonly state: Schemas.CampaignState;
   readonly runToken: string | undefined;
   readonly startedAt: string | undefined;
   readonly pausedReason: Schemas.PauseReason | undefined;
@@ -240,10 +245,7 @@ const campaignReads = (primitives: ReadPrimitives) => {
       Effect.mapError(corrupt("getCampaignBody")),
     );
 
-    const body: Schemas.CampaignBody =
-      stored.html === undefined ? { text: stored.text } : { text: stored.text, html: stored.html };
-
-    return body;
+    return Struct.omit(stored, ["v"]);
   });
 
   const getCampaign = Effect.fn("Storage.getCampaign")(function* (campaignId: string) {
@@ -317,15 +319,13 @@ export const campaignOperations = (
     cursor: string | undefined,
   ) {
     const page = yield* readEntityPage("listCampaigns", campaignKind, campaignKey, limit, cursor);
-    const campaigns: Array<Schemas.CampaignSummary> = [];
 
-    for (const item of page.items) {
-      const stored = yield* decodeStoredCampaign(item).pipe(
+    const campaigns = yield* Effect.forEach(page.items, (item) =>
+      decodeStoredCampaign(item).pipe(
+        Effect.flatMap(summaryOf),
         Effect.mapError(corrupt("listCampaigns")),
-      );
-
-      campaigns.push(yield* summaryOf(stored).pipe(Effect.mapError(corrupt("listCampaigns"))));
-    }
+      ),
+    );
 
     return { items: campaigns, nextCursor: page.nextCursor } satisfies StoredPage<
       Schemas.CampaignSummary,
@@ -504,10 +504,6 @@ export const campaignOperations = (
       return "stale" as const;
     }
 
-    if (outcome.attributes === undefined) {
-      return yield* corrupt("beginRun")(outcome);
-    }
-
     const stored = yield* decodeStoredCampaign(outcome.attributes).pipe(
       Effect.mapError(corrupt("beginRun")),
     );
@@ -581,7 +577,7 @@ export const campaignOperations = (
     runToken: string,
     contactId: string,
     recipient: string,
-    reason: SkipReason,
+    reason: Schemas.SkipReason,
     now: string,
   ) {
     const outcome = yield* runTransaction("skipRecipient", {

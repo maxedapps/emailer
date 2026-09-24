@@ -1,13 +1,12 @@
 import type * as dynamodb from "@distilled.cloud/aws/dynamodb";
 import type * as AWS from "alchemy/AWS";
 import * as Schemas from "@emailer/api/Schemas";
-import { Effect, Option, Schema } from "effect";
+import { Effect, Option, Schema, Struct } from "effect";
 
 import { corrupt, unavailable } from "./Errors.ts";
 import {
   contactItem,
   contactKey,
-  contactOf,
   decodeContactItem,
   reservationItem,
   reservationKey,
@@ -78,21 +77,8 @@ export type AddMemberOutcome = "added" | "already-member" | "contact-missing" | 
 
 export type RemoveMemberOutcome = "removed" | "list-missing";
 
-export interface ImportCandidate {
-  readonly id: string;
-  readonly email: string;
-  readonly name?: string | undefined;
-  readonly attributes?: Schemas.ContactAttributes | undefined;
-}
-
-interface ImportedContact {
-  readonly email: string;
-  readonly contactId: string;
-  readonly member: boolean;
-}
-
 type ImportContactsOutcome =
-  | { readonly outcome: "imported"; readonly contacts: ReadonlyArray<ImportedContact> }
+  | { readonly outcome: "imported"; readonly contacts: Schemas.ImportContactsResult["contacts"] }
   | { readonly outcome: "list-missing" };
 
 export const membershipOperations = (
@@ -238,10 +224,7 @@ export const membershipOperations = (
     for (const item of yield* readItems("listMembers", memberIds.map(contactKey))) {
       const stored = yield* decodeContactItem(item).pipe(Effect.mapError(corrupt("listMembers")));
 
-      byId.set(
-        stored.id,
-        contactOf(stored.id, stored.email, stored.name, stored.attributes, stored.createdAt),
-      );
+      byId.set(stored.id, Struct.omit(stored, ["v"]));
     }
 
     const contacts = memberIds.flatMap((memberId): Array<Schemas.Contact> => {
@@ -447,7 +430,7 @@ export const membershipOperations = (
    */
   const importContacts = Effect.fn("Storage.importContacts")(function* (
     listId: string,
-    candidates: ReadonlyArray<ImportCandidate>,
+    candidates: ReadonlyArray<Schemas.Contact>,
     addedAt: string,
   ) {
     const reserved = yield* readItems(
@@ -469,7 +452,7 @@ export const membershipOperations = (
       listExists(listId),
     ];
 
-    const imported: Array<ImportedContact> = [];
+    const imported: Array<Schemas.ImportContactsResult["contacts"][number]> = [];
 
     for (const candidate of candidates) {
       const held = holders.get(Schemas.mailboxKey(candidate.email));
@@ -480,15 +463,7 @@ export const membershipOperations = (
           {
             Put: {
               Table: tableLogicalId,
-              Item: contactItem(
-                contactOf(
-                  contactId,
-                  candidate.email,
-                  candidate.name,
-                  candidate.attributes,
-                  addedAt,
-                ),
-              ),
+              Item: contactItem(candidate),
               ConditionExpression: "attribute_not_exists(pk)",
             },
           },

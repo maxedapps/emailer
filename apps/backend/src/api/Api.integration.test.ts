@@ -1148,7 +1148,7 @@ describe("the deployed delete cascade", () => {
         for (let batch = 0; batch < 3; batch += 1) {
           const candidates = yield* Effect.forEach(Array.from({ length: 20 }), () =>
             Effect.gen(function* () {
-              return { id: yield* newIdentifier, email: yield* uniqueAddress };
+              return { id: yield* newIdentifier, email: yield* uniqueAddress, createdAt: now };
             }),
           );
 
@@ -1232,7 +1232,11 @@ describe("the deployed delete cascade", () => {
         const interleaved = yield* liveStorage(settings.tableName, moveBeforeCommit);
 
         const attempt = yield* Effect.result(
-          interleaved.importContacts(listId, [{ id: original, email: address }], yield* nowIso),
+          interleaved.importContacts(
+            listId,
+            [{ id: original, email: address, createdAt: now }],
+            yield* nowIso,
+          ),
         );
 
         // Slot 0 checks the list, slot 1 checks the contact exists, slot 2 is the holder check.

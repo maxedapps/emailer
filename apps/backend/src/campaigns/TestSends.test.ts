@@ -14,7 +14,7 @@ import { unusedAudience } from "../storage/Testing.ts";
 import type { SendPurpose, SubmissionOutcome } from "../sending/Mailer.ts";
 import type { MessageContent } from "../sending/Message.ts";
 import type { SendAllowance } from "../sending/SendGuard.ts";
-import type { AddressStatus } from "../storage/Addresses.ts";
+import type { AddressStatus } from "@emailer/api/Schemas";
 
 const campaignId = "0195f0a0-1111-4222-8333-4444444ca409";
 

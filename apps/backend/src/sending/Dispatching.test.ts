@@ -25,12 +25,11 @@ import { AudienceStore } from "../storage/Audience.ts";
 import { CampaignStore } from "../storage/Campaigns.ts";
 import { unusedAudience, unusedCampaigns } from "../storage/Testing.ts";
 
-import type { PauseReason } from "@emailer/api/Schemas";
+import type { AddressStatus, PauseReason, SkipReason } from "@emailer/api/Schemas";
 import type { SendPurpose, SubmissionOutcome } from "./Mailer.ts";
 import type { MessageContent } from "./Message.ts";
 import type { SendAllowance } from "./SendGuard.ts";
-import type { AddressStatus } from "../storage/Addresses.ts";
-import type { RecipientSettlement, SkipReason } from "../storage/Campaigns.ts";
+import type { RecipientSettlement } from "../storage/Campaigns.ts";
 
 const campaignId = "0195f0a0-1111-4222-8333-4444444ca409";
 

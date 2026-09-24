@@ -3,6 +3,7 @@ import { Effect, Option } from "effect";
 
 import { newIdentifier, nowIso } from "../Identifiers.ts";
 import { AudienceStore } from "../storage/Audience.ts";
+import { contactOf } from "../storage/Contacts.ts";
 
 export const create = Effect.fn("Lists.create")(function* (payload: Schemas.CreateListPayload) {
   const storage = yield* AudienceStore;
@@ -125,12 +126,9 @@ export const importContacts = Effect.fn("Lists.importContacts")(function* (
   const addedAt = yield* nowIso;
 
   const candidates = yield* Effect.forEach(payload.contacts, (entry) =>
-    Effect.map(newIdentifier, (id) => ({
-      id,
-      email: entry.email,
-      name: entry.name,
-      attributes: entry.attributes,
-    })),
+    Effect.map(newIdentifier, (id) =>
+      contactOf(id, entry.email, entry.name, entry.attributes, addedAt),
+    ),
   );
 
   const result = yield* storage.importContacts(listId, candidates, addedAt);

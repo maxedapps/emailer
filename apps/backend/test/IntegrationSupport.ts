@@ -39,7 +39,7 @@ import { transactionPrimitives, writePrimitives } from "../src/storage/Primitive
 import { unsubscribeSigningKey } from "../src/consent/Unsubscribe.ts";
 import { encodeDispatchMessage } from "../src/sending/Dispatch.ts";
 
-import type { AddressStatus } from "../src/storage/Addresses.ts";
+import type { AddressStatus } from "@emailer/api/Schemas";
 import type { TableOperations } from "../src/storage/Items.ts";
 
 const simulatorHost = "@simulator.amazonses.com";

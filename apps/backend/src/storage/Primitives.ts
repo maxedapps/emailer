@@ -1,6 +1,6 @@
 import type * as dynamodb from "@distilled.cloud/aws/dynamodb";
 import type * as AWS from "alchemy/AWS";
-import { Data, Duration, Effect, Option, Predicate, Random, Schedule, Schema } from "effect";
+import { Data, Duration, Effect, Predicate, Random, Schedule, Schema } from "effect";
 
 import { corrupt, StorageFailure, unavailable } from "./Errors.ts";
 import { attributeOf, listingIndexName, operationTimeout, str, tableLogicalId } from "./Items.ts";
@@ -73,10 +73,10 @@ const decodeIndexEntry = Schema.decodeUnknownEffect(IndexEntry);
  */
 const nextCursorOf = (operationId: string, lastEvaluatedKey: dynamodb.AttributeMap | undefined) =>
   lastEvaluatedKey === undefined
-    ? Effect.succeedNone
+    ? Effect.undefined
     : decodeIndexEntry(lastEvaluatedKey).pipe(
         Effect.mapError(corrupt(operationId)),
-        Effect.map((entry) => Option.some(entry.gsi1sk)),
+        Effect.map((entry) => entry.gsi1sk),
       );
 
 const responseItems = (response: dynamodb.BatchGetItemOutput): Array<dynamodb.AttributeMap> => {
@@ -337,7 +337,7 @@ const pagePrimitives = (primitives: QueryPrimitives & BatchPrimitives) => {
 
       return {
         items,
-        nextCursor: Option.getOrUndefined(yield* nextCursorOf(operationId, page.LastEvaluatedKey)),
+        nextCursor: yield* nextCursorOf(operationId, page.LastEvaluatedKey),
       } satisfies StoredPage<dynamodb.AttributeMap, string>;
     });
 

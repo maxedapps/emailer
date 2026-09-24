@@ -1,5 +1,5 @@
 import * as Schemas from "@emailer/api/Schemas";
-import { Effect, Option, Schema } from "effect";
+import { Effect, Option, Schema, Struct } from "effect";
 
 import { corrupt } from "./Errors.ts";
 import {
@@ -58,11 +58,7 @@ export const listOperations = (
 
     const stored = yield* decodeStoredList(response.Item).pipe(Effect.mapError(corrupt("getList")));
 
-    return Option.some<Schemas.ContactList>({
-      id: stored.id,
-      name: stored.name,
-      createdAt: stored.createdAt,
-    });
+    return Option.some<Schemas.ContactList>(Struct.omit(stored, ["v"]));
   });
 
   const listLists = Effect.fn("Storage.listLists")(function* (
@@ -70,13 +66,13 @@ export const listOperations = (
     cursor: string | undefined,
   ) {
     const page = yield* readEntityPage("listLists", listKind, listKey, limit, cursor);
-    const lists: Array<Schemas.ContactList> = [];
 
-    for (const item of page.items) {
-      const stored = yield* decodeStoredList(item).pipe(Effect.mapError(corrupt("listLists")));
-
-      lists.push({ id: stored.id, name: stored.name, createdAt: stored.createdAt });
-    }
+    const lists = yield* Effect.forEach(page.items, (item) =>
+      decodeStoredList(item).pipe(
+        Effect.mapError(corrupt("listLists")),
+        Effect.map((stored) => Struct.omit(stored, ["v"])),
+      ),
+    );
 
     return { items: lists, nextCursor: page.nextCursor } satisfies StoredPage<
       Schemas.ContactList,

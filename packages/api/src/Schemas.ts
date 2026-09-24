@@ -210,6 +210,17 @@ export const PauseReason = Schema.Literals([
 
 export type PauseReason = typeof PauseReason.Type;
 
+export const CampaignState = Schema.Literals([
+  "draft",
+  "scheduled",
+  "queued",
+  "sending",
+  "paused",
+  "completed",
+]);
+
+export type CampaignState = typeof CampaignState.Type;
+
 export const CampaignSubmission = Schema.Union([
   Schema.Struct({ state: Schema.Literal("draft") }),
   Schema.Struct({
@@ -271,7 +282,22 @@ export const Campaign = Schema.Struct({ ...CampaignSummary.fields, ...CampaignBo
 
 export type Campaign = typeof Campaign.Type;
 
-const AddressStatus = Schema.Literals(["mailable", "unsubscribed", "suppressed", "bouncing"]);
+export const AddressStatus = Schema.Literals([
+  "mailable",
+  "unsubscribed",
+  "suppressed",
+  "bouncing",
+]);
+
+export type AddressStatus = typeof AddressStatus.Type;
+
+export const SkipReason = AddressStatus.pick(["unsubscribed", "suppressed", "bouncing"]);
+
+export type SkipReason = typeof SkipReason.Type;
+
+export const SuppressionReason = Schema.Literals(["bounce", "complaint"]);
+
+export type SuppressionReason = typeof SuppressionReason.Type;
 
 /**
  * Account-list presence is always reported: `null` means SES has no entry. Local unsubscribe and
@@ -283,7 +309,7 @@ export const AddressRecord = Schema.Struct({
   unsubscribedAt: Schema.optionalKey(Timestamp),
   suppression: Schema.optionalKey(
     Schema.Struct({
-      reason: Schema.Literals(["bounce", "complaint"]),
+      reason: SuppressionReason,
       suppressedAt: Timestamp,
       bounceSubType: Schema.optionalKey(Schema.String),
       complaintFeedbackType: Schema.optionalKey(Schema.String),
@@ -293,7 +319,7 @@ export const AddressRecord = Schema.Struct({
   transientBounces: Schema.Array(Schema.String),
   accountSuppression: Schema.NullOr(
     Schema.Struct({
-      reason: Schema.Literals(["bounce", "complaint"]),
+      reason: SuppressionReason,
       lastUpdateTime: Timestamp,
     }),
   ),
@@ -471,7 +497,7 @@ export const TestSendOutcome = Schema.Union([
   Schema.Struct({
     email: NormalizedEmailAddress,
     outcome: Schema.Literal("skipped"),
-    reason: Schema.Literals(["unsubscribed", "suppressed", "bouncing"]),
+    reason: SkipReason,
   }),
   Schema.Struct({
     email: NormalizedEmailAddress,
@@ -526,9 +552,7 @@ export class SendAtNotInFuture extends Schema.TaggedError<SendAtNotInFuture>()(
  */
 export class CampaignStateConflict extends Schema.TaggedError<CampaignStateConflict>()(
   "CampaignStateConflict",
-  {
-    state: Schema.Literals(["draft", "scheduled", "queued", "sending", "paused", "completed"]),
-  },
+  { state: CampaignState },
   { httpApiStatus: 409 },
 ) {}
 
@@ -542,7 +566,7 @@ export class TestAudienceTooLarge extends Schema.TaggedError<TestAudienceTooLarg
 /** The account-wide guard refuses every send right now: a reputation halt or a spent daily budget. */
 export class SendingPaused extends Schema.TaggedError<SendingPaused>()(
   "SendingPaused",
-  { reason: Schema.Literals(["reputation", "daily-quota"]) },
+  { reason: PauseReason.pick(["reputation", "daily-quota"]) },
   { httpApiStatus: 503 },
 ) {}
 

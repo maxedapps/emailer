@@ -1,6 +1,6 @@
 import type * as dynamodb from "@distilled.cloud/aws/dynamodb";
 import * as Schemas from "@emailer/api/Schemas";
-import { Effect, Option, Schema, SchemaTransformation } from "effect";
+import { Effect, Option, Schema, SchemaTransformation, Struct } from "effect";
 
 import { corrupt, unavailable } from "./Errors.ts";
 import { unsubscribeKey } from "./Addresses.ts";
@@ -216,7 +216,10 @@ export const contactOperations = (
   });
 
   const readContact = (operationId: string, item: dynamodb.AttributeMap) =>
-    decodeContactItem(item).pipe(Effect.mapError(corrupt(operationId)));
+    decodeContactItem(item).pipe(
+      Effect.mapError(corrupt(operationId)),
+      Effect.map((stored): Schemas.Contact => Struct.omit(stored, ["v"])),
+    );
 
   const getContact = Effect.fn("Storage.getContact")(function* (contactId: string) {
     const response = yield* readItem("getContact", contactKey(contactId));
@@ -225,11 +228,7 @@ export const contactOperations = (
       return Option.none<Schemas.Contact>();
     }
 
-    const stored = yield* readContact("getContact", response.Item);
-
-    return Option.some(
-      contactOf(stored.id, stored.email, stored.name, stored.attributes, stored.createdAt),
-    );
+    return Option.some(yield* readContact("getContact", response.Item));
   });
 
   const listContacts = Effect.fn("Storage.listContacts")(function* (
@@ -237,15 +236,7 @@ export const contactOperations = (
     cursor: string | undefined,
   ) {
     const page = yield* readEntityPage("listContacts", contactKind, contactKey, limit, cursor);
-    const contacts: Array<Schemas.Contact> = [];
-
-    for (const item of page.items) {
-      const stored = yield* readContact("listContacts", item);
-
-      contacts.push(
-        contactOf(stored.id, stored.email, stored.name, stored.attributes, stored.createdAt),
-      );
-    }
+    const contacts = yield* Effect.forEach(page.items, (item) => readContact("listContacts", item));
 
     return { items: contacts, nextCursor: page.nextCursor } satisfies StoredPage<
       Schemas.Contact,

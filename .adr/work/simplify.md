@@ -25,7 +25,7 @@ Each task is one commit, in this order, with `pnpm check` green after each.
 
 - Decoded items become domain values with `Struct.omit(stored, ["v"])`. Pages hydrate with `Effect.forEach`. `contactOf` stays only where a contact is built.
 - Import candidates are `Schemas.Contact` values; `ImportCandidate` and `ImportedContact` go. `Contacts.create` builds its contact the same way.
-- `runTransaction` reads Distilled's typed `CancellationReasons` instead of re-decoding them.
+- ~~`runTransaction` reads Distilled's typed `CancellationReasons` instead of re-decoding them.~~ Dropped: the installed package's compiled declarations (`lib/services/dynamodb.d.ts`) type `CancellationReasons` as `any`, so the existing decode from `unknown` is the only lint-clean read.
 - Small cleanups:
   - drop the `undefined` checks that come before a struct decode, in `beginRun` and the rate-limit store;
   - look address rows up by sort key and derive the status once;
