@@ -3,7 +3,7 @@ import * as Schemas from "@emailer/api/Schemas";
 import { Effect } from "effect";
 
 import { unsubscribeLink } from "../consent/Unsubscribe.ts";
-import { Mailer } from "../sending/Mailer.ts";
+import { accepted, failureOutcomes, Mailer } from "../sending/Mailer.ts";
 import { SendGuard } from "../sending/SendGuard.ts";
 import { AudienceStore } from "../storage/Audience.ts";
 import { CampaignStore } from "../storage/Campaigns.ts";
@@ -68,7 +68,9 @@ export const sendTest = Effect.fn("TestSends.sendTest")(function* (
 
     yield* Effect.sleep(delay);
 
-    const outcome = yield* mailer.send(email, content, unsubscribeUrl, { kind: "test" });
+    const outcome = yield* mailer
+      .send(email, content, unsubscribeUrl, { kind: "test" })
+      .pipe(Effect.map(accepted), Effect.catchTags(failureOutcomes));
 
     outcomes.push({ email, ...outcome });
   }

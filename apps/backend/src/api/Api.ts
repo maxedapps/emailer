@@ -14,8 +14,8 @@ import * as Campaigns from "../campaigns/Campaigns.ts";
 import { PreviewFunction, previewLink, previewSecret } from "../campaigns/Previews.ts";
 import { sendTest } from "../campaigns/TestSends.ts";
 import { UnsubscribeFunction, unsubscribeSecret } from "../consent/Unsubscribe.ts";
-import { lambdaBasics } from "../Lambda.ts";
-import { ReportingLive, respondingToFailures } from "../Reporting.ts";
+import { FunctionServicesLive, lambdaBasics } from "../Lambda.ts";
+import { respondingToFailures } from "../Reporting.ts";
 import { CampaignWakeLive } from "../sending/Dispatch.ts";
 import { MailerLive } from "../sending/Mailer.ts";
 import { SendGuardLive } from "../sending/SendGuard.ts";
@@ -164,7 +164,7 @@ const ApiLive = Layer.mergeAll(
   CampaignScheduleLive,
   MailerLive,
   SendGuardLive,
-  ReportingLive,
+  FunctionServicesLive,
 ).pipe(Layer.provideMerge(NodeCrypto.layer));
 
 export default class ApiFunction extends AWS.Lambda.Function<ApiFunction>()(

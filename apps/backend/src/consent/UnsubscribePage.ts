@@ -2,8 +2,8 @@ import { Duration, Effect, Layer, Option } from "effect";
 import { HttpRouter, HttpServerResponse } from "effect/unstable/http";
 
 import { nowIso } from "../Identifiers.ts";
-import { lambdaBasics } from "../Lambda.ts";
-import { ReportingLive, respondingToFailures } from "../Reporting.ts";
+import { FunctionServicesLive, lambdaBasics } from "../Lambda.ts";
+import { respondingToFailures } from "../Reporting.ts";
 import { UnsubscribeStore, UnsubscribeStoreLive } from "../storage/Unsubscribe.ts";
 import {
   UnsubscribeFunction,
@@ -145,7 +145,7 @@ const unsubscribeProps = Effect.gen(function* () {
 export default UnsubscribeFunction.make(
   unsubscribeProps,
   Effect.gen(function* () {
-    const services = yield* Layer.build(Layer.mergeAll(UnsubscribeStoreLive, ReportingLive));
+    const services = yield* Layer.build(Layer.mergeAll(UnsubscribeStoreLive, FunctionServicesLive));
 
     return { fetch: Effect.provideContext(yield* makeUnsubscribeHandler, services) };
   }),

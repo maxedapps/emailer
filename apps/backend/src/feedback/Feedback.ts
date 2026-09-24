@@ -5,8 +5,8 @@ import { Config, Duration, Effect, Layer, Schema, Stream } from "effect";
 
 import { classify, decodeEmailEvent } from "./FeedbackClassification.ts";
 import { nowIso } from "../Identifiers.ts";
-import { lambdaBasics } from "../Lambda.ts";
-import { failingInvocation, ReportingLive } from "../Reporting.ts";
+import { FunctionServicesLive, lambdaBasics } from "../Lambda.ts";
+import { failingInvocation } from "../Reporting.ts";
 import { configurationSet } from "../sending/Mailer.ts";
 import { FeedbackStore, FeedbackStoreLive } from "../storage/Feedback.ts";
 
@@ -252,7 +252,7 @@ const feedbackProps = Effect.gen(function* () {
 });
 
 /** Every service an event uses, bound once per instance. */
-const FeedbackLive = Layer.mergeAll(FeedbackStoreLive, ReportingLive).pipe(
+const FeedbackLive = Layer.mergeAll(FeedbackStoreLive, FunctionServicesLive).pipe(
   Layer.provideMerge(NodeCrypto.layer),
 );
 

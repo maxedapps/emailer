@@ -1,16 +1,6 @@
 import * as dynamodb from "@distilled.cloud/aws/dynamodb";
 import type * as AWS from "alchemy/AWS";
-import {
-  Data,
-  Duration,
-  Effect,
-  ErrorReporter,
-  Predicate,
-  Random,
-  Result,
-  Schedule,
-  Schema,
-} from "effect";
+import { Data, Duration, Effect, ErrorReporter, Predicate, Result, Schedule, Schema } from "effect";
 
 import { StorageUnavailable } from "@emailer/api/Errors";
 
@@ -230,17 +220,19 @@ const queryPrimitives = (operations: Pick<TableOperations, "query">) => {
 
 export type QueryPrimitives = ReturnType<typeof queryPrimitives>;
 
-const batchAttempts = 4;
-
-const batchRetryDelay = Duration.millis(100);
+/**
+ * Unprocessed keys are retried three times, backing off jittered from 100 ms: they mean the table is
+ * shedding load, and retrying in lockstep with every other caller is how that gets worse.
+ */
+const unprocessedBackoff = Schedule.exponential("100 millis").pipe(
+  Schedule.jittered,
+  Schedule.upTo({ times: 3 }),
+);
 
 const batchDeadline = Duration.seconds(5);
 
-/** Why a hydration failed after its last attempt: the items that did arrive and the keys that did not. */
-class IncompleteBatch extends Data.TaggedError("IncompleteBatch")<{
-  readonly items: ReadonlyArray<dynamodb.AttributeMap>;
-  readonly pending: dynamodb.KeysAndAttributes;
-}> {}
+/** A batch read left keys unprocessed. */
+class UnprocessedKeys extends Data.TaggedError("UnprocessedKeys") {}
 
 const batchPrimitives = (operations: Pick<TableOperations, "batchGetItem">) => {
   /**
@@ -252,8 +244,8 @@ const batchPrimitives = (operations: Pick<TableOperations, "batchGetItem">) => {
    *
    * AWS may leave keys unprocessed on any response, including the retry of a retry — it is
    * throttling, not a one-off. Returning whatever arrived would answer a partial hydration as if it
-   * were a complete one, and a listing would quietly drop members. So the pending block is retried
-   * until it is empty, and if the attempts run out the operation fails. A short read is never a
+   * were a complete one, and a listing would quietly drop members. So the pending keys are retried
+   * until none are left, and if the retries run out the operation fails. A short read is never a
    * successful read.
    */
   const readItems = (operationId: string, keys: ReadonlyArray<dynamodb.AttributeMap>) =>
@@ -269,7 +261,7 @@ const batchPrimitives = (operations: Pick<TableOperations, "batchGetItem">) => {
       const items: Array<dynamodb.AttributeMap> = [];
       let requested: dynamodb.KeysAndAttributes = { Keys: [...keys], ConsistentRead: true };
 
-      for (let attempt = 1; attempt <= batchAttempts; attempt += 1) {
+      const round = Effect.gen(function* () {
         const response = yield* operations
           .batchGetItem({ RequestItems: { [tableLogicalId]: requested } })
           .pipe(Effect.mapError(storageUnavailable(operationId)));
@@ -278,24 +270,23 @@ const batchPrimitives = (operations: Pick<TableOperations, "batchGetItem">) => {
 
         const pending = Object.values(response.UnprocessedKeys ?? {})[0];
 
-        if (pending === undefined || pending.Keys.length === 0) {
-          return items;
+        if (pending !== undefined && pending.Keys.length > 0) {
+          // Re-keyed to the logical ID the binding expects, preserving ConsistentRead.
+          requested = { Keys: pending.Keys, ConsistentRead: true };
+
+          return yield* new UnprocessedKeys();
         }
 
-        // Re-keyed to the logical ID the binding expects, preserving ConsistentRead.
-        requested = { Keys: pending.Keys, ConsistentRead: true };
+        return items;
+      });
 
-        if (attempt < batchAttempts) {
-          // Jittered exponential backoff: unprocessed keys mean the table is shedding load, and
-          // retrying in lockstep with every other caller is how that gets worse.
-          const jitter = yield* Random.next;
-
-          yield* Effect.sleep(Duration.times(batchRetryDelay, 2 ** (attempt - 1) * (1 + jitter)));
-        }
-      }
-
-      return yield* storageUnavailable(operationId)(
-        new IncompleteBatch({ items, pending: requested }),
+      return yield* Effect.retry(round, {
+        schedule: unprocessedBackoff,
+        while: Predicate.isTagged("UnprocessedKeys"),
+      }).pipe(
+        Effect.catchTag("UnprocessedKeys", (short) =>
+          Effect.fail(storageUnavailable(operationId)(short)),
+        ),
       );
     }).pipe(
       // One deadline for the whole operation, retries included, rather than one per attempt: the

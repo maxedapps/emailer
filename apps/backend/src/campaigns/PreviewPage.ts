@@ -1,8 +1,8 @@
 import { Clock, Duration, Effect, Layer, Option } from "effect";
 import { HttpRouter, HttpServerResponse } from "effect/unstable/http";
 
-import { lambdaBasics } from "../Lambda.ts";
-import { ReportingLive, respondingToFailures } from "../Reporting.ts";
+import { FunctionServicesLive, lambdaBasics } from "../Lambda.ts";
+import { respondingToFailures } from "../Reporting.ts";
 import { compose, escapeHtml, senderSettings } from "../sending/Message.ts";
 import { CampaignReader, CampaignReaderLive } from "../storage/Campaigns.ts";
 import {
@@ -176,7 +176,7 @@ export default PreviewFunction.make(
   Effect.gen(function* () {
     const settings = yield* senderSettings;
     // GetItem on the one table, and nothing else.
-    const services = yield* Layer.build(Layer.mergeAll(CampaignReaderLive, ReportingLive));
+    const services = yield* Layer.build(Layer.mergeAll(CampaignReaderLive, FunctionServicesLive));
 
     return { fetch: Effect.provideContext(yield* makePreviewHandler(settings), services) };
   }),

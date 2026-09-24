@@ -306,7 +306,13 @@ Status: Done except the rehearsal, which is T10's. As built:
 
 ### T7 — Send errors and retries as Schedules
 
-Status: Not started
+Status: Done. As built:
+
+- **The retry budget is not `upTo({ duration })`.** `upTo` compares only the elapsed time at a step with the limit, so the step at about 3.8 s still granted a further 4 s wait, and a persistent 500 ended as `TimeoutError`; the transport test showed it. The policy instead stops when the next delay would end past 4 s: `Schedule.while(({ elapsed, duration }) => elapsed + duration <= 4 s)`. That also gives up at once on a server retry-after hint longer than the budget.
+- The retry layer and `ReportingLive` are one `FunctionServicesLive` in `Lambda.ts`, which every function provides to each invocation; the client reads the policy from the calling fiber, so no binding layer needs it.
+- The mailer logs why an outcome is unknown where it classifies it, as before; `SubmissionUncertain` carries only the reason.
+- `accepted` and the `failureOutcomes` handlers map a send to what a send row or a test report records; the dispatcher and test sends share them. A handler object rather than one function, because `Effect.catchTags` cannot be typed over a generic error channel, and the dispatcher's attempt can also fail with the pacing slot's `StorageUnavailable`.
+- The throttle schedule reads the error with `Predicate.isTagged`, so it needs no input type.
 
 - **`Mailer.send`** answers the message ID, or fails with one of:
   - `SendRejected{code}`;

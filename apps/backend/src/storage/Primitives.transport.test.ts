@@ -3,16 +3,19 @@ import { fromCredentials } from "alchemy/AWS/Credentials";
 import { Data, Effect, Layer, Result } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 import { describe, expect, it } from "@effect/vitest";
+import { StorageUnavailable } from "@emailer/api/Errors";
 
+import { AwsRetryLive } from "../Lambda.ts";
 import { str } from "./Items.ts";
 import { transactionPrimitives, updatePrimitives } from "./Primitives.ts";
 import { tokensFor } from "./Testing.ts";
 
 /**
  * The scripted table sits above the AWS client, so it cannot see the client's own retries. These
- * tests run the two conditional primitives over a stubbed transport and prove the property the
- * store relies on: a transient answer is retried by the client with the identical request, token
- * included, while a conflict cancellation is retried by the store as a new call with a new token.
+ * tests run the two conditional primitives over a stubbed transport, under the retry policy every
+ * function provides, and prove the properties the store relies on: a transient answer is retried by
+ * the client with the identical request, token included, and within the operation timeout; a
+ * conflict cancellation is retried by the store as a new call with a new token.
  */
 
 interface Transport {
@@ -86,12 +89,15 @@ const credentials = fromCredentials(
 );
 
 const bindings = (transport: Transport) =>
-  Layer.provide(
-    Layer.merge(AWS.DynamoDB.UpdateItemHttp, AWS.DynamoDB.TransactWriteItemsHttp),
-    Layer.merge(
-      credentials,
-      Layer.provide(FetchHttpClient.layer, Layer.succeed(FetchHttpClient.Fetch, transport.fetch)),
+  Layer.merge(
+    Layer.provide(
+      Layer.merge(AWS.DynamoDB.UpdateItemHttp, AWS.DynamoDB.TransactWriteItemsHttp),
+      Layer.merge(
+        credentials,
+        Layer.provide(FetchHttpClient.layer, Layer.succeed(FetchHttpClient.Fetch, transport.fetch)),
+      ),
     ),
+    AwsRetryLive,
   );
 
 interface ResourceStandIn {
@@ -204,6 +210,23 @@ describe("conditional primitives over the real client", () => {
       expect(transport.attempts).toHaveLength(2);
       expect(transport.attempts[1]).toBe(transport.attempts[0]);
     }),
+  );
+
+  // Live: the client backs off on the real clock. Without the retry budget, its default policy
+  // would still be retrying when the operation timeout fired, and the store would report a timeout.
+  it.live(
+    "gives up on a persistent server error inside the timeout, with the service's error",
+    () =>
+      Effect.gen(function* () {
+        const transport = transportReplying([serverError]);
+
+        const outcome = yield* runUpdateIf(transport);
+
+        expect(Result.isFailure(outcome) && outcome.failure).toStrictEqual(
+          new StorageUnavailable({ operation: "checkpoint", failure: "InternalServerError" }),
+        );
+        expect(transport.attempts.length).toBeGreaterThan(1);
+      }),
   );
 
   it.live("transact lets the client retry a server error with the same token", () =>

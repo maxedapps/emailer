@@ -6,7 +6,13 @@ import { Effect, Layer, Logger, Redacted, Schema } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 
 import { mintToken } from "../consent/Unsubscribe.ts";
-import { makeSend } from "./Mailer.ts";
+import {
+  makeSend,
+  SendingSuspended,
+  SendRejected,
+  SendThrottled,
+  SubmissionUncertain,
+} from "./Mailer.ts";
 import { footerFor, htmlFooterFor } from "./Message.ts";
 
 import type { SendPurpose } from "./Mailer.ts";
@@ -163,12 +169,7 @@ describe("makeSend", () => {
       Effect.gen(function* () {
         const transport = transportReplying(() => awsJson(200, acceptedBody));
 
-        const outcome = yield* sending(transport);
-
-        expect(outcome).toStrictEqual({
-          outcome: "accepted",
-          messageId: "0100018f-deadbeef",
-        });
+        expect(yield* sending(transport)).toBe("0100018f-deadbeef");
 
         expect(transport.sent).toHaveLength(1);
         expect(transport.sent[0]?.method).toBe("POST");
@@ -186,12 +187,7 @@ describe("makeSend", () => {
         const transport = transportReplying(() => awsJson(200, acceptedBody));
         const html = "<html><body><p>Hallo</p></body></html>";
 
-        const outcome = yield* sending(transport, { ...content, html });
-
-        expect(outcome).toStrictEqual({
-          outcome: "accepted",
-          messageId: "0100018f-deadbeef",
-        });
+        expect(yield* sending(transport, { ...content, html })).toBe("0100018f-deadbeef");
         expect(yield* parseJson(transport.sent[0]?.body ?? "{}")).toStrictEqual(
           campaignRequest({
             Text: textPart,
@@ -232,31 +228,35 @@ describe("makeSend", () => {
       answer: "a retryable throttle",
       status: 429,
       errorType: "TooManyRequestsException",
-      rejectionCode: "rate-limited",
-    },
-    {
-      answer: "a definitive refusal",
-      status: 400,
-      errorType: "MessageRejected",
-      rejectionCode: "message-rejected",
+      error: new SendThrottled(),
     },
     {
       answer: "the common throttling error",
       status: 400,
       errorType: "ThrottlingException",
-      rejectionCode: "rate-limited",
+      error: new SendThrottled(),
+    },
+    {
+      answer: "a definitive refusal",
+      status: 400,
+      errorType: "MessageRejected",
+      error: new SendRejected({ code: "message-rejected" }),
+    },
+    {
+      answer: "paused sending",
+      status: 400,
+      errorType: "SendingPausedException",
+      error: new SendingSuspended(),
     },
   ] as const)(
-    "treats $answer ($errorType) as a $rejectionCode rejection after exactly one attempt",
-    ({ status, errorType, rejectionCode }) =>
+    "fails $answer ($errorType) as $error._tag after exactly one attempt",
+    ({ status, errorType, error }) =>
       Effect.gen(function* () {
         const transport = transportReplying(() =>
           awsJson(status, JSON.stringify({ message: "refused" }), errorType),
         );
 
-        const outcome = yield* sending(transport);
-
-        expect(outcome).toStrictEqual({ outcome: "rejected", rejectionCode });
+        expect(yield* Effect.flip(sending(transport))).toStrictEqual(error);
         expect(transport.sent).toHaveLength(1);
       }),
   );
@@ -288,9 +288,9 @@ describe("makeSend", () => {
         awsJson(500, JSON.stringify({ message: "we broke" })),
       );
 
-      const outcome = yield* sending(transport);
-
-      expect(outcome).toStrictEqual({ outcome: "uncertain" });
+      expect(yield* Effect.flip(sending(transport))).toStrictEqual(
+        new SubmissionUncertain({ reason: "transport" }),
+      );
     }),
   );
 
@@ -301,9 +301,12 @@ describe("makeSend", () => {
       });
 
       const messages: Array<unknown> = [];
-      const outcome = yield* sending(transport).pipe(Effect.provide(loggedTo(messages)));
 
-      expect(outcome).toStrictEqual({ outcome: "uncertain" });
+      const failure = yield* Effect.flip(sending(transport)).pipe(
+        Effect.provide(loggedTo(messages)),
+      );
+
+      expect(failure).toStrictEqual(new SubmissionUncertain({ reason: "transport" }));
       expect(messages).toMatchObject([["submission uncertain", { reason: "transport" }]]);
       expect(transport.sent).toHaveLength(1);
     }),
@@ -314,9 +317,12 @@ describe("makeSend", () => {
       const transport = transportReplying(() => awsJson(200, JSON.stringify({})));
 
       const messages: Array<unknown> = [];
-      const outcome = yield* sending(transport).pipe(Effect.provide(loggedTo(messages)));
 
-      expect(outcome).toStrictEqual({ outcome: "uncertain" });
+      const failure = yield* Effect.flip(sending(transport)).pipe(
+        Effect.provide(loggedTo(messages)),
+      );
+
+      expect(failure).toStrictEqual(new SubmissionUncertain({ reason: "malformed-response" }));
       expect(messages).toMatchObject([["submission uncertain", { reason: "malformed-response" }]]);
     }),
   );
@@ -334,11 +340,11 @@ describe("makeSend", () => {
 
         const messages: Array<unknown> = [];
 
-        const outcome = yield* sending(transport, content, purpose).pipe(
+        const failure = yield* Effect.flip(sending(transport, content, purpose)).pipe(
           Effect.provide(loggedTo(messages)),
         );
 
-        expect(outcome).toStrictEqual({ outcome: "uncertain" });
+        expect(failure).toStrictEqual(new SubmissionUncertain({ reason: "transport" }));
         // Exact, so neither the address, the body nor a credential can be in it.
         expect(messages).toStrictEqual([
           ["submission uncertain", { ...purpose, reason: "transport", cause: "InternalError" }],
