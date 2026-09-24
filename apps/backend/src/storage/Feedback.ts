@@ -3,17 +3,9 @@ import * as AWS from "alchemy/AWS";
 import { CampaignNotFound } from "@emailer/api/Errors";
 import { Context, Crypto, Data, Effect, Layer, Schema } from "effect";
 
-import { suppressionWrites, transientKey } from "./Addresses.ts";
-import {
-  campaignKey,
-  itemWriter,
-  num,
-  recordVersion,
-  str,
-  strSet,
-  tableLogicalId,
-} from "./Items.ts";
-import { transactionPrimitives, writePrimitives } from "./Primitives.ts";
+import { addressKey, stamped, suppressionWrites } from "./Addresses.ts";
+import { campaignKey, itemWriter, num, str, strSet, tableLogicalId } from "./Items.ts";
+import { transactionPrimitives, updatePrimitives } from "./Primitives.ts";
 import { dataTable } from "./Table.ts";
 
 import type { TableOperations } from "./Items.ts";
@@ -91,24 +83,28 @@ const addCampaignCounter = (campaignId: string, counter: "bounced" | "complained
   refused: () => new CampaignNotFound(),
 });
 
-const addTransientOccurrence = (row: FeedbackRow) => ({
-  Update: {
-    Table: tableLogicalId,
-    Key: transientKey(row.recipient),
-    UpdateExpression: "SET v = if_not_exists(v, :v) ADD occurrences :set",
-    ExpressionAttributeValues: {
-      ":v": num(recordVersion),
-      ":set": strSet([`${row.receivedAt}#${row.feedbackId}`]),
+const addTransientBounce = (row: FeedbackRow) => {
+  const stamp = stamped(row.recipient);
+
+  return {
+    Update: {
+      Table: tableLogicalId,
+      Key: addressKey(row.recipient),
+      UpdateExpression: `SET ${stamp.expression} ADD transientBounces :bounce`,
+      ExpressionAttributeValues: {
+        ...stamp.values,
+        ":bounce": strSet([`${row.receivedAt}#${row.feedbackId}`]),
+      },
     },
-  },
-});
+  };
+};
 
 const sideEffectOf = (row: FeedbackRow, write: FeedbackWrite) => {
   switch (write.effect) {
     case "count":
       return [addCampaignCounter(row.campaignId, write.counter)];
     case "transient":
-      return [addTransientOccurrence(row)];
+      return [addTransientBounce(row)];
     case "history":
       return [];
   }
@@ -140,13 +136,13 @@ export const feedbackWrites = (primitives: TransactionPrimitives) => {
  * `TransactWriteItems`.
  */
 const feedbackStoreOperations = (
-  operations: Pick<TableOperations, "putItem" | "transactWriteItems">,
+  operations: Pick<TableOperations, "updateItem" | "transactWriteItems">,
   tokens: TransactionTokens,
 ) => {
-  const writes = writePrimitives(operations);
+  const updates = updatePrimitives(operations);
   const transactions = transactionPrimitives(operations, tokens);
 
-  return { ...suppressionWrites(writes), ...feedbackWrites(transactions) } as const;
+  return { ...suppressionWrites(updates), ...feedbackWrites(transactions) } as const;
 };
 
 export type FeedbackStoreOperations = ReturnType<typeof feedbackStoreOperations>;
@@ -163,7 +159,7 @@ export const FeedbackStoreLive = Layer.effect(FeedbackStore)(
     return FeedbackStore.of(
       feedbackStoreOperations(
         {
-          putItem: yield* AWS.DynamoDB.PutItem(table),
+          updateItem: yield* AWS.DynamoDB.UpdateItem(table),
           transactWriteItems: yield* AWS.DynamoDB.TransactWriteItems(table),
         },
         Effect.orDie(crypto.randomUUIDv4),
@@ -171,5 +167,5 @@ export const FeedbackStoreLive = Layer.effect(FeedbackStore)(
     );
   }),
 ).pipe(
-  Layer.provide(Layer.mergeAll(AWS.DynamoDB.PutItemHttp, AWS.DynamoDB.TransactWriteItemsHttp)),
+  Layer.provide(Layer.mergeAll(AWS.DynamoDB.UpdateItemHttp, AWS.DynamoDB.TransactWriteItemsHttp)),
 );

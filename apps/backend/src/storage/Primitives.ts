@@ -145,12 +145,11 @@ export const readPrimitives = (operations: Pick<TableOperations, "getItem">) => 
 
 export type ReadPrimitives = ReturnType<typeof readPrimitives>;
 
-export const writePrimitives = (operations: Pick<TableOperations, "putItem">) => {
+const writePrimitives = (operations: Pick<TableOperations, "putItem">) => {
   /**
-   * A put that leaves an existing item alone. The key is either a mailbox the caller wants
-   * recorded exactly once, or a freshly generated identifier that nobody else can hold, so an
-   * item already there is the outcome the caller wanted — including when it is this same request
-   * landing a second time after a lost response.
+   * A put that leaves an existing item alone. The key is a freshly generated identifier that
+   * nobody else can hold, so an item already there is this same request landing a second time
+   * after a lost response.
    */
   const recordOnce = (operationId: string, item: AWS.DynamoDB.PutItemRequest["Item"]) =>
     operations.putItem({ Item: item, ConditionExpression: "attribute_not_exists(pk)" }).pipe(
@@ -195,7 +194,17 @@ export const updatePrimitives = (operations: Pick<TableOperations, "updateItem">
       return Result.isSuccess(outcome) ? outcome.success : yield* refused(outcome.failure);
     });
 
-  return { updateIf } as const;
+  /** An unconditional single-item update, safe to repeat because it sets what it sets. */
+  const update = (operation: string, request: AWS.DynamoDB.UpdateItemRequest) =>
+    operations
+      .updateItem(request)
+      .pipe(
+        Effect.timeout(operationTimeout),
+        Effect.mapError(storageUnavailable(operation)),
+        Effect.asVoid,
+      );
+
+  return { update, updateIf } as const;
 };
 
 export type UpdatePrimitives = ReturnType<typeof updatePrimitives>;

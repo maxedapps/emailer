@@ -127,6 +127,22 @@ export const defectOf = <A, E, R>(operation: Effect.Effect<A, E, R>) =>
     return defect.success;
   });
 
+/** A fixture item with the optional string attributes that are set. */
+export const withOptional = (
+  item: dynamodb.AttributeMap,
+  attributes: ReadonlyArray<readonly [name: string, value: string | undefined]>,
+): dynamodb.AttributeMap => {
+  const merged: dynamodb.AttributeMap = { ...item };
+
+  for (const [name, value] of attributes) {
+    if (value !== undefined) {
+      merged[name] = { S: value };
+    }
+  }
+
+  return merged;
+};
+
 export const contactId = "0195f0a0-1111-4222-8333-44444444c001";
 
 export const listId = "0195f0a0-1111-4222-8333-44444444109e";

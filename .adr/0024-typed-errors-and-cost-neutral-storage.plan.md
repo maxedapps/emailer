@@ -242,7 +242,14 @@ Status: Done. As built:
 
 ### T6 — One address item per mailbox
 
-Status: Not started
+Status: Done except the rehearsal, which is T10's. As built:
+
+- Every write is an update that may be the item's first, so each also sets `v = if_not_exists(v, :v), email = if_not_exists(email, :email)`. `updatePrimitives` gains an unconditional `update` for the unsubscribe and suppression writes.
+- The status reads `unsubscribedAt` and `suppression` by presence only; `addresses status` still decodes them in full.
+- `unsuppress` clears only what the item holds; a mailbox with no item is left without one.
+- The migration reads each old row strictly, so a row it cannot read stops it before anything is merged. `--verify` re-reads every address item strongly consistently, and `--delete-old` verifies again in the same run before it deletes.
+- After the deploy, the second pass waits until invocations of the old code have drained: at least the dispatcher's five-minute timeout.
+- The now unused `writePrimitives` export goes; `recordOnce` stays for campaign and list creation.
 
 - **The item:** `ADDRESS#<mailbox>` / `ADDRESS` holds `{ v, email, unsubscribedAt?, suppression?, transientBounces? }`. `suppression` is the current suppression fields as a string map; `transientBounces` is a string set.
 - **Writes:**
@@ -271,7 +278,7 @@ Status: Not started
   - The merge logic is a pure function with its own unit test.
   - The order at a switch closes the gap between old and new code:
     1. run it before the deploy;
-    2. run it again right after;
+    2. run it again once the old code's invocations have drained;
     3. `--verify`;
     4. `--delete-old`.
 

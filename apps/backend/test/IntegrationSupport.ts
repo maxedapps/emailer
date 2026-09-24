@@ -40,7 +40,7 @@ import { suppressionWrites, unsubscribeWrites } from "../src/storage/Addresses.t
 import { audienceOperations } from "../src/storage/Audience.ts";
 import { campaignStoreOperations } from "../src/storage/Campaigns.ts";
 import { feedbackWrites } from "../src/storage/Feedback.ts";
-import { transactionPrimitives, writePrimitives } from "../src/storage/Primitives.ts";
+import { transactionPrimitives, updatePrimitives } from "../src/storage/Primitives.ts";
 import { unsubscribeSigningKey } from "../src/consent/Unsubscribe.ts";
 import { feedbackRedelivery } from "../src/feedback/Feedback.ts";
 import { encodeDispatchMessage } from "../src/sending/Dispatch.ts";
@@ -246,14 +246,14 @@ export const liveStorage = (
     // operations over it rather than any one function's service.
     const crypto = yield* Crypto.Crypto;
     const tokens = Effect.orDie(crypto.randomUUIDv4);
-    const writes = writePrimitives(operations);
+    const updates = updatePrimitives(operations);
     const transactions = transactionPrimitives(operations, tokens);
 
     return {
       ...audienceOperations(operations, tokens),
       ...campaignStoreOperations(operations, tokens),
-      ...suppressionWrites(writes),
-      ...unsubscribeWrites(writes),
+      ...suppressionWrites(updates),
+      ...unsubscribeWrites(updates),
       ...feedbackWrites(transactions),
     } as const;
   });

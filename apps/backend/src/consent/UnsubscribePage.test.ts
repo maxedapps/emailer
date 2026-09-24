@@ -32,7 +32,7 @@ const storeWith = (writeFails = false): Store => {
   const keys = new Set<string>();
 
   // The whole capability, stated in full, because the whole capability is one
-  // conditional write. There is no contact read to stub out and none to reach:
+  // update. There is no contact read to stub out and none to reach:
   // the service the handler is given does not have one.
   const operations: UnsubscribeStore["Service"] = {
     unsubscribeAddress: (unsubscribe) =>
@@ -46,8 +46,8 @@ const storeWith = (writeFails = false): Store => {
         : Effect.sync(() => {
             const key = Schemas.mailboxKey(unsubscribe.email);
 
-            // recordOnce makes a repeated opt-out a real no-op, so the double
-            // keeps only the first record for an address.
+            // The store keeps the first opt-out an address item holds, so the
+            // double keeps only the first record for an address.
             if (!keys.has(key)) {
               keys.add(key);
               written.push(unsubscribe);
