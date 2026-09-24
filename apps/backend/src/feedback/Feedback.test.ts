@@ -373,7 +373,7 @@ describe("events the handler must not act on", () => {
         const world = yield* run({
           eventType: "Delivery",
           mail: { messageId, tags: { ...tags() } },
-          delivery: { recipients: ["max@example.com"] },
+          delivery: { recipients: ["sam@example.com"] },
         });
 
         expect(world.suppressions.size).toBe(0);

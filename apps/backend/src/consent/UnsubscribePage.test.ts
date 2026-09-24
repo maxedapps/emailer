@@ -14,7 +14,7 @@ const baseUrl = "http://unsubscribe.test";
 
 const signingKey = "6f1c2d3e4a5b60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9";
 
-const email = "Max@Example.com";
+const email = "Sam@Example.com";
 
 const longestAddress = `${"a".repeat(Schemas.maxEmailLength - "@example.com".length)}@example.com`;
 
@@ -155,7 +155,7 @@ describe("POST /unsubscribe/:token", () => {
 
         expect(response.status).toBe(200);
         expect(store.written).toHaveLength(1);
-        expect(store.written[0]?.email).toBe("max@example.com");
+        expect(store.written[0]?.email).toBe("sam@example.com");
       }),
     ));
 
@@ -245,7 +245,7 @@ describe("application lifetime", () => {
         expect((yield* responding(store, "POST", tokenFor("other@example.com"))).status).toBe(200);
 
         expect(store.written.map((entry) => entry.email)).toStrictEqual([
-          "max@example.com",
+          "sam@example.com",
           "other@example.com",
         ]);
       }),

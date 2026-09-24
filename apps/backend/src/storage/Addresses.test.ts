@@ -317,7 +317,7 @@ describe("addressStatus", () => {
       Effect.gen(function* () {
         const table = scriptedTable({});
 
-        expect(yield* operationsFor(table).addressStatus("max@example.com")).toBe("mailable");
+        expect(yield* operationsFor(table).addressStatus("sam@example.com")).toBe("mailable");
       }),
     ));
 
@@ -326,7 +326,7 @@ describe("addressStatus", () => {
       Effect.gen(function* () {
         const table = scriptedTable({ batchGetItem: [Effect.fail(serverError)] });
 
-        const attempt = yield* Effect.result(operationsFor(table).addressStatus("max@example.com"));
+        const attempt = yield* Effect.result(operationsFor(table).addressStatus("sam@example.com"));
 
         expect(failureOf(attempt).reason).toBe("unavailable");
         expect(failureOf(attempt).operationId).toBe("addressStatus");

@@ -594,9 +594,13 @@ The public repository is anonymized. Before every commit that carries evidence (
 ```
 test -s "$LEAK_PATTERN" || { echo "leak pattern missing or empty" >&2; exit 1; }
 { git diff --name-only --diff-filter=d <slice-start>; git diff --name-only --cached --diff-filter=d; git ls-files --others --exclude-standard; } \
-  | sort -u | xargs -r grep -nIEf "$LEAK_PATTERN"
+  | sort -u | xargs -r grep -niIEf "$LEAK_PATTERN"
+git grep -liIEf "$LEAK_PATTERN" -- . ':!LICENSE'
 ```
 
+- **Case-insensitive:** the pattern is lowercase, so every grep takes `-i`. Without it, a capitalized brand or surname passed this check on 2026-09-23.
+- **Whole tree:** the diff check only sees new changes. The `git grep` line covers everything already committed. `LICENSE` is excluded because it names the copyright holder on purpose.
+- **Not only the pattern:** nothing in the repository names the operator, their company, its vendors or real infrastructure. Fixtures and examples use neutral names, such as the `Sam` persona and `Example News`.
 - **The pattern file:** `$LEAK_PATTERN` is a file outside the repository. It lists the private domains, the operator addresses, the account ID and the production Function URL hosts.
 - **Where it lives:** this planning session has it in its scratchpad (`leak-pattern.txt`). Before T1, copy it to a lasting path outside the repository.
 - **Why the guard:** an empty or missing file would match nothing and pass silently, so `test -s` refuses it.

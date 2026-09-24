@@ -11,3 +11,4 @@ We're using Alchemy (alchemy.run) and Effect (effect.website). Also see the ./wi
 - If you work with worktrees, you own that tree, and you must handle merging back as well as worktree cleanup!
 - Document key decisions and findings as "ADS"s (Architecture Decision Records) in an `.adr` folder (which is to be committed)
 - Test deployments are absolutely wanted - use `--stage test` with Alchemy => but keep those deployments ephemeral
+- The repository is public: never put details specific to the operator or their company (names, brands, vendors, domains, addresses, account or infrastructure identifiers) into code, tests, fixtures or docs - use neutral placeholders such as `example.com`

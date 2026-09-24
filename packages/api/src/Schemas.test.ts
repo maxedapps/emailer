@@ -48,7 +48,7 @@ describe("Timestamp", () => {
 
 describe("normalizeEmailAddress", () => {
   it("trims and lowercases only the domain", () => {
-    expect(Schemas.normalizeEmailAddress("  Max.S@EXAMPLE.COM  ")).toBe("Max.S@example.com");
+    expect(Schemas.normalizeEmailAddress("  Sam.R@EXAMPLE.COM  ")).toBe("Sam.R@example.com");
   });
 
   it("leaves a value without a mailbox separator alone apart from trimming", () => {
@@ -80,7 +80,7 @@ describe("ListedEmailAddress", () => {
   it("still rejects an address without a domain label", () =>
     Effect.runPromise(
       Effect.gen(function* () {
-        expect(yield* isRejected(decode("max@example"))).toBe(true);
+        expect(yield* isRejected(decode("sam@example"))).toBe(true);
       }),
     ));
 });
@@ -91,14 +91,14 @@ describe("EmailAddress", () => {
   it("normalizes a valid address while decoding", () =>
     Effect.runPromise(
       Effect.gen(function* () {
-        expect(yield* decode(" Max.S@Example.COM ")).toBe("Max.S@example.com");
+        expect(yield* decode(" Sam.R@Example.COM ")).toBe("Sam.R@example.com");
       }),
     ));
 
   it("rejects an address without a domain label", () =>
     Effect.runPromise(
       Effect.gen(function* () {
-        expect(yield* isRejected(decode("max@example"))).toBe(true);
+        expect(yield* isRejected(decode("sam@example"))).toBe(true);
       }),
     ));
 
@@ -121,7 +121,7 @@ describe("EmailAddress", () => {
   it("rejects embedded CR/LF that would forge a header", () =>
     Effect.runPromise(
       Effect.gen(function* () {
-        expect(yield* isRejected(decode("max@example.com\r\nBcc: other@example.com"))).toBe(true);
+        expect(yield* isRejected(decode("sam@example.com\r\nBcc: other@example.com"))).toBe(true);
       }),
     ));
 });
@@ -303,8 +303,8 @@ describe("CreateContactPayload", () => {
   it("accepts an optional name", () =>
     Effect.runPromise(
       Effect.gen(function* () {
-        expect(yield* decode({ email: "max@example.com" })).toStrictEqual({
-          email: "max@example.com",
+        expect(yield* decode({ email: "sam@example.com" })).toStrictEqual({
+          email: "sam@example.com",
         });
       }),
     ));
@@ -312,8 +312,8 @@ describe("CreateContactPayload", () => {
   it("drops unknown properties so they cannot become stored fields", () =>
     Effect.runPromise(
       Effect.gen(function* () {
-        expect(yield* decode({ email: "max@example.com", isAdmin: true })).toStrictEqual({
-          email: "max@example.com",
+        expect(yield* decode({ email: "sam@example.com", isAdmin: true })).toStrictEqual({
+          email: "sam@example.com",
         });
       }),
     ));
@@ -608,7 +608,7 @@ describe("CampaignFeedback", () => {
 describe("AddressRecord", () => {
   const decode = Schema.decodeUnknownEffect(Schemas.AddressRecord);
 
-  const email = "max@example.com";
+  const email = "sam@example.com";
   const at = "2026-09-11T10:00:00.000Z";
 
   const mailable = {
@@ -693,7 +693,7 @@ describe("RejectionCode", () => {
 
 describe("mailboxKey", () => {
   it("lowercases the whole address, local part included, so identity matches consent", () => {
-    expect(Schemas.mailboxKey("  Max.S@Example.COM  ")).toBe("max.s@example.com");
+    expect(Schemas.mailboxKey("  Sam.R@Example.COM  ")).toBe("sam.r@example.com");
   });
 });
 
@@ -826,7 +826,7 @@ describe("ImportContactsPayload", () => {
   it("rejects two entries that share one mailbox key", () =>
     Effect.runPromise(
       Effect.gen(function* () {
-        const attempt = decode({ contacts: [entry("Max@example.com"), entry("max@EXAMPLE.com")] });
+        const attempt = decode({ contacts: [entry("Sam@example.com"), entry("sam@EXAMPLE.com")] });
 
         expect(yield* isRejected(attempt)).toBe(true);
       }),
@@ -836,7 +836,7 @@ describe("ImportContactsPayload", () => {
     Effect.runPromise(
       Effect.gen(function* () {
         const contacts = Array.from({ length: Schemas.maxImportEntries }, (_, index) =>
-          entry(`max${index}@example.com`),
+          entry(`contact${index}@example.com`),
         );
 
         expect((yield* decode({ contacts })).contacts).toHaveLength(Schemas.maxImportEntries);
@@ -847,7 +847,7 @@ describe("ImportContactsPayload", () => {
     Effect.runPromise(
       Effect.gen(function* () {
         const contacts = Array.from({ length: Schemas.maxImportEntries + 1 }, (_, index) =>
-          entry(`max${index}@example.com`),
+          entry(`contact${index}@example.com`),
         );
 
         expect(yield* isRejected(decode({ contacts }))).toBe(true);

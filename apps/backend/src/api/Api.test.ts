@@ -42,7 +42,7 @@ const otherToken = "Zz9Yy8Xx7Ww6Vv5Uu4Tt3Ss2Rr1Qq0Pp_Oo-NnMmLlK";
 
 const baseUrl = "http://emailer.test";
 
-const allowedRecipient = "max@example.com";
+const allowedRecipient = "sam@example.com";
 
 const knownId = "0195f0a0-1111-4222-8333-44444444c001";
 
@@ -675,7 +675,7 @@ describe("request decoding", () => {
       jsonRequest(
         "/contacts",
         "POST",
-        JSON.stringify({ email: " MAX@Example.COM ", name: " Max " }),
+        JSON.stringify({ email: " SAM@Example.COM ", name: " Sam " }),
         authorized(),
       ),
     )
@@ -685,7 +685,7 @@ describe("request decoding", () => {
         return response.json();
       })
       .then((body) => {
-        expect(body).toMatchObject({ email: "MAX@example.com", name: "Max" });
+        expect(body).toMatchObject({ email: "SAM@example.com", name: "Sam" });
       });
   });
 
@@ -1135,7 +1135,7 @@ describe("generated client round trip", () => {
         const client = yield* makeEmailerClient(baseUrl, Redacted.make(token));
 
         const contact = yield* client.contacts.create({
-          payload: { email: allowedRecipient, name: "Max" },
+          payload: { email: allowedRecipient, name: "Sam" },
         });
 
         const list = yield* client.lists.create({ payload: { name: "Readers" } });
@@ -1413,9 +1413,9 @@ describe("contact management", () => {
 
     return clientOver(store)((client) =>
       Effect.gen(function* () {
-        const created = yield* client.contacts.create({ payload: { email: "Max@example.com" } });
+        const created = yield* client.contacts.create({ payload: { email: "Sam@example.com" } });
 
-        const found = yield* client.contacts.getByEmail({ query: { email: "MAX@EXAMPLE.COM" } });
+        const found = yield* client.contacts.getByEmail({ query: { email: "SAM@EXAMPLE.COM" } });
 
         expect(found.id).toBe(created.id);
       }),
@@ -1697,7 +1697,7 @@ describe("list management", () => {
             `/lists/${created.id}/contacts`,
             "POST",
             JSON.stringify({
-              contacts: [{ email: "Max@example.com" }, { email: "max@EXAMPLE.com" }],
+              contacts: [{ email: "Sam@example.com" }, { email: "sam@EXAMPLE.com" }],
             }),
             authorized(),
           ),

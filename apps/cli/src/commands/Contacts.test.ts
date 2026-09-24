@@ -12,7 +12,7 @@ describe("contact management from the command line", () => {
 
         const result = yield* withService(service, (baseUrl) =>
           Effect.gen(function* () {
-            yield* runCli(baseUrl, token, ["contacts", "create", "--email", "max@example.com"]);
+            yield* runCli(baseUrl, token, ["contacts", "create", "--email", "sam@example.com"]);
 
             return yield* runCli(baseUrl, token, [
               "contacts",

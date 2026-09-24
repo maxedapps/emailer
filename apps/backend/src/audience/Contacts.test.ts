@@ -13,9 +13,9 @@ const contactId = "0195f0a0-1111-4222-8333-44444444c001";
 
 const createdAt = "2026-09-11T10:00:00.000Z";
 
-const email = "max@example.com";
+const email = "sam@example.com";
 
-const stored: Schemas.Contact = { id: contactId, email, name: "Max", createdAt };
+const stored: Schemas.Contact = { id: contactId, email, name: "Sam", createdAt };
 
 const answering = (operations: Partial<AudienceOperations>) =>
   Layer.mergeAll(

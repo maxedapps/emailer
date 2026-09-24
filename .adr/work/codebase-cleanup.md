@@ -244,7 +244,7 @@ On 2026-09-23 the drafting slice (ADR-0019, ADR-0020) landed on `origin/main` fr
   - **Merge:** a PR review found nothing to change in the code and flagged two deploy-time risks. The first was an in-place upgrade no live gate had rehearsed, because every stage was created fresh by beta.79. The second was the forward-only list change, now recorded in ADR-0023. PR #1 was then merged with `--no-ff` as `60061cd`, whose tree is identical to the reviewed head `a98cb23`. The leak check was clean, and the worktree and branch were removed.
   - **Prod, destroyed rather than upgraded:** prod ran neither slice and held only a test list, so the user chose to destroy and redeploy it. That sidesteps the unrehearsed upgrade path.
     - **Destroy:** `Emailer/prod` destroyed 29 resources in 102 s. The AWS inventory then showed no function, table, queue, configuration set, alarm, topic, schedule group, rule, role, log group or mapping left for the stage, and no `Emailer` state.
-    - **Untouched:** `EmailerSending/shared` (the adopted identity and its Cloudflare records), EmailOctopus's configuration sets, identity and IAM user, and account sending (enabled, `HEALTHY`).
+    - **Untouched:** `EmailerSending/shared` (the adopted identity and its Cloudflare records), the configuration sets, identity and IAM user of the account's other sender, and account sending (enabled, `HEALTHY`).
   - **Fresh deploy from `60061cd`:**
     - **Plan:** `32 to create, 30 binding changes`, nothing else.
     - **Deploy:** 32 resources in 85 s. All five functions are `Active`/`Successful`: api `2HgurEFl…`, dispatcher `uzyb7VAG…`, feedback `12EY/nja…`, unsubscribe `X5fuEzz5…`, preview `nK4MNEjm…`. The dispatch mapping is `Enabled`, and the alert email subscription is confirmed.
