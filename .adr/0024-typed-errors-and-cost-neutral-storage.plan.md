@@ -356,7 +356,7 @@ Status: Done. As built:
 
 ### T8 — Stop subscribing to delivery delays
 
-Status: Not started
+Status: Done except the deploy-plan check, which is T10's. As built: `Classified` is now the one feedback shape. A delay event still queued at the deploy decodes as an event this system does not model and is logged as ignored, as any other would be.
 
 - **Remove:**
   - `DELIVERY_DELAY` from `feedbackPublishing`'s `matchingEventTypes` (`sending/Mailer.ts`);

@@ -91,7 +91,7 @@ export const feedbackPublishing = Effect.gen(function* () {
 
   return yield* AWS.SES.ConfigurationSetEventDestination(eventDestinationLogicalId, {
     configurationSetName: mail.configurationSetName,
-    matchingEventTypes: ["BOUNCE", "COMPLAINT", "DELIVERY_DELAY"],
+    matchingEventTypes: ["BOUNCE", "COMPLAINT"],
     eventBridgeDestination: {
       eventBusArn: `arn:aws:events:${region}:${accountId}:event-bus/default`,
     },
