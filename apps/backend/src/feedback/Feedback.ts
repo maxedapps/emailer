@@ -70,7 +70,7 @@ export const feedbackRouting = Effect.gen(function* () {
       source: ["aws.ses"],
       "detail-type": ["Email Bounced", "Email Complaint Received", "Email Delivery Delayed"],
     },
-    targets: [{ Id: "FeedbackEvents", Arn: yield* queue.queueArn }],
+    targets: [{ Id: "FeedbackEvents", Arn: queue.queueArn }],
   });
 
   yield* queue.bind`Allow(SESFeedbackEvents, SendMessage(${queue}))`({
@@ -79,7 +79,7 @@ export const feedbackRouting = Effect.gen(function* () {
         Effect: "Allow",
         Principal: { Service: "events.amazonaws.com" },
         Action: ["sqs:SendMessage"],
-        Resource: [yield* queue.queueArn],
+        Resource: [queue.queueArn],
         Condition: {
           ArnEquals: {
             "aws:SourceArn": [`arn:aws:events:${region}:${accountId}:rule/${ruleName}`],
