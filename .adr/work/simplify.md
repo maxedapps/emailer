@@ -120,4 +120,26 @@ Each task is one commit, in this order, with `pnpm check` green after each.
 
 ## Handoff
 
-(Filled in on completion.)
+Completed on 2026-09-24 on the branch `simplify`.
+
+- **Scope:** T1–T10 are done. One T1 item is dropped, the typed `CancellationReasons`; the reason is recorded under T1. T6 routes events through a named rule and a named queue instead of `toQueue`; the reason is recorded under T6 and in ADR-0003.
+- **Unit tests:** `pnpm check` passes with 858 unit tests. There were 927 on `main`:
+  - the 33 replay tests went with the tool;
+  - the audience mapping tests became storage tests;
+  - the T9 consolidations kept every case they fold.
+- **Live gate:** an ephemeral stage `test-simplify` was deployed from the final source.
+  - The integration suite passed 41/41 twice, before and after the T9 test changes.
+  - On AWS:
+    - the queue policy admits only the feedback rule;
+    - the rule targets the queue;
+    - one event-source mapping runs at batch size 1;
+    - the function has no event-invoke config;
+    - redrive happens after five receives.
+  - A fired schedule deleted itself without the `DeleteSchedule` grant.
+  - The stage is destroyed. The inventory shows no leftover functions, queues, tables, rules, alarms, schedule groups, topics, log groups, mappings, roles or simulator suppression entries.
+- **Review:** a final read-only review of `main..simplify` found no defects. It found two stale ADR sentences, one misplaced comment and one alarm wording, all fixed.
+- **Size:** 28 source files, net −827 lines; tests net −2,440 lines.
+- **Before the next prod deploy:**
+  - Prod still runs the code from before #4. Deploy with `--force` and check each function's `CodeSha256`.
+  - Prod's `FeedbackFailures` must be empty first. The Lambda failure records the old destination wrote cannot be redriven by the new path.
+  - The deploy creates `emailer-prod-feedback-events` and the rule `emailer-prod-ses-feedback`. It deletes the old generated-name rule, the feedback function's event-invoke config and the `FeedbackDestinationDeliveryFailures` alarm. While the rules swap, an event may be missed or delivered twice. Both are safe: publication is best effort (ADR-0003), and the writes are idempotent.
