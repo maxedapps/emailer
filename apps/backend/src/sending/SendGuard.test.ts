@@ -1,7 +1,6 @@
-import { Duration, Effect, Layer } from "effect";
-import { TestClock } from "effect/testing";
+import { describe, expect, it } from "@effect/vitest";
+import { Duration, Effect } from "effect";
 import { RateLimiter } from "effect/unstable/persistence";
-import { describe, expect, it } from "vitest";
 
 import { makeSlot, sendGuard } from "./SendGuard.ts";
 
@@ -136,8 +135,9 @@ describe("sendGuard", () => {
 });
 
 describe("makeSlot", () => {
-  it("paces on the one ses-send key: the limit within one window, then a delay to the following one", () =>
-    Effect.runPromise(
+  it.effect(
+    "paces on the one ses-send key: the limit within one window, then a delay to the following one",
+    () =>
       Effect.gen(function* () {
         const memory = yield* RateLimiter.RateLimiterStore;
         const keys: Array<string> = [];
@@ -161,6 +161,6 @@ describe("makeSlot", () => {
 
         expect(delays.map(Duration.toMillis)).toStrictEqual([0, 0, 1000]);
         expect(keys).toStrictEqual(["ses-send", "ses-send", "ses-send"]);
-      }).pipe(Effect.provide(Layer.mergeAll(RateLimiter.layerStoreMemory, TestClock.layer()))),
-    ));
+      }).pipe(Effect.provide(RateLimiter.layerStoreMemory)),
+  );
 });

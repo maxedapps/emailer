@@ -21,6 +21,7 @@
   "devDependencies": {
     "@effect/platform-node": "catalog:",
     "@effect/tsgo": "catalog:",
+    "@effect/vitest": "catalog:",
     "@oxlint/plugins": "catalog:",
     "@types/node": "catalog:",
     "alchemy": "catalog:",
