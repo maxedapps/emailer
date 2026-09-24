@@ -26,6 +26,11 @@ export default defineConfig({
     { name: "anti-slop-effect", specifier: "./tools/oxlint/anti-slop/effect/index.ts" },
   ],
   rules: {
+    // `@effect/vitest`'s testers are test blocks too.
+    "vitest/no-standalone-expect": [
+      "error",
+      { additionalTestBlockFunctions: ["it.effect", "it.live", "it.layer"] },
+    ],
     "typescript/no-floating-promises": "error",
     "typescript/no-misused-promises": "error",
     "typescript/no-explicit-any": "error",
