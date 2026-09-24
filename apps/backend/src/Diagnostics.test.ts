@@ -1,6 +1,6 @@
+import { describe, expect, it } from "@effect/vitest";
 import * as Schemas from "@emailer/api/Schemas";
 import { Data, Effect, Logger, Result } from "effect";
-import { describe, expect, it } from "vitest";
 
 import { describeCause, publicly, reportedAndFatal } from "./Diagnostics.ts";
 import { StorageFailure } from "./storage/Errors.ts";
@@ -66,19 +66,19 @@ describe("describeCause", () => {
 });
 
 describe("publicly", () => {
-  it("converts a storage failure into the public error, once, at the boundary", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { attempt } = yield* recorded(publicly(Effect.fail(unavailable(sdk))));
+  it.effect("converts a storage failure into the public error, once, at the boundary", () =>
+    Effect.gen(function* () {
+      const { attempt } = yield* recorded(publicly(Effect.fail(unavailable(sdk))));
 
-        expect(Result.isFailure(attempt) && attempt.failure).toStrictEqual(
-          new Schemas.StorageUnavailable({ operationId: "getContact" }),
-        );
-      }),
-    ));
+      expect(Result.isFailure(attempt) && attempt.failure).toStrictEqual(
+        new Schemas.StorageUnavailable({ operationId: "getContact" }),
+      );
+    }),
+  );
 
-  it("records one actionable diagnostic: the operation, its classification and the cause's name", () =>
-    Effect.runPromise(
+  it.effect(
+    "records one actionable diagnostic: the operation, its classification and the cause's name",
+    () =>
       Effect.gen(function* () {
         const { entries, fields } = yield* recorded(publicly(Effect.fail(unavailable(sdk))));
 
@@ -90,79 +90,74 @@ describe("publicly", () => {
           cause: "ProvisionedThroughputExceededException",
         });
       }),
-    ));
+  );
 
-  it("records no raw cause, so an SDK payload cannot reach the log through it", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const leaky = new LeakySdkError({
-          Item: { email: { S: mailbox } },
-          token: "v1.secret.aaa",
-        });
+  it.effect("records no raw cause, so an SDK payload cannot reach the log through it", () =>
+    Effect.gen(function* () {
+      const leaky = new LeakySdkError({
+        Item: { email: { S: mailbox } },
+        token: "v1.secret.aaa",
+      });
 
-        const { attempt, fields } = yield* recorded(publicly(Effect.fail(unavailable(leaky))));
+      const { attempt, fields } = yield* recorded(publicly(Effect.fail(unavailable(leaky))));
 
-        // Exactly these three fields: the item and the token the cause was carrying
-        // have no way through, because nothing copies the cause itself.
-        expect(fields).toStrictEqual({
-          operationId: "getContact",
-          reason: "unavailable",
-          cause: "LeakySdkError",
-        });
-        expect(Result.isFailure(attempt) && attempt.failure).toStrictEqual(
-          new Schemas.StorageUnavailable({ operationId: "getContact" }),
-        );
-      }),
-    ));
+      // Exactly these three fields: the item and the token the cause was carrying
+      // have no way through, because nothing copies the cause itself.
+      expect(fields).toStrictEqual({
+        operationId: "getContact",
+        reason: "unavailable",
+        cause: "LeakySdkError",
+      });
+      expect(Result.isFailure(attempt) && attempt.failure).toStrictEqual(
+        new Schemas.StorageUnavailable({ operationId: "getContact" }),
+      );
+    }),
+  );
 
-  it("leaves an expected public error untouched and unlogged", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const expected = new Schemas.NotFound({ entity: "contact" });
+  it.effect("leaves an expected public error untouched and unlogged", () =>
+    Effect.gen(function* () {
+      const expected = new Schemas.NotFound({ entity: "contact" });
 
-        const { attempt, entries } = yield* recorded(publicly(Effect.fail(expected)));
+      const { attempt, entries } = yield* recorded(publicly(Effect.fail(expected)));
 
-        expect(Result.isFailure(attempt) && attempt.failure).toBe(expected);
-        expect(entries).toHaveLength(0);
-      }),
-    ));
+      expect(Result.isFailure(attempt) && attempt.failure).toBe(expected);
+      expect(entries).toHaveLength(0);
+    }),
+  );
 
-  it("leaves a success alone", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { attempt, entries } = yield* recorded(publicly(Effect.succeed("kept")));
+  it.effect("leaves a success alone", () =>
+    Effect.gen(function* () {
+      const { attempt, entries } = yield* recorded(publicly(Effect.succeed("kept")));
 
-        expect(Result.isSuccess(attempt) && attempt.success).toBe("kept");
-        expect(entries).toHaveLength(0);
-      }),
-    ));
+      expect(Result.isSuccess(attempt) && attempt.success).toBe("kept");
+      expect(entries).toHaveLength(0);
+    }),
+  );
 });
 
 describe("reportedAndFatal", () => {
   // The feedback consumer and the unsubscribe POST have no error contract to
   // translate into. Recording the failure must not turn it into a success:
   // Lambda has to retry, and a mail provider must not read a 2xx.
-  it("records the failure and still ends the invocation", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { attempt, entries } = yield* recorded(
-          Effect.exit(reportedAndFatal(Effect.fail(unavailable(sdk)))),
-        );
+  it.effect("records the failure and still ends the invocation", () =>
+    Effect.gen(function* () {
+      const { attempt, entries } = yield* recorded(
+        Effect.exit(reportedAndFatal(Effect.fail(unavailable(sdk)))),
+      );
 
-        const outcome = Result.isSuccess(attempt) ? attempt.success : undefined;
+      const outcome = Result.isSuccess(attempt) ? attempt.success : undefined;
 
-        expect(outcome?._tag).toBe("Failure");
-        expect(entries).toHaveLength(1);
-      }),
-    ));
+      expect(outcome?._tag).toBe("Failure");
+      expect(entries).toHaveLength(1);
+    }),
+  );
 
-  it("leaves a success a success", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { attempt, entries } = yield* recorded(reportedAndFatal(Effect.succeed("done")));
+  it.effect("leaves a success a success", () =>
+    Effect.gen(function* () {
+      const { attempt, entries } = yield* recorded(reportedAndFatal(Effect.succeed("done")));
 
-        expect(Result.isSuccess(attempt) && attempt.success).toBe("done");
-        expect(entries).toHaveLength(0);
-      }),
-    ));
+      expect(Result.isSuccess(attempt) && attempt.success).toBe("done");
+      expect(entries).toHaveLength(0);
+    }),
+  );
 });
