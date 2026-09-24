@@ -29,21 +29,8 @@ export const memberPageFlags = {
   cursor: cursorFlag.pipe(Flag.withSchema(Schemas.EntityId), Flag.optional),
 };
 
-interface PageQuery<Cursor> {
-  limit?: number;
-  cursor?: Cursor;
-}
-
-export const pageQuery = <Cursor>(limit: Option.Option<number>, cursor: Option.Option<Cursor>) => {
-  const query: PageQuery<Cursor> = {};
-
-  if (Option.isSome(limit)) {
-    query.limit = limit.value;
-  }
-
-  if (Option.isSome(cursor)) {
-    query.cursor = cursor.value;
-  }
-
-  return query;
-};
+/** An omitted flag is an omitted query parameter: the client drops undefined values. */
+export const pageQuery = <Cursor>(limit: Option.Option<number>, cursor: Option.Option<Cursor>) => ({
+  limit: Option.getOrUndefined(limit),
+  cursor: Option.getOrUndefined(cursor),
+});

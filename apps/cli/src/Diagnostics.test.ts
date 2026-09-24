@@ -1,4 +1,16 @@
-import { Cause, Console, Data, Effect, Exit, Runtime } from "effect";
+import * as Schemas from "@emailer/api/Schemas";
+import {
+  Cause,
+  Config,
+  ConfigProvider,
+  Console,
+  Data,
+  Effect,
+  Exit,
+  Runtime,
+  Schema,
+} from "effect";
+import { HttpClientError, HttpClientRequest } from "effect/unstable/http";
 import { describe, expect, it } from "vitest";
 
 import { reporting, shouldReport } from "./Diagnostics.ts";
@@ -79,6 +91,69 @@ describe("reporting", () => {
         expect(text).toContain("Refused");
         expect(text).toContain("credential refused");
         expect(Exit.isFailure(exit) && Cause.squash(exit.cause)).toBe(failure);
+      }),
+    ));
+
+  // Found by running the command: a duplicate --to printed 896 lines of schema tree.
+  it("says a schema failure's message rather than its schema tree", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const decoding = Schema.decodeUnknownEffect(Schema.Struct({ to: Schema.String }))({
+          to: 1,
+        });
+
+        const { written, text } = yield* capturing(reporting(decoding));
+
+        expect(written).toHaveLength(1);
+        expect(text).toContain('at ["to"]');
+        expect(text).not.toContain("~effect/Schema");
+      }),
+    ));
+
+  it("names a missing configuration value once, without a schema tree", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const reading = Config.String("EMAILER_API_URL").pipe(
+          Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromEnvRecord({})),
+        );
+
+        const { text } = yield* capturing(reporting(reading));
+
+        expect(text.split("EMAILER_API_URL")).toHaveLength(2);
+        expect(text).not.toContain("~effect/Schema");
+      }),
+    ));
+
+  // Found by running the command: a refused connection printed `"cause": {}`.
+  it("says a transport failure and what caused it", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const refused = new HttpClientError.HttpClientError({
+          reason: new HttpClientError.TransportError({
+            request: HttpClientRequest.get("http://127.0.0.1:59999/contacts"),
+            cause: new TypeError("fetch failed", {
+              cause: new Error("connect ECONNREFUSED 127.0.0.1:59999"),
+            }),
+          }),
+        });
+
+        const { text } = yield* capturing(reporting(Effect.fail(refused)));
+
+        expect(text).toMatch(
+          /^emailer: Transport error \(GET .+\): fetch failed: connect ECONNREFUSED 127\.0\.0\.1:59999$/,
+        );
+      }),
+    ));
+
+  it("still prints a contract error's fields, which are its diagnostic", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const { text } = yield* capturing(
+          reporting(Effect.fail(new Schemas.NotFound({ entity: "contact" }))),
+        );
+
+        expect(text).toContain("NotFound");
+        expect(text).toContain('"entity": "contact"');
       }),
     ));
 

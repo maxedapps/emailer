@@ -457,6 +457,40 @@ describe("campaign management from the command line", () => {
     60_000,
   );
 
+  // Found by running the command: an oversized --text file was echoed back in full on stderr.
+  it(
+    "refuses a --text file over the size limit without echoing it, before any request",
+    () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const service = inMemoryService(token);
+          const oversized = "oversized-filler\n".repeat(4000);
+
+          const result = yield* withService(service, (baseUrl) =>
+            withTempFile("txt", oversized, (text) =>
+              runCli(baseUrl, token, [
+                "campaigns",
+                "create",
+                "--list",
+                listId,
+                "--subject",
+                "Release notes",
+                "--text",
+                text,
+              ]),
+            ),
+          );
+
+          expect(result.exitCode).not.toBe(0);
+          expect(result.stdout).toBe("");
+          expect(result.stderr).toContain("65536 UTF-8 bytes");
+          expect(result.stderr).not.toContain("oversized-filler");
+          expect(service.authorizations).toHaveLength(0);
+        }).pipe(Effect.provide(NodeServices.layer)),
+      ),
+    60_000,
+  );
+
   it(
     "rejects a missing --html file before issuing any request",
     () =>

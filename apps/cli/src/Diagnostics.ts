@@ -1,4 +1,4 @@
-import { Cause, Console, Effect, Inspectable, Runtime } from "effect";
+import { Cause, Console, Effect, Inspectable, Predicate, Runtime } from "effect";
 
 /**
  * Whether a cause is worth telling the operator about.
@@ -11,16 +11,41 @@ import { Cause, Console, Effect, Inspectable, Runtime } from "effect";
 export const shouldReport = (cause: Cause.Cause<unknown>): boolean =>
   !Cause.hasInterruptsOnly(cause) && Runtime.getErrorReported(Cause.squash(cause));
 
+const messageOf = (cause: unknown): string =>
+  Predicate.hasProperty(cause, "message") && Predicate.isString(cause.message) ? cause.message : "";
+
+/**
+ * A failure's message, then the message of each cause down a chain of `Error`s. Anything else ends
+ * the chain: a `ConfigError` is not an `Error`, and its message already includes its cause.
+ */
+const messages = (cause: unknown): ReadonlyArray<string> => [
+  messageOf(cause),
+  ...(cause instanceof Error ? messages(cause.cause) : []),
+];
+
 /**
  * An expected failure and an unexpected one need different things said about them.
  *
  * An expected failure is a tagged value whose fields *are* the diagnostic — which address was
  * refused, which entity was not found — and a stack trace through the HTTP client says nothing an
- * operator can act on. A defect is the opposite: it is usually a native `Error`, which inspects to
- * an empty object, and the message and stack are the only things that identify it.
+ * operator can act on. A contract error's message is empty, so it is inspected. A schema,
+ * configuration or transport failure is said in its messages instead: inspected, it is a whole
+ * schema tree or an empty cause. A defect is usually a native `Error`, which inspects to an empty
+ * object, and the message and stack are the only things that identify it.
  */
-const render = (cause: Cause.Cause<unknown>): string =>
-  Cause.hasFails(cause) ? Inspectable.toStringUnknown(Cause.squash(cause)) : Cause.pretty(cause);
+const render = (cause: Cause.Cause<unknown>): string => {
+  if (!Cause.hasFails(cause)) {
+    return Cause.pretty(cause);
+  }
+
+  const failure = Cause.squash(cause);
+
+  return messageOf(failure) === ""
+    ? Inspectable.toStringUnknown(failure)
+    : messages(failure)
+        .filter((message) => message !== "")
+        .join(": ");
+};
 
 /**
  * The one place a failure becomes operator-visible output. It writes to stderr so that stdout
