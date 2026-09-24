@@ -86,7 +86,7 @@ describe("renderMarkdown html", () => {
 
 describe("renderMarkdown text", () => {
   it.each([
-    ["# Title", "TITLE"],
+    ["# Title", "Title"],
     ["Some **strong** and _soft_ ~~gone~~ words", "Some strong and soft gone words"],
     ["[label](https://example.com)", "label (https://example.com)"],
     ["<https://example.com>", "https://example.com"],
@@ -97,8 +97,18 @@ describe("renderMarkdown text", () => {
     ["Press `?` to see", "Press ? to see"],
     ["```\nconst a = 1 < 2;\n```", "const a = 1 < 2;"],
     ["| a | b |\n| - | - |\n| 1 | 2 |", "a | b\n1 | 2"],
-    ["A \\*literal\\* & <raw>", "A *literal* & <raw>"],
+    ["A \\*literal\\* & <raw>", "A *literal* &"],
     ["---", "---"],
+    ["- a\n  - b\n  - c\n- d", "- a\n  - b\n  - c\n- d"],
+    ["1. one\n   continued\n2. two", "1. one\n   continued\n2. two"],
+    ["- [x] done\n- [ ] todo", "- [x] done\n- [ ] todo"],
+    ["- [x] done\n\n- [ ] todo", "- [x] done\n- [ ] todo"],
+    [
+      "## See [the Docs](https://example.com/Docs/Page?Ref=A)",
+      "See the Docs (https://example.com/Docs/Page?Ref=A)",
+    ],
+    ['<div align="center"><img src="https://x/y.png"></div>\n\nafter', "after"],
+    ["Tom &amp; Jerry, a &lt; b", "Tom & Jerry, a < b"],
   ])("renders %j as %j", (markdown, expected) => {
     expect(text(markdown)).toBe(expected);
   });

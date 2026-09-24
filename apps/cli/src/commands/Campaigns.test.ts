@@ -519,7 +519,7 @@ describe("campaign management from the command line", () => {
 
           expect(created).toMatchObject({
             subject: "Release notes",
-            text: "HELLO\n\nSome bold words and a link (https://example.com).",
+            text: "Hello\n\nSome bold words and a link (https://example.com).",
           });
           expect(created).toHaveProperty("html", expect.stringContaining("<!doctype html>"));
           expect(created).toHaveProperty(
@@ -645,7 +645,7 @@ describe("campaign management from the command line", () => {
 
           expect(change).not.toHaveProperty("subject");
           expect(change).not.toHaveProperty("filter");
-          expect(change?.text).toBe("FRESH");
+          expect(change?.text).toBe("Fresh");
           expect(change?.html).toContain("<title>Release notes</title>");
         }).pipe(Effect.provide(NodeServices.layer)),
       ),
