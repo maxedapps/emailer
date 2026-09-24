@@ -622,12 +622,10 @@ describe("the deployed service", () => {
             true,
           );
 
-          yield* awaitCampaignFeedback(
-            client,
-            campaign.id,
-            { bounced: bounceAccepted.length, complained: 0 },
-            timeout,
-          );
+          yield* awaitCampaignFeedback(client, campaign.id, {
+            bounced: bounceAccepted.length,
+            complained: 0,
+          });
 
           const sample = bounceAccepted[0];
 

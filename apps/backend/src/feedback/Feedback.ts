@@ -30,9 +30,14 @@ export const feedbackFailures = AWS.SQS.Queue("FeedbackFailures", {
 const feedbackEventsName = Effect.map(Stack, ({ stage }) => `emailer-${stage}-feedback-events`);
 
 /**
- * Standard queue of SES feedback events. Visibility is 3 minutes so a 30-second feedback
- * invocation is covered by AWS's 6×-timeout recommendation. Source retention is the SQS default of
- * four days, shorter than the dead-letter queue.
+ * The queue's visibility timeout: a message whose invocation failed is delivered again after this.
+ * Three minutes covers a 30-second feedback invocation by AWS's 6×-timeout recommendation.
+ */
+export const feedbackRedelivery = Duration.minutes(3);
+
+/**
+ * Standard queue of SES feedback events, redelivered after `feedbackRedelivery`. Source retention
+ * is the SQS default of four days, shorter than the dead-letter queue.
  */
 const feedbackEvents = AWS.SQS.Queue(
   "FeedbackEvents",
@@ -41,7 +46,7 @@ const feedbackEvents = AWS.SQS.Queue(
 
     return {
       queueName: yield* feedbackEventsName,
-      visibilityTimeout: Duration.minutes(3),
+      visibilityTimeout: feedbackRedelivery,
       redrivePolicy: {
         deadLetterTargetArn: failures.queueArn,
         maxReceiveCount: 5,

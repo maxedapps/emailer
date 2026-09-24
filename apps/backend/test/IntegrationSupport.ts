@@ -48,6 +48,7 @@ import { campaignStoreOperations } from "../src/storage/Campaigns.ts";
 import { feedbackWrites } from "../src/storage/Feedback.ts";
 import { transactionPrimitives, writePrimitives } from "../src/storage/Primitives.ts";
 import { unsubscribeSigningKey } from "../src/consent/Unsubscribe.ts";
+import { feedbackRedelivery } from "../src/feedback/Feedback.ts";
 import { encodeDispatchMessage } from "../src/sending/Dispatch.ts";
 
 import type { AddressStatus } from "@emailer/api/Schemas";
@@ -63,6 +64,13 @@ const campaignWaitFloorSeconds = 180;
 const mappingReadyTimeout = Duration.minutes(5);
 
 const staleWakeLogTimeout = Duration.minutes(5);
+
+/**
+ * How long a campaign's bounce and complaint counts may take to settle once its sends are done:
+ * SES and EventBridge latency, plus one redelivery of an event whose count update lost every retry
+ * to the dispatcher's writes on the same campaign item.
+ */
+const feedbackSettleTimeout = Duration.sum(feedbackRedelivery, Duration.minutes(2));
 
 const mappingPoll = Schedule.spaced("3 seconds");
 
@@ -465,7 +473,6 @@ export const awaitCampaignFeedback = (
   client: EmailerClient,
   id: string,
   expected: { readonly bounced: number; readonly complained: number },
-  timeout: Duration.Input,
 ) =>
   client.campaigns.get({ params: { id } }).pipe(
     Effect.repeat({
@@ -481,7 +488,7 @@ export const awaitCampaignFeedback = (
       },
     }),
     Effect.timeoutOrElse({
-      duration: timeout,
+      duration: feedbackSettleTimeout,
       orElse: () =>
         Effect.die(
           new Error(

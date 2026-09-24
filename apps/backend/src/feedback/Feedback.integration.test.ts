@@ -59,12 +59,10 @@ describe("feedback and suppression", () => {
             progress: { accepted: 2, rejected: 0, uncertain: 0, skipped: 0 },
           });
 
-          const counted = yield* awaitCampaignFeedback(
-            client,
-            first.id,
-            { bounced: 1, complained: 1 },
-            timeout,
-          );
+          const counted = yield* awaitCampaignFeedback(client, first.id, {
+            bounced: 1,
+            complained: 1,
+          });
 
           expect(counted.submission).toMatchObject({
             feedback: { bounced: 1, complained: 1 },
