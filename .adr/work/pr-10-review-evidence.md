@@ -32,7 +32,7 @@ This is a baseline omission as well as an implementation defect: the plan explic
 | Real router + production domain, invalid-date probes | Both impossible dates passed request validation, replaced stored timestamp/token, and reached schedule service; controlled service rejection returned 503 |
 | Router controls | `nonsense` returned 400 without mutations; valid future canonical date returned 200 and reached the schedule service |
 | Manual real CLI process + local HTTP server | Zone-less and explicit-offset inputs normalized identically under Europe/Berlin; malformed text exited 1 without a request; cancel exited 0 with draft output |
-| GitHub check at reviewed head | SUCCESS; [check run](https://github.com/maxedapps/emailer/actions/runs/35216597895/job/105186431193) |
+| GitHub check at reviewed head | SUCCESS |
 | AWS integration/deploy/teardown | Not independently rerun; author records 26/26 cases and destruction of test-sched in ADR-0015/T7 |
 
 ### Router probe details and limits

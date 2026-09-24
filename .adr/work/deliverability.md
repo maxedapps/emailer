@@ -74,10 +74,10 @@ Decision-relevant results (sources in the table above):
   - No `dig` of names about to be created.
   - Route 53 change `/change/C00505981QJHOM2GPEVP4` (`CREATE`, never `UPSERT`) → `INSYNC`.
   - Cloudflare TXT id `996789d5a2305861f26a2eb5b93957f2`, DNS-only, `proxied: false`, TTL 1800, content `v=DMARC1`.
-  - Authoritative `@ns-637.awsdns-15.net` then `@8.8.8.8`: MX `10 feedback-smtp.us-east-1.amazonses.com.`; SPF TXT `"v=spf1 include:amazonses.com ~all"`; DMARC TXT `"v=DMARC1; p=none; rua=mailto:dmarc@reports.example.net"`; report TXT `"v=DMARC1"`.
+  - Authoritative (the zone's Route 53 name server) then `@8.8.8.8`: MX `10 feedback-smtp.us-east-1.amazonses.com.`; SPF TXT `"v=spf1 include:amazonses.com ~all"`; DMARC TXT `"v=DMARC1; p=none; rua=mailto:dmarc@reports.example.net"`; report TXT `"v=DMARC1"`.
 - **Tests:** Operational one-time step with no automation. Validated by the resolver checks below and exercised end to end in T3.
 - **Verify:**
-  - After `INSYNC`, against an authoritative server first (`dig +short @ns-637.awsdns-15.net …`, or whichever `dig NS example.com` lists), then against `8.8.8.8`:
+  - After `INSYNC`, against an authoritative server first (`dig +short @<name server> …`, using one that `dig NS example.com` lists), then against `8.8.8.8`:
     - `bounce.mail.example.com MX` → `10 feedback-smtp.us-east-1.amazonses.com.` and nothing else.
     - `bounce.mail.example.com TXT` → `"v=spf1 include:amazonses.com ~all"`.
     - `_dmarc.mail.example.com TXT` → the DMARC record verbatim.

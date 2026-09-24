@@ -71,5 +71,5 @@
 
 ## Handoff
 
-- **Next action:** none; merged through [PR #6](https://github.com/maxedapps/emailer/pull/6).
+- **Next action:** none; merged through PR #6.
 - **Resources:** worktree `~/worktrees/emailer/repeat-safe-writes` on branch `repeat-safe-writes` from `main` at `90c7235`.

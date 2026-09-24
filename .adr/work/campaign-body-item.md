@@ -3,7 +3,7 @@
 > **Status:** Complete
 > **ADRs:** [0014](../0014-campaign-body-item-and-summaries.md) (new; the split and the summary listing). Constrained by [0005](../0005-contact-identity-and-membership-access-paths.md) (single table, the `gsi1` listing index and its hydration), [0008](../0008-storage-capabilities-and-error-boundaries.md) (capabilities bind only what they use; error boundaries), [0011](../0011-open-recipient-set-and-paced-dispatch.md) (campaign states, run token, per-slice dispatch), [0013](../0013-repeat-safe-writes.md) (creates under a fresh identifier are `recordOnce`).
 > **Updated:** 2026-09-16
-> **Lane:** continues lane A on branch `campaign-listing`, worktree `~/worktrees/emailer/campaign-listing`, before [PR #7](https://github.com/maxedapps/emailer/pull/7) merges. Supersedes the handoff and merge protocol in [campaign-listing](campaign-listing.md). Lane B ([campaign-html-bodies](campaign-html-bodies.md), branch `campaign-html-bodies`, one commit ahead of `main`) merges `main` afterwards under the protocol in this document.
+> **Lane:** continues lane A on branch `campaign-listing`, worktree `~/worktrees/emailer/campaign-listing`, before PR #7 merges. Supersedes the handoff and merge protocol in [campaign-listing](campaign-listing.md). Lane B ([campaign-html-bodies](campaign-html-bodies.md), branch `campaign-html-bodies`, one commit ahead of `main`) merges `main` afterwards under the protocol in this document.
 
 ## Outcome and boundaries
 

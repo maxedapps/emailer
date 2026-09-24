@@ -67,11 +67,11 @@ const withTransport = <A, E>(
 describe("makeEmailerClient", () => {
   it("attaches the bearer credential and encodes the request body", () => {
     const transport = transportReplying(() =>
-      json(201, JSON.stringify({ id: contactId, email: "max@example.com", createdAt })),
+      json(201, JSON.stringify({ id: contactId, email: "sam@example.com", createdAt })),
     );
 
     return withTransport(transport, (client) =>
-      client.contacts.create({ payload: { email: "max@example.com" } }),
+      client.contacts.create({ payload: { email: "sam@example.com" } }),
     ).then((result) => {
       expect(Result.isSuccess(result)).toBe(true);
       expect(transport.recorded).toHaveLength(1);
@@ -81,7 +81,7 @@ describe("makeEmailerClient", () => {
       expect(sent?.method).toBe("POST");
       expect(sent?.url).toBe(`${baseUrl}/contacts`);
       expect(sent?.authorization).toBe(`Bearer ${token}`);
-      expect(JSON.parse(sent?.body ?? "")).toStrictEqual({ email: "max@example.com" });
+      expect(JSON.parse(sent?.body ?? "")).toStrictEqual({ email: "sam@example.com" });
     });
   });
 
@@ -89,17 +89,17 @@ describe("makeEmailerClient", () => {
     const transport = transportReplying(() =>
       json(
         201,
-        JSON.stringify({ id: contactId, email: "max@example.com", name: "Max", createdAt }),
+        JSON.stringify({ id: contactId, email: "sam@example.com", name: "Sam", createdAt }),
       ),
     );
 
     return withTransport(transport, (client) =>
-      client.contacts.create({ payload: { email: "max@example.com", name: "Max" } }),
+      client.contacts.create({ payload: { email: "sam@example.com", name: "Sam" } }),
     ).then((result) => {
       expect(Result.isSuccess(result) && result.success).toStrictEqual({
         id: contactId,
-        email: "max@example.com",
-        name: "Max",
+        email: "sam@example.com",
+        name: "Sam",
         createdAt,
       });
     });
@@ -142,7 +142,7 @@ describe("makeEmailerClient", () => {
     );
 
     return withTransport(transport, (client) =>
-      client.contacts.create({ payload: { email: "max@example.com" } }),
+      client.contacts.create({ payload: { email: "sam@example.com" } }),
     ).then((result) => {
       expect(Result.isFailure(result)).toBe(true);
     });
@@ -165,7 +165,7 @@ describe("makeEmailerClient", () => {
     });
 
     return withTransport(transport, (client) =>
-      client.contacts.create({ payload: { email: "max@example.com" } }),
+      client.contacts.create({ payload: { email: "sam@example.com" } }),
     ).then((result) => {
       expect(Result.isFailure(result)).toBe(true);
       expect(transport.recorded).toHaveLength(1);

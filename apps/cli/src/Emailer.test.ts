@@ -64,7 +64,7 @@ describe("the emailer executable", () => {
         const service = inMemoryService(token);
 
         const result = yield* withService(service, (baseUrl) =>
-          runCli(baseUrl, token, ["contacts", "create", "--email", "max@example.com"]),
+          runCli(baseUrl, token, ["contacts", "create", "--email", "sam@example.com"]),
         );
 
         expect(result.exitCode).toBe(0);
@@ -78,7 +78,7 @@ describe("the emailer executable", () => {
         const service = inMemoryService(token);
 
         const result = yield* withService(service, (baseUrl) =>
-          runCli(baseUrl, otherToken, ["contacts", "create", "--email", "max@example.com"]),
+          runCli(baseUrl, otherToken, ["contacts", "create", "--email", "sam@example.com"]),
         );
 
         expect(result.exitCode).not.toBe(0);
@@ -115,9 +115,9 @@ describe("the emailer executable", () => {
                 "contacts",
                 "create",
                 "--email",
-                "max@example.com",
+                "sam@example.com",
                 "--name",
-                "Max",
+                "Sam",
               ]);
 
               const list = yield* runCli(baseUrl, token, ["lists", "create", "--name", "Readers"]);
@@ -152,8 +152,8 @@ describe("the emailer executable", () => {
           expect(outcome.contact.exitCode).toBe(0);
           expect(yield* parseJson(outcome.contact.stdout)).toStrictEqual({
             id: contactId,
-            email: "max@example.com",
-            name: "Max",
+            email: "sam@example.com",
+            name: "Sam",
             createdAt,
           });
 

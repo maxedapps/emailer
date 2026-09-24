@@ -62,7 +62,7 @@ The plumbing is **two** files rather than one. `Table.ts` holds the operation pr
 
 ## Consequences
 
-- **Contact addresses become case-insensitively unique.** `Max@e.com` and `max@e.com` can no longer both exist — a deliberate narrowing that aligns identity with how consent and suppression already behave.
+- **Contact addresses become case-insensitively unique.** `Sam@e.com` and `sam@e.com` can no longer both exist — a deliberate narrowing that aligns identity with how consent and suppression already behave.
 - **Every membership costs two items and two actions.** Import batches cap at 20 contacts per request; larger imports are a client-side loop. Asynchronous import jobs remain out of scope.
 - **A concurrent `addMember` or import during a delete cascade can orphan a membership.** This is the accepted residual of dropping the tombstone. An addition after the final discovery read but before parent deletion still sees the parent and can commit. Repeating the parent delete returns missing and does not drain the orphan. The contact cascade's vanished-list fallback can remove an orphaned membership when that contact is subsequently deleted; it provides a cleanup path, not automatic eventual cleanup. This requires simultaneous admin operations on the same entity and remains an accepted tradeoff.
 - **`membershipVersion` moves on every bulk import, including a no-op re-run.** The bump is unconditional, which is the safe direction: making it conditional on the advisory pre-read would mean that a concurrent `removeMember` between the read and the write lets the import re-add a membership _without_ moving the version — the audience changing while the version did not, which is exactly what `claimCampaign` exists to prevent.
