@@ -8,8 +8,6 @@ export const maxTextBytes = 64 * 1024;
 
 export const maxHtmlBytes = 256 * 1024;
 
-export const maxRequestBytes = 512 * 1024;
-
 export const maxEmailLength = 254;
 
 export const maxAttributeEntries = 20;

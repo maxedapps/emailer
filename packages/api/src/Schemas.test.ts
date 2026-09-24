@@ -656,6 +656,28 @@ describe("ImportContactsPayload", () => {
   });
 });
 
+describe("TestSendPayload", () => {
+  const decode = Schema.decodeUnknownResult(Schemas.TestSendPayload);
+
+  it("admits distinct addresses up to the recipient bound, or one list", () => {
+    const to = Array.from({ length: Schemas.maxTestRecipients }, (_, n) => `r${n}@example.com`);
+
+    expect(Result.isSuccess(decode({ to }))).toBe(true);
+    expect(Result.isSuccess(decode({ listId: "0195f0a0-1111-4222-8333-44444444109e" }))).toBe(true);
+  });
+
+  it.each([
+    [
+      "more addresses than the bound",
+      { to: Array.from({ length: 21 }, (_, n) => `r${n}@example.com`) },
+    ],
+    ["one mailbox twice", { to: ["a@example.com", "A@example.com"] }],
+    ["no address", { to: [] }],
+  ])("rejects %s", (_label, payload) => {
+    expect(Result.isFailure(decode(payload))).toBe(true);
+  });
+});
+
 describe("CampaignStateConflict", () => {
   it.each(["draft", "scheduled", "queued", "sending", "paused", "completed"] as const)(
     "encodes with state %s",
@@ -681,7 +703,6 @@ describe("public error statuses", () => {
     [Errors.SendAtNotInFuture, 409],
     [Errors.CampaignStateConflict, 409],
     [Errors.TestAudienceTooLarge, 409],
-    [Errors.PayloadTooLarge, 413],
     [Errors.SendingPaused, 503],
     [Errors.StorageUnavailable, 503],
     [Errors.EmailServiceUnavailable, 503],

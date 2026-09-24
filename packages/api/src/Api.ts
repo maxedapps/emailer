@@ -43,7 +43,7 @@ class ContactsGroup extends HttpApiGroup.make("contacts")
     HttpApiEndpoint.post("create", "/", {
       payload: Schemas.CreateContactPayload,
       success: Schemas.Contact.pipe(HttpApiSchema.status(201)),
-      error: [...storage, Errors.EmailAlreadyUsed, Errors.PayloadTooLarge],
+      error: [...storage, Errors.EmailAlreadyUsed],
     }),
     HttpApiEndpoint.get("list", "/", {
       query: listingQuery,
@@ -65,13 +65,7 @@ class ContactsGroup extends HttpApiGroup.make("contacts")
       params: { id: Schemas.EntityId },
       payload: Schemas.UpdateContactPayload,
       success: Schemas.Contact,
-      error: [
-        ...storage,
-        Errors.ContactNotFound,
-        Errors.EmailAlreadyUsed,
-        Errors.AddressOptedOut,
-        Errors.PayloadTooLarge,
-      ],
+      error: [...storage, Errors.ContactNotFound, Errors.EmailAlreadyUsed, Errors.AddressOptedOut],
     }),
     HttpApiEndpoint.delete("remove", "/:id", {
       params: { id: Schemas.EntityId },
@@ -86,7 +80,7 @@ class ListsGroup extends HttpApiGroup.make("lists")
     HttpApiEndpoint.post("create", "/", {
       payload: Schemas.CreateListPayload,
       success: Schemas.ContactList.pipe(HttpApiSchema.status(201)),
-      error: [...storage, Errors.PayloadTooLarge],
+      error: [...storage],
     }),
     HttpApiEndpoint.get("get", "/:id", {
       params: { id: Schemas.EntityId },
@@ -102,7 +96,7 @@ class ListsGroup extends HttpApiGroup.make("lists")
       params: { id: Schemas.EntityId },
       payload: Schemas.UpdateListPayload,
       success: Schemas.ContactList,
-      error: [...storage, Errors.ListNotFound, Errors.PayloadTooLarge],
+      error: [...storage, Errors.ListNotFound],
     }),
     HttpApiEndpoint.delete("remove", "/:id", {
       params: { id: Schemas.EntityId },
@@ -129,7 +123,7 @@ class ListsGroup extends HttpApiGroup.make("lists")
       params: { listId: Schemas.EntityId },
       payload: Schemas.ImportContactsPayload,
       success: Schemas.ImportContactsResult,
-      error: [...storage, Errors.ListNotFound, Errors.PayloadTooLarge],
+      error: [...storage, Errors.ListNotFound],
     }),
   )
   .prefix("/lists") {}
@@ -139,7 +133,7 @@ class CampaignsGroup extends HttpApiGroup.make("campaigns")
     HttpApiEndpoint.post("create", "/", {
       payload: Schemas.CreateCampaignPayload,
       success: Schemas.Campaign.pipe(HttpApiSchema.status(201)),
-      error: [...storage, Errors.ListNotFound, Errors.PayloadTooLarge],
+      error: [...storage, Errors.ListNotFound],
     }),
     HttpApiEndpoint.get("list", "/", {
       query: listingQuery,
@@ -160,7 +154,6 @@ class CampaignsGroup extends HttpApiGroup.make("campaigns")
         Errors.CampaignNotFound,
         Errors.ListNotFound,
         Errors.CampaignStateConflict,
-        Errors.PayloadTooLarge,
       ],
     }),
     HttpApiEndpoint.delete("remove", "/:id", {
@@ -186,7 +179,6 @@ class CampaignsGroup extends HttpApiGroup.make("campaigns")
         Errors.ListNotFound,
         Errors.TestAudienceTooLarge,
         Errors.SendingPaused,
-        Errors.PayloadTooLarge,
       ],
     }),
     HttpApiEndpoint.post("send", "/:id/send", {

@@ -117,16 +117,6 @@ export class SendingPaused extends Schema.TaggedError<SendingPaused>()(
   }
 }
 
-export class PayloadTooLarge extends Schema.TaggedError<PayloadTooLarge>()(
-  "PayloadTooLarge",
-  { limitBytes: Schema.Int },
-  { httpApiStatus: 413 },
-) {
-  override get [ErrorReporter.ignore]() {
-    return true;
-  }
-}
-
 /**
  * A dependency that failed: which operation, and the failure's name — a classification such as
  * `ThrottlingException` or `TimeoutError`, never a payload. Both are what gets reported.

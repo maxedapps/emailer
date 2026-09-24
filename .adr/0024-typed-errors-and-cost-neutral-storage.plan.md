@@ -124,7 +124,12 @@ Status: Done. As built:
 
 ### T3 — API handlers and the contract
 
-Status: Not started
+Status: Done. As built:
+
+- The preview link reads the campaign's control item instead of the whole campaign, since it only needs to know the campaign exists: one read unit instead of two or more.
+- `Api.test.ts` (2,410 → 1,040 lines) stubs every service per test, and a service a test does not name dies if reached. The in-memory copy of the stores is gone.
+- `audience/Addresses.test.ts` takes over the address status and unsuppress cases, which only the API suite covered.
+- `Schemas.test.ts` takes over the test-send payload's limits.
 
 - **Handlers get their services up front,** as in Effect's reference service.
   - Pattern: `HttpApiBuilder.group(EmailerApi, "contacts", Effect.fn(function* (handlers) { const audience = yield* AudienceStore; … }))`.
