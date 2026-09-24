@@ -107,8 +107,8 @@ describe("renderMarkdown text", () => {
       "## See [the Docs](https://example.com/Docs/Page?Ref=A)",
       "See the Docs (https://example.com/Docs/Page?Ref=A)",
     ],
-    ['<div align="center"><img src="https://x/y.png"></div>\n\nafter', "after"],
-    ["Tom &amp; Jerry, a &lt; b", "Tom & Jerry, a < b"],
+    ['<div align="center"><img src="https://example.com/logo.png"></div>\n\nafter', "after"],
+    ["Salt &amp; pepper, a &lt; b", "Salt & pepper, a < b"],
   ])("renders %j as %j", (markdown, expected) => {
     expect(text(markdown)).toBe(expected);
   });
