@@ -3,7 +3,7 @@ import type * as AWS from "alchemy/AWS";
 import { ConfigProvider, Effect, Layer, Logger, References, Result } from "effect";
 import { describe, expect, it } from "vitest";
 
-import { expectedConfigurationSet, handleEvent } from "./Feedback.ts";
+import { expectedConfigurationSet, handleMessage } from "./Feedback.ts";
 import { StorageFailure } from "../storage/Errors.ts";
 import { FeedbackStore } from "../storage/Feedback.ts";
 
@@ -175,16 +175,25 @@ const delayEvent = (
   };
 };
 
+/** The queue message the rule delivers: the whole EventBridge event, with SES's event as `detail`. */
+const envelope = (detail: AWS.SES.EmailEventDetail, envelopeId = "envelope-1") =>
+  JSON.stringify({ version: "0", id: envelopeId, source: "aws.ses", detail });
+
+/** A message that is not an EventBridge event: a Lambda failure record nests the event instead. */
+const lambdaFailureRecord = JSON.stringify({
+  requestContext: { requestId: "request-1", condition: "RetriesExhausted" },
+  requestPayload: { id: "envelope-1", detail: bounceEvent("Permanent", "General") },
+});
+
 const handling = (
   world: World,
-  detail: AWS.SES.EmailEventDetail,
-  envelopeId = "envelope-1",
+  body: string,
   store: Layer.Layer<FeedbackStore> = storageLayer(world),
 ) =>
   Effect.gen(function* () {
     const expected = yield* expectedConfigurationSet;
 
-    yield* handleEvent(expected, detail, envelopeId);
+    yield* handleMessage(expected, body);
   }).pipe(
     Effect.provide(
       Layer.mergeAll(
@@ -196,11 +205,11 @@ const handling = (
     ),
   );
 
-const run = (detail: AWS.SES.EmailEventDetail, envelopeId?: string) =>
+const run = (detail: AWS.SES.EmailEventDetail) =>
   Effect.gen(function* () {
     const world = emptyWorld();
 
-    yield* handling(world, detail, envelopeId);
+    yield* handling(world, envelope(detail));
 
     return world;
   });
@@ -367,6 +376,19 @@ describe("events the handler must not act on", () => {
       }),
     ));
 
+  it("fails the invocation for a message that is not an EventBridge event, and writes nothing", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const world = emptyWorld();
+
+        const attempt = yield* Effect.result(handling(world, lambdaFailureRecord));
+
+        expect(Result.isFailure(attempt)).toBe(true);
+        expect(world.suppressions.size).toBe(0);
+        expect(world.writes).toHaveLength(0);
+      }),
+    ));
+
   it("ignores an event kind it does not classify", () =>
     Effect.runPromise(
       Effect.gen(function* () {
@@ -389,8 +411,8 @@ describe("idempotence and the campaign tag", () => {
         const world = emptyWorld();
         const event = bounceEvent("Permanent", "General");
 
-        yield* handling(world, event, "envelope-1");
-        yield* handling(world, event, "envelope-2");
+        yield* handling(world, envelope(event, "envelope-1"));
+        yield* handling(world, envelope(event, "envelope-2"));
 
         expect(world.suppressions.size).toBe(1);
         expect(world.writes).toHaveLength(2);
@@ -419,7 +441,7 @@ describe("idempotence and the campaign tag", () => {
         });
 
         const attempt = yield* Effect.result(
-          handling(world, bounceEvent("Permanent", "General"), "envelope-1", unavailable),
+          handling(world, envelope(bounceEvent("Permanent", "General")), unavailable),
         );
 
         expect(Result.isFailure(attempt)).toBe(true);
@@ -447,9 +469,9 @@ describe("idempotence and the campaign tag", () => {
       }),
     ));
 
-  // The case the failure queue exists for: the suppression persisted, the history write did not.
-  // The invocation fails, Lambda retries and gives up, and the event lands on the queue. Replaying
-  // it then completes the history without writing the suppression a second time.
+  // The case the dead-letter queue exists for: the suppression persisted, the history write did
+  // not. The invocation fails, SQS redelivers the message until it dead-letters it, and a redrive
+  // then completes the history without writing the suppression a second time.
   it("completes a half-written event on replay without duplicating what already landed", () =>
     Effect.runPromise(
       Effect.gen(function* () {
@@ -471,7 +493,7 @@ describe("idempotence and the campaign tag", () => {
         });
 
         const first = yield* Effect.result(
-          handling(world, bounceEvent("Permanent", "General"), "envelope-1", flaky),
+          handling(world, envelope(bounceEvent("Permanent", "General")), flaky),
         );
 
         expect(Result.isFailure(first)).toBe(true);
@@ -481,7 +503,7 @@ describe("idempotence and the campaign tag", () => {
         historyFails = false;
 
         const replayed = yield* Effect.result(
-          handling(world, bounceEvent("Permanent", "General"), "envelope-1", flaky),
+          handling(world, envelope(bounceEvent("Permanent", "General")), flaky),
         );
 
         expect(Result.isSuccess(replayed)).toBe(true);
@@ -584,7 +606,7 @@ describe("write outcomes and summary", () => {
             }),
         });
 
-        yield* handling(world, bounceEvent("Permanent", "General"), "envelope-1", unknown);
+        yield* handling(world, envelope(bounceEvent("Permanent", "General")), unknown);
 
         expect(world.suppressions.has("hard@example.com")).toBe(true);
         expect(world.writes).toHaveLength(1);
@@ -602,35 +624,31 @@ describe("write outcomes and summary", () => {
     ));
 
   it.each([
-    ["Permanent", "General", { bounced: 1, complained: 0, echoes: 0, transient: 0 }],
-    [
-      "Permanent",
-      "OnAccountSuppressionList",
-      { bounced: 0, complained: 0, echoes: 1, transient: 0 },
-    ],
-    ["Permanent", "Suppressed", { bounced: 0, complained: 0, echoes: 1, transient: 0 }],
-    ["Transient", "MailboxFull", { bounced: 0, complained: 0, echoes: 0, transient: 1 }],
-  ])("summarises a %s/%s bounce as %o", (bounceType, bounceSubType, counts) =>
+    ["Permanent", "General", "permanent-bounce"],
+    ["Permanent", "OnAccountSuppressionList", "suppression-echo"],
+    ["Permanent", "Suppressed", "suppression-echo"],
+    ["Transient", "MailboxFull", "transient-bounce"],
+  ])("summarises a %s/%s bounce as %s", (bounceType, bounceSubType, classification) =>
     Effect.runPromise(
       Effect.gen(function* () {
         const world = yield* run(bounceEvent(bounceType, bounceSubType));
 
         expect(logsNamed(world, "feedback recorded")[0]?.message).toEqual([
           "feedback recorded",
-          expect.objectContaining(counts),
+          expect.objectContaining({ classification }),
         ]);
       }),
     ),
   );
 
-  it("summarises a complaint under complained", () =>
+  it("summarises a complaint as a complaint", () =>
     Effect.runPromise(
       Effect.gen(function* () {
         const world = yield* run(complaintEvent("abuse"));
 
         expect(logsNamed(world, "feedback recorded")[0]?.message).toEqual([
           "feedback recorded",
-          expect.objectContaining({ bounced: 0, complained: 1, echoes: 0, transient: 0 }),
+          expect.objectContaining({ classification: "complaint" }),
         ]);
       }),
     ));

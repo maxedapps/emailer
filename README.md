@@ -31,7 +31,7 @@ Self-hosted marketing email over Amazon SES. Deploy it to your own AWS account, 
   - `alchemy.run.ts` is the service. You deploy it once per stage, such as `prod`.
 - **API:** a Lambda behind a public Function URL, authorized with a bearer token. The CLI is its client.
 - **Sending:** `campaigns send`, or a one-time EventBridge Scheduler schedule, queues the campaign on SQS. A dispatcher Lambda then sends one message per recipient through SES, paced within your quota.
-- **Feedback:** SES bounce and complaint events reach a feedback Lambda through EventBridge. It suppresses the address and counts the event against its campaign.
+- **Feedback:** SES bounce and complaint events reach a feedback Lambda through EventBridge and an SQS queue. It suppresses the address and counts the event against its campaign.
 - **Public pages:** the unsubscribe page and the preview page are separate Lambdas that accept only signed links.
 - **Storage and alerts:** one DynamoDB table holds contacts, lists, campaigns and sends. CloudWatch alarms notify an SNS topic.
 
@@ -181,7 +181,7 @@ aws lambda get-function-configuration --function-name emailer-<stage>-<api|dispa
 
 The three Function URLs are public (`authType: NONE`): the API authorizes with the bearer token; the unsubscribe and preview pages authorize with the signed token in their links.
 
-Outputs: `apiUrl`, `unsubscribeUrl`, `previewUrl`, `feedbackFunctionArn`, `feedbackFailureQueueUrl`, `alertsTopicArn`. Put `apiUrl` in `EMAILER_API_URL`.
+Outputs: `apiUrl`, `unsubscribeUrl`, `previewUrl`, `alertsTopicArn`. Put `apiUrl` in `EMAILER_API_URL`.
 
 ```sh
 pnpm exec alchemy destroy --config alchemy.run.ts --stage prod --env-file .env --profile emailer --yes --no-input
@@ -380,24 +380,22 @@ Every message gets a postal footer, `List-Unsubscribe` and one-click `List-Unsub
 
 | Alarm                                        | Meaning                                                                                                      |
 | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `FeedbackFailuresVisible`                    | A bounce/complaint was accepted and could not be processed. Replay it.                                       |
-| `FeedbackDestinationDeliveryFailures`        | Lambda could not even record the failure. That event is gone.                                                |
+| `FeedbackFailuresVisible`                    | A bounce/complaint was accepted and could not be processed five times. Redrive it.                           |
 | `DispatchFailuresVisible`                    | The dispatcher failed on a campaign's queue message five times. The campaign is stuck `sending`; redrive it. |
 | `SetBounceRate` / `SetComplaintRate`         | This configuration set at 2% bounces / 0.05% complaints. Silent until the set has sent.                      |
 | `AccountBounceRate` / `AccountComplaintRate` | The whole account at 5% / 0.1%, including every other SES sender in the account.                             |
 
 A fresh stage with `EMAILER_ALERT_EMAIL` set can mail several `OK:` notifications on deploy (`OKActions` fire `INSUFFICIENT_DATA` → `OK`). Those actions stay: an alarm returning to OK is the signal to resume a `reputation` pause.
 
-**Replay failed feedback** with the `feedbackFailureQueueUrl` and `feedbackFunctionArn` stack outputs. Like the CLI, it reads `.env` for the Region and credentials.
+**Redrive failed feedback:**
 
 ```sh
-pnpm feedback:replay \
-  --queue-url <feedbackFailureQueueUrl> \
-  --function-arn <feedbackFunctionArn> \
-  --max-messages 10
+aws sqs start-message-move-task \
+  --source-arn <FeedbackFailures ARN> \
+  --destination-arn <FeedbackEvents ARN>
 ```
 
-Safe to repeat. An empty poll is not proof the queue is empty — SQS samples its servers.
+A redriven event that already landed changes nothing.
 
 **Redrive a campaign stuck `sending`:**
 

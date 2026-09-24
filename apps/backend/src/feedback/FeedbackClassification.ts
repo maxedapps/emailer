@@ -121,7 +121,7 @@ const decisions: Record<FeedbackClassification, Decision> = {
   },
 };
 
-export interface ClassifiedFeedback extends Decision {
+interface ClassifiedFeedback extends Decision {
   readonly kind: FeedbackKind;
   readonly feedbackId: string;
   readonly recipients: ReadonlyArray<string>;

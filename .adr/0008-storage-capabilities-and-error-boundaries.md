@@ -26,7 +26,7 @@ Keep one table and four meaningful capability services:
 | FeedbackStore    | Conditional suppression and feedback writes                            | PutItem                                                               |
 | UnsubscribeStore | Conditional mailbox unsubscribe writes                                 | PutItem                                                               |
 
-The API provides the first two; event and public unsubscribe functions provide their specific writer capability. Each live Layer constructs only the bindings it needs. The failure destination separately requires Feedback's SQS SendMessage permission.
+The API provides the first two; event and public unsubscribe functions provide their specific writer capability. Each live Layer constructs only the bindings it needs.
 
 Retain existing item-owner modules. Table.ts owns only the resource; Errors.ts owns internal storage failures; Primitives.ts owns independently constructible bounded operations. Audience.ts and Unsubscribe.ts are new capability owners. Existing Campaigns.ts and Feedback.ts own their respective services. Keep shared values in leaf modules to avoid composition cycles.
 
