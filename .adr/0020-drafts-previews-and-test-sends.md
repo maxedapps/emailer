@@ -21,6 +21,7 @@
 - Supersedes in part:
   - [ADR-0011](0011-open-recipient-set-and-paced-dispatch.md): "The API never submits to SES again and no longer constructs the mailer". The API now sends test messages, and its role regains `ses:SendEmail`.
   - [ADR-0014](0014-campaign-body-item-and-summaries.md): "No campaign delete exists". Drafts can be deleted, both items together.
+  - [ADR-0016](0016-cancelling-pending-campaign-runs.md): the cancel-only conflict. Every wrong-state operation answers one `CampaignStateConflict`.
 - Amends:
   - [ADR-0001](0001-resource-owning-effect-services.md): capabilities are grouped into concern folders.
   - [ADR-0007](0007-immutable-recipient-unsubscribe-links.md): the signing code is shared with preview tokens; the unsubscribe format and secret are unchanged.
