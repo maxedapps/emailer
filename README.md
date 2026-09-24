@@ -1,8 +1,39 @@
 # Emailer
 
-Self-hosted marketing email over Amazon SES. Deploy it to your AWS account, then manage contacts, lists and campaigns from the CLI.
+Self-hosted marketing email over Amazon SES. Deploy it to your own AWS account, then manage contacts, lists and campaigns from the command line.
 
-License: [MIT](LICENSE). Oxlint rules in `tools/oxlint/anti-slop` are vendored from [dmmulroy/anti-slop](https://github.com/dmmulroy/anti-slop) (MIT, Dillon Mulroy).
+## What you get
+
+- **Audience:** contacts with up to 20 `key=value` attributes, lists, and JSON imports.
+- **Campaigns** written in Markdown and rendered to email-safe HTML and plain text, or supplied as your own text and HTML files.
+- **Targeting:** send to a whole list, or only to members whose attributes match a filter.
+- **Drafting:** preview links that open on any device, and `[Test]` copies to up to 20 addresses.
+- **Delivery:** send now or schedule for later; cancel a pending send and resume a paused one.
+- **Compliance:** one-click unsubscribe (`List-Unsubscribe` and `List-Unsubscribe-Post`) and your postal address in every footer.
+- **List hygiene:** bounced and complaining addresses are suppressed automatically. A campaign pauses itself when its list bounces or complains too much, and every campaign pauses when the account's reputation alarms fire.
+- **Pacing:** sends stay within your SES rate and daily quota, with an optional daily cap of your own.
+- **Alerts:** CloudWatch alarms, delivered by email.
+- **Optional:** DNS records (DKIM, SPF, DMARC, MAIL FROM) managed in Route 53 or Cloudflare, and a display name on the From address.
+
+## What it does not do
+
+- There is no web interface. You manage everything from the CLI.
+- There are no sign-up forms or double opt-in. Contacts come in through the CLI.
+- There is no personalization. Every recipient gets the same content, apart from their own unsubscribe link.
+- There is no open or click tracking.
+- Markdown campaigns share one fixed layout. For any other design, supply your own HTML.
+- An import takes at most 20 contacts per call, so a larger file needs a loop.
+
+## How it works
+
+- **Two stacks**, both deployed with [Alchemy](https://alchemy.run):
+  - `stacks/sending-identity.ts` owns the SES domain identity and, optionally, its DNS records. You deploy it once per AWS account and Region.
+  - `alchemy.run.ts` is the service. You deploy it once per stage, such as `prod`.
+- **API:** a Lambda behind a public Function URL, authorized with a bearer token. The CLI is its client.
+- **Sending:** `campaigns send`, or a one-time EventBridge Scheduler schedule, queues the campaign on SQS. A dispatcher Lambda then sends one message per recipient through SES, paced within your quota.
+- **Feedback:** SES bounce and complaint events reach a feedback Lambda through EventBridge. It suppresses the address and counts the event against its campaign.
+- **Public pages:** the unsubscribe page and the preview page are separate Lambdas that accept only signed links.
+- **Storage and alerts:** one DynamoDB table holds contacts, lists, campaigns and sends. CloudWatch alarms notify an SNS topic.
 
 ## Requirements
 
@@ -28,6 +59,7 @@ Do not skip lifecycle scripts. There is no build step: Node 24 runs the TypeScri
    - wait until SES reports it verified.
 5. Deploy the service and put `apiUrl` into `.env` ([Deploy the service](#deploy-the-service)).
 6. If you set `EMAILER_ALERT_EMAIL`, confirm the subscription mail it receives.
+7. Send your first campaign ([Your first campaign](#your-first-campaign)).
 
 Nothing is manual outside the CLI when `EMAILER_DNS` manages your zone, except a DMARC report authorization record on another domain. Without it, you publish DNS by hand:
 
@@ -37,7 +69,7 @@ Nothing is manual outside the CLI when `EMAILER_DNS` manages your zone, except a
 
 ## Configure
 
-Copy `.env.example` to an untracked `.env` and fill it in. Alchemy and the CLI read the file you pass with `--env-file`; they do not interpolate `$OTHER` inside it.
+Copy `.env.example` to an untracked `.env` and fill it in. Alchemy reads the file you pass with `--env-file`, and the CLI reads `.env` (see [Use](#use)). Neither interpolates `$OTHER` inside it.
 
 | Variable                     | Required | Purpose                                                                                                                                                                                                                               |
 | ---------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -147,7 +179,7 @@ After a code change, Alchemy can plan a function as `noop` and keep the old bund
 aws lambda get-function-configuration --function-name emailer-<stage>-<api|dispatcher|feedback|unsubscribe|preview> --query CodeSha256
 ```
 
-The stack deploys five Lambdas (API, dispatcher, bounce/complaint consumer, unsubscribe page, preview page), one table, the dispatch queue and its dead-letter queue, a scheduler group, feedback wiring, seven alarms and an alert topic. The three Function URLs are public (`authType: NONE`): the API authorizes with the bearer token; the unsubscribe and preview pages authorize with the signed token in their links.
+The three Function URLs are public (`authType: NONE`): the API authorizes with the bearer token; the unsubscribe and preview pages authorize with the signed token in their links.
 
 Outputs: `apiUrl`, `unsubscribeUrl`, `previewUrl`, `feedbackFunctionArn`, `feedbackFailureQueueUrl`, `alertsTopicArn`. Put `apiUrl` in `EMAILER_API_URL`.
 
@@ -159,113 +191,209 @@ Destroying a stage deletes its resources and rotates the unsubscribe and preview
 
 ## Use
 
-`pnpm emailer` does not load `.env`. Export the two CLI variables, or pass the file to Node:
+`pnpm emailer` runs the CLI with the `.env` in the repository root; variables already set in your shell take precedence. To use another file, run Node directly, e.g. `node --env-file=.env.test apps/cli/src/main.ts …`.
 
 ```sh
-node --env-file=.env apps/cli/src/main.ts --help
+pnpm emailer --help
+pnpm emailer campaigns create --help
 ```
 
 Successful commands print JSON on **stdout** and exit **0**. Diagnostics go to stderr. A usage error prints help on stdout and exits nonzero, so stdout is machine-readable only when the exit status is zero.
 
-```sh
-node --env-file=.env apps/cli/src/main.ts contacts create --email you@example.com --name "You"
-node --env-file=.env apps/cli/src/main.ts contacts get <contactId>
-node --env-file=.env apps/cli/src/main.ts contacts list --limit 25
-node --env-file=.env apps/cli/src/main.ts contacts by-email --email you@example.com
-node --env-file=.env apps/cli/src/main.ts contacts update <contactId> --email new@example.com --attr plan=pro --attr city=Berlin
-node --env-file=.env apps/cli/src/main.ts contacts update <contactId> --clear-name
-node --env-file=.env apps/cli/src/main.ts contacts delete <contactId>
+Every command also accepts:
 
-node --env-file=.env apps/cli/src/main.ts lists create --name "Readers"
-node --env-file=.env apps/cli/src/main.ts lists get <listId>
-node --env-file=.env apps/cli/src/main.ts lists list
-node --env-file=.env apps/cli/src/main.ts lists members <listId> --limit 50
-node --env-file=.env apps/cli/src/main.ts lists rename <listId> --name "Subscribers"
-node --env-file=.env apps/cli/src/main.ts lists add-contact <listId> <contactId>
-node --env-file=.env apps/cli/src/main.ts lists remove-contact <listId> <contactId>
-node --env-file=.env apps/cli/src/main.ts lists import <listId> --file contacts.json
-node --env-file=.env apps/cli/src/main.ts lists delete <listId>
+- `--wizard`: builds the command by asking for each argument and flag.
+- `--log-level <level>`: how much diagnostic output to write to stderr.
+- `--completions <bash|zsh|fish|sh>`: prints a completion script for a command named `emailer`, e.g. an alias for `pnpm emailer`.
 
-node --env-file=.env apps/cli/src/main.ts campaigns create \
-  --list <listId> --subject "Release notes" --markdown newsletter.md
-node --env-file=.env apps/cli/src/main.ts campaigns create \
-  --list <listId> --subject "Release notes" --text newsletter.txt
-node --env-file=.env apps/cli/src/main.ts campaigns create \
-  --list <listId> --subject "Release notes" --text newsletter.txt --html newsletter.html
-node --env-file=.env apps/cli/src/main.ts campaigns create \
-  --list <listId> --subject "Release notes" --text newsletter.txt --filter plan=pro
-node --env-file=.env apps/cli/src/main.ts campaigns update <campaignId> --markdown newsletter.md
-node --env-file=.env apps/cli/src/main.ts campaigns update <campaignId> --subject "New subject" --clear-filter
-node --env-file=.env apps/cli/src/main.ts campaigns preview <campaignId> --open
-node --env-file=.env apps/cli/src/main.ts campaigns test <campaignId> --to you@example.com --to colleague@example.com
-node --env-file=.env apps/cli/src/main.ts campaigns test <campaignId> --list <listId>
-node --env-file=.env apps/cli/src/main.ts campaigns delete <campaignId>
-node --env-file=.env apps/cli/src/main.ts campaigns send <campaignId>
-node --env-file=.env apps/cli/src/main.ts campaigns get <campaignId>
-node --env-file=.env apps/cli/src/main.ts campaigns list
-node --env-file=.env apps/cli/src/main.ts campaigns schedule <campaignId> --at 2026-09-20T09:00Z
-node --env-file=.env apps/cli/src/main.ts campaigns cancel <campaignId>
-node --env-file=.env apps/cli/src/main.ts campaigns resume <campaignId>
+### Your first campaign
 
-node --env-file=.env apps/cli/src/main.ts addresses status --email you@example.com
-node --env-file=.env apps/cli/src/main.ts addresses unsuppress --email you@example.com
-```
+1. Create a list and note the `id` it prints:
 
-`lists import` expects JSON of the form `{ "contacts": [ { "email": "...", "name": "...", "attributes": { "plan": "pro" } } ] }`. `name` and `attributes` are optional. A file with a key the contract does not declare, such as a misspelled `attributs`, is rejected before anything is sent, and the error names the key's path. Importing an address that already has a contact adds the membership but leaves that contact's name and attributes unchanged; use `contacts update` for those.
+   ```sh
+   pnpm emailer lists create --name "Readers"
+   ```
 
-### Drafting a campaign
+2. Put your contacts in a JSON file. `name` and `attributes` are optional:
 
-1. Write the campaign as one Markdown file and create a draft from it: `campaigns create --markdown newsletter.md`. The CLI renders both parts: HTML with inline styles in a 600px layout, and plain text from the same source.
-2. Run `campaigns preview <id>` for a 24-hour link. It works from any browser, including on a phone or from a headless machine; `--open` also opens it locally.
-3. Edit the file and run `campaigns update <id> --markdown newsletter.md`. Reload the same link to see the change.
-4. Run `campaigns test <id> --to you@example.com` to get a `[Test]` copy in a real inbox.
-5. Run `campaigns send <id>`.
+   ```json
+   {
+     "contacts": [
+       { "email": "ada@example.com", "name": "Ada", "attributes": { "plan": "pro" } },
+       { "email": "grace@example.com" }
+     ]
+   }
+   ```
 
-In Markdown, use absolute `https://` image URLs. Raw HTML passes through unstyled. Every Markdown campaign shares one layout; hand-written bodies still work with `--text` and `--html`.
+   Import it, at most 20 contacts per file:
 
-### Contracts
+   ```sh
+   pnpm emailer lists import <listId> --file contacts.json
+   ```
+
+3. Write the campaign as one Markdown file ([`apps/cli/test/newsletter.md`](apps/cli/test/newsletter.md) is a sample), and create a draft from it:
+
+   ```sh
+   pnpm emailer campaigns create --list <listId> --subject "What's new" --markdown newsletter.md
+   ```
+
+4. Open a preview. The link works for 24 hours in any browser, including on a phone or from a headless machine; `--open` also opens it locally:
+
+   ```sh
+   pnpm emailer campaigns preview <campaignId> --open
+   ```
+
+5. Edit the file, update the draft, and reload the same link:
+
+   ```sh
+   pnpm emailer campaigns update <campaignId> --markdown newsletter.md
+   ```
+
+6. Send yourself a `[Test]` copy:
+
+   ```sh
+   pnpm emailer campaigns test <campaignId> --to you@example.com
+   ```
+
+7. Send it now, or schedule it:
+
+   ```sh
+   pnpm emailer campaigns send <campaignId>
+   pnpm emailer campaigns schedule <campaignId> --at 2030-01-15T09:00Z
+   ```
+
+8. Follow its progress with `pnpm emailer campaigns get <campaignId>`.
+
+**Writing in Markdown.** The CLI renders both parts from the same file: HTML with inline styles in a 600px layout, and plain text. Use absolute `https://` image URLs. Raw HTML passes through unstyled. The service stores only the rendered result, so keep your Markdown file. For your own design, pass `--text` and `--html` files instead of `--markdown`.
+
+### Commands
+
+Each command below is run as `pnpm emailer <command>`. `[…]` marks an optional flag, `a | b` marks alternatives, and `…` marks a flag you can repeat.
+
+**Contacts**
+
+| Command                                                                                                | What it does                                             |
+| ------------------------------------------------------------------------------------------------------ | -------------------------------------------------------- |
+| `contacts create --email <address> [--name <name>]`                                                    | Create a contact                                         |
+| `contacts get <contactId>`                                                                             | Show a contact                                           |
+| `contacts by-email --email <address>`                                                                  | Find the contact that holds an address                   |
+| `contacts list [--limit <n>] [--cursor <cursor>]`                                                      | List contacts in the order they were created             |
+| `contacts update <contactId> [--email <address>] [--name <name> \| --clear-name] [--attr key=value …]` | Change a contact; an omitted flag leaves its field alone |
+| `contacts delete <contactId>`                                                                          | Delete a contact and remove it from every list           |
+
+**Lists**
+
+| Command                                                    | What it does                                               |
+| ---------------------------------------------------------- | ---------------------------------------------------------- |
+| `lists create --name <name>`                               | Create a list                                              |
+| `lists get <listId>`                                       | Show a list                                                |
+| `lists list [--limit <n>] [--cursor <cursor>]`             | List lists in the order they were created                  |
+| `lists members <listId> [--limit <n>] [--cursor <cursor>]` | List a list's contacts                                     |
+| `lists rename <listId> --name <name>`                      | Rename a list                                              |
+| `lists add-contact <listId> <contactId>`                   | Add a contact to a list; repeating it changes nothing      |
+| `lists remove-contact <listId> <contactId>`                | Remove a contact from a list; repeating it changes nothing |
+| `lists import <listId> --file <contacts.json>`             | Create or find up to 20 contacts and add them to the list  |
+| `lists delete <listId>`                                    | Delete a list and its memberships; its contacts stay       |
+
+**Campaigns**
+
+| Command                                                                                                                                                               | What it does                                                  |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| `campaigns create --list <listId> --subject <subject> (--markdown <file> \| --text <file> [--html <file>]) [--filter key=value …]`                                    | Create a draft                                                |
+| `campaigns update <campaignId> [--list <listId>] [--subject <subject>] [--markdown <file> \| --text <file> [--html <file>]] [--filter key=value … \| --clear-filter]` | Change a draft; an omitted flag leaves its field alone        |
+| `campaigns preview <campaignId> [--open]`                                                                                                                             | Create a 24-hour preview link                                 |
+| `campaigns test <campaignId> (--to <address> … \| --list <listId> [--yes])`                                                                                           | Send a `[Test]` copy now                                      |
+| `campaigns send <campaignId>`                                                                                                                                         | Queue the campaign for sending now                            |
+| `campaigns schedule <campaignId> --at <date-time>`                                                                                                                    | Send the campaign at a future time                            |
+| `campaigns cancel <campaignId>`                                                                                                                                       | Withdraw a scheduled or queued send                           |
+| `campaigns resume <campaignId>`                                                                                                                                       | Continue a paused campaign                                    |
+| `campaigns get <campaignId>`                                                                                                                                          | Show a campaign with its body and progress                    |
+| `campaigns list [--limit <n>] [--cursor <cursor>]`                                                                                                                    | List campaigns in the order they were created, without bodies |
+| `campaigns delete <campaignId>`                                                                                                                                       | Delete a draft                                                |
+
+**Addresses**
+
+| Command                                  | What it does                                                       |
+| ---------------------------------------- | ------------------------------------------------------------------ |
+| `addresses status --email <address>`     | Show an address's opt-out, suppression and SES account suppression |
+| `addresses unsuppress --email <address>` | Clear an address's local and SES account suppression               |
+
+### What commands print
+
+- **A contact:** `{ id, email, name?, attributes?, createdAt }`. **A list:** `{ id, name, createdAt }`.
+- **Listings:** `{ items, nextCursor? }`. Pass `nextCursor` as `--cursor` to get the next page.
+- **`lists add-contact` / `remove-contact`:** `{ listId, contactId, member }`. **Deletes:** `{ id, deleted: true }`.
+- **`lists import`:** `{ contacts: [{ email, contactId, member }] }`, one entry per imported address.
+- **A campaign:** `{ id, listId, subject, createdAt, filter?, submission, text, html? }`; `campaigns list` leaves out `text` and `html`.
+  - `submission.state` is `draft`, `scheduled` (with `sendAt`), `queued`, `sending`, `paused` (with a `reason`) or `completed`.
+  - From `sending` on, it carries `progress` (`accepted`, `rejected`, `uncertain`, `skipped`) and `feedback` (`bounced`, `complained`).
+- **`campaigns test`:** `{ recipients: [{ email, outcome, … }] }`. The `outcome` is one of:
+  - `accepted`, with the SES `messageId`;
+  - `skipped`, with a `reason`: `unsubscribed`, `suppressed` or `bouncing`;
+  - `rejected`, with a `rejectionCode`;
+  - `uncertain`: SES's answer was lost.
+- **`campaigns preview`:** `{ url, expiresAt }`.
+- **`addresses status` / `unsuppress`:** `{ email, status, unsubscribedAt?, suppression?, transientBounces, accountSuppression }`, where `status` is `mailable`, `unsubscribed`, `suppressed` or `bouncing`.
+
+### Limits
+
+| What                   | Limit                                                   |
+| ---------------------- | ------------------------------------------------------- |
+| Subject                | 200 characters                                          |
+| Contact and list names | 200 characters                                          |
+| Text body              | 64 KB (UTF-8), including a body rendered from Markdown  |
+| HTML body              | 256 KB (UTF-8), including a body rendered from Markdown |
+| Contact attributes     | 20 entries; keys up to 64 characters, values up to 512  |
+| `lists import`         | 20 contacts per call; one address may not appear twice  |
+| `campaigns test`       | 20 recipients                                           |
+| Listings               | `--limit` 1–100, default 25                             |
+
+### Behavior
 
 - An address identifies at most one contact, case-insensitively. Creating or updating onto an address another contact holds answers **409**.
-- `--attr` replaces the whole attribute map; it does not merge. Repeat it per entry. At most 20 entries, keys ≤ 64 characters, values ≤ 512. An omitted flag leaves a field alone; `--clear-name` removes the name.
-- `--filter` keeps members whose attributes equal every `key=value` (AND). Omit it for the whole list. Non-matches are skipped with no send row and are not counted in `skipped`.
-- `lists import` reports converged state, not a delta. Re-running the same file returns the same answer. At most 20 entries per call; one address may not appear twice. Larger imports are a client-side loop.
+- `--attr` replaces the whole attribute map; it does not merge. Repeat it per entry. `--clear-name` removes the name.
+- `lists import` rejects a file with a key the format does not declare, such as a misspelled `attributs`, before anything is sent, and names the key's path. It reports where each address stands after the import, not what changed, so running the same file again is safe and returns the same answer. An address that already has a contact gains the membership but keeps its name and attributes; use `contacts update` for those.
+- `--filter` keeps members whose attributes equal every `key=value` (AND). Omit it for the whole list. Members that don't match are left out entirely and are not counted in `skipped`.
 - An opt-out holds the address. While opted out, moving the contact onto a different address answers **409** `AddressOptedOut`. Deleting the contact and creating another at the same address does not make it mailable.
 - `addresses unsuppress` clears local suppression and the SES **account** suppression list (one list per account and Region, shared with every other sender there). SES stores suppression entries case-sensitively, so pass the address in the case SES stored it: as the contact holds it (`contacts by-email` shows it) or as `aws sesv2 list-suppressed-destinations` lists it. `addresses status` echoes the address you pass, so another case shows no account entry rather than an error. It never clears an opt-out.
 - Deleting a contact removes it from every list; deleting a list removes every membership in it. Neither deletes the other side. A delete that times out on a large list is safe to repeat.
-- Listings page in created order. `--limit` is 1–100, default 25. A page's `nextCursor` is absent exactly when there is nothing more.
-- `campaigns list` omits the body; `campaigns get` includes it.
-- `campaigns send` exits zero when the campaign is **queued**. Poll `campaigns get` for `progress`, `feedback` (`bounced`, `complained`) and a `paused` reason.
-- `campaigns schedule` exits zero when the campaign is `scheduled`. `--at` is an ISO date (`YYYY-MM-DD`) or date-time with minute precision; no zone means UTC. Past instants are **409**. Scheduler fires with 60-second precision. `campaigns send` on a scheduled campaign sends now.
-- `campaigns cancel` withdraws a pending run. `scheduled`, or a `queued` first send that never started, returns to `draft`. A `queued` resume returns to `paused` with reason `manual`. `sending`, `completed`, and a conflicting replacement generation are **409** `CampaignStateConflict`. Cancel does not stop in-flight SES submissions or recall mail.
+- Listings page in created order. A page's `nextCursor` is absent when there is nothing more; a full last page may still carry one that leads to an empty page.
+- `campaigns send` exits zero when the campaign is **queued**. Poll `campaigns get` for `progress`, `feedback` and a `paused` reason.
+- `campaigns schedule` exits zero when the campaign is `scheduled`. `--at` is an ISO date (`YYYY-MM-DD`) or date-time; no zone means UTC. Past instants are **409**. The scheduler fires with 60-second precision. `campaigns send` on a scheduled campaign sends now.
+- `campaigns cancel` withdraws a pending send. A `scheduled` campaign, or a `queued` first send that never started, returns to `draft`. A `queued` resume returns to `paused` with reason `manual`. A campaign that is `sending` or `completed`, or whose send another command replaced in the meantime, answers **409** `CampaignStateConflict`. Cancel does not stop messages already handed to SES, or recall mail.
 - `campaigns update` and `campaigns delete` apply to drafts only; any other state is **409** `CampaignStateConflict`. Cancel a scheduled campaign to edit it. Content flags replace the whole body: `--text` without `--html` drops an earlier HTML body. `--markdown` excludes `--text`/`--html`. `--clear-filter` sends to the whole list again.
-- `campaigns preview` answers `{ url, expiresAt }`. Anyone holding the link sees that campaign until it expires, so share it like a password. It always renders the campaign as it is now, with a placeholder instead of the recipient's unsubscribe link. A single link cannot be revoked; destroying the stage revokes all of them.
-- `campaigns test` sends right away to 1–20 `--to` addresses, or to a `--list` of at most 20 members; the campaign's filter does not apply. For `--list` it shows the member count and asks on stderr; pass `--yes` when no one can answer (a script or pipe). The subject gets a `[Test] ` prefix. Unsubscribed and suppressed addresses are skipped, and each address gets one attempt. It uses the account's daily quota and send pacing, and answers **503** `SendingPaused` while a reputation halt or the daily budget stops sending. **The unsubscribe link in a test message is real**: clicking it opts that address out of every campaign. A test bounce or complaint suppresses the address but never counts against the campaign.
-- An individual recipient is never retried automatically. A lost SES response stays `uncertain`.
+- `campaigns preview`: anyone holding the link sees that campaign until it expires, so share it like a password. It always renders the campaign as it is now, with a placeholder instead of the recipient's unsubscribe link. A single link cannot be revoked; destroying the stage revokes all of them.
+- `campaigns test` sends right away to the `--to` addresses, or to every member of a `--list`; the campaign's filter does not apply. For `--list` it shows the member count and asks on stderr; pass `--yes` when no one can answer (a script or pipe). The subject gets a `[Test] ` prefix. Unsubscribed, suppressed and bouncing addresses are skipped, and each address gets one attempt. It uses the account's daily quota and send pacing, and answers **503** `SendingPaused` while a reputation halt or the daily budget stops sending. **The unsubscribe link in a test message is real**: clicking it opts that address out of every campaign. A test bounce or complaint suppresses the address but never counts against the campaign.
+- An individual recipient is never retried automatically. A recipient whose SES response was lost stays `uncertain`.
 
 Every message gets a postal footer, `List-Unsubscribe` and one-click `List-Unsubscribe-Post`. Open/click tracking is off.
 
 ## Operate
 
-**Pause reasons.** `reputation` — wait for the alarm to clear or the account to heal, then `campaigns resume`. A forced `ALARM` persists under `TreatMissingData: ignore` until reset (`aws cloudwatch set-alarm-state --state-value OK …`). `feedback` — this campaign's list tripped the breaker (5% hard bounces after 200 accepted, or 0.1% complaints after 1,000 accepted); clean the list before resuming. `rate-limited` / `daily-quota` / `sending-paused` — wait, then resume.
+**Pause reasons.**
+
+- `reputation`: wait for the alarm to clear or the account to heal, then `campaigns resume`. A forced `ALARM` persists under `TreatMissingData: ignore` until reset (`aws cloudwatch set-alarm-state --state-value OK …`).
+- `feedback`: this campaign's list bounced or complained too much (5% hard bounces after 200 accepted, or 0.1% complaints after 1,000 accepted). Clean the list before resuming.
+- `rate-limited` / `daily-quota` / `sending-paused`: wait, then resume.
 
 **Alarms** all notify the stage's alert topic.
 
-| Alarm                                        | Meaning                                                                                   |
-| -------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| `FeedbackFailuresVisible`                    | A bounce/complaint was accepted and could not be processed. Replay it.                    |
-| `FeedbackDestinationDeliveryFailures`        | Lambda could not even record the failure. That event is gone.                             |
-| `DispatchFailuresVisible`                    | A campaign wake-up died after five receives. The campaign is stuck `sending`; redrive it. |
-| `SetBounceRate` / `SetComplaintRate`         | This configuration set at 2% bounces / 0.05% complaints. Silent until the set has sent.   |
-| `AccountBounceRate` / `AccountComplaintRate` | The whole account at 5% / 0.1%, including every other SES sender in the account.          |
+| Alarm                                        | Meaning                                                                                                      |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `FeedbackFailuresVisible`                    | A bounce/complaint was accepted and could not be processed. Replay it.                                       |
+| `FeedbackDestinationDeliveryFailures`        | Lambda could not even record the failure. That event is gone.                                                |
+| `DispatchFailuresVisible`                    | The dispatcher failed on a campaign's queue message five times. The campaign is stuck `sending`; redrive it. |
+| `SetBounceRate` / `SetComplaintRate`         | This configuration set at 2% bounces / 0.05% complaints. Silent until the set has sent.                      |
+| `AccountBounceRate` / `AccountComplaintRate` | The whole account at 5% / 0.1%, including every other SES sender in the account.                             |
 
 A fresh stage with `EMAILER_ALERT_EMAIL` set can mail several `OK:` notifications on deploy (`OKActions` fire `INSUFFICIENT_DATA` → `OK`). Those actions stay: an alarm returning to OK is the signal to resume a `reputation` pause.
 
-**Replay failed feedback** (from the non-secret stack outputs; `--env-file` will not expand `$VAR`):
+**Replay failed feedback** with the `feedbackFailureQueueUrl` and `feedbackFunctionArn` stack outputs. Like the CLI, it reads `.env` for the Region and credentials.
 
 ```sh
-node --env-file=.env apps/backend/src/feedback/ReplayFeedback.ts \
-  --queue-url "$EMAILER_FEEDBACK_FAILURE_QUEUE_URL" \
-  --function-arn "$EMAILER_FEEDBACK_FUNCTION_ARN" \
+pnpm feedback:replay \
+  --queue-url <feedbackFailureQueueUrl> \
+  --function-arn <feedbackFunctionArn> \
   --max-messages 10
 ```
 
@@ -279,9 +407,9 @@ aws sqs start-message-move-task \
   --destination-arn <Dispatch ARN>
 ```
 
-`campaigns resume` does not apply to `sending`. The dispatcher continues from the persisted cursor.
+`campaigns resume` does not apply to `sending`. The dispatcher continues where it stopped.
 
-**A campaign stuck `scheduled`.** Passing the wall-clock minute is not proof of failure (60-second scheduler precision plus queue delay). If it needs to start now, `campaigns send` replaces the run token so a late scheduled wake-up is stale.
+**A campaign stuck `scheduled`.** Passing the scheduled minute is not proof of failure: the scheduler fires within 60 seconds, and the queue adds a delay. If it needs to start now, run `campaigns send`; the scheduled trigger is then ignored when it arrives.
 
 Gmail sends no complaint feedback loop to SES. Watch the domain in Google Postmaster Tools, and read DMARC aggregate reports at the `rua` address you published.
 
@@ -310,6 +438,8 @@ The live integration suite runs against an ephemeral stage. Automated sends go o
    pnpm exec alchemy destroy --config alchemy.run.ts --stage test --env-file .env.test --profile emailer --yes --no-input
    ```
 
-## Credits
+## License and credits
 
-This repository vendors [anti-slop](https://github.com/dmmulroy/anti-slop) by Dillon Mulroy, MIT licensed. The copy lives at `tools/oxlint/anti-slop` with its [LICENSE](tools/oxlint/anti-slop/LICENSE) and [provenance](tools/oxlint/anti-slop/UPSTREAM.md).
+[MIT](LICENSE).
+
+This repository vendors [anti-slop](https://github.com/dmmulroy/anti-slop) by Dillon Mulroy, MIT licensed, for its Oxlint rules. The copy lives at `tools/oxlint/anti-slop` with its [LICENSE](tools/oxlint/anti-slop/LICENSE) and [provenance](tools/oxlint/anti-slop/UPSTREAM.md).
