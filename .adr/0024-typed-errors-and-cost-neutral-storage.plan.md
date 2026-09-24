@@ -417,6 +417,25 @@ Status: Done on 2026-09-24, on the ephemeral stage `test`, which was then destro
   - CloudWatch holds the reporter's line and no marker.
 - **Teardown:** destroy the stage; the inventory shows no leftovers.
 
+### T12 — Uncompressed AWS replies (added on the user's request; runs before T11)
+
+Status: Done on 2026-09-24. On the ephemeral stage `test`, 16 imports in flight into one list for 20 s answered 199 × 200 and 53 × 503 (`StorageUnavailable`: 29 `TransactionCanceledException`, 24 `ThrottlingException`), and no 500. The API's log group held no decode error, and the live suite passed (41 cases). The stage and the throwaway reproduction table were deleted, and the inventory is clean.
+
+- **The bug:** under throttling, some API calls answered an empty 500. Reproduced on a throwaway table with 16 parallel 25-item transactions:
+  - DynamoDB labelled its larger error replies (cancelled transactions of 5–9 KB) `Content-Encoding: gzip`, but the bodies were plain JSON;
+  - Node's fetch asks for gzip on its own, trusted the label and failed ("incorrect header check");
+  - the client surfaced that as a defect (`HttpClientError: Decode error`), which neither the retry policy nor the 503 mapping sees: 189 of 914 replies.
+- **The fix:** every function asks for AWS replies with `accept-encoding: identity`, as the AWS SDKs do (the Go SDK has gzip off by default for DynamoDB; the JS v3 Node client never asks). `FunctionServicesLive` gains a layer that maps the runtime's HTTP client; the client prefers the calling fiber's services, so it applies to every AWS call. With it, the same run gave no compressed reply and no defect, only typed `ThrottlingException` and `TransactionCanceledException` failures.
+- Throttled transactions stay a 503 without a store retry, as `transact` already documents.
+
+**Verify:**
+
+- the transport test asserts every request, retries included, asks for `identity` through `FunctionServicesLive`, and fails without the layer;
+- on an ephemeral stage, 16 parallel imports into one list answer only 200 or 503, never 500;
+- the live suite passes.
+
+**Cost:** none. Lambda and DynamoDB share a Region, so uncompressed replies add no transfer charge.
+
 ### T11 — Prod rollout (after merge, with the user's go-ahead)
 
 Status: Not started

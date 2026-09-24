@@ -13,6 +13,7 @@
   - [ADR-0020](0020-drafts-previews-and-test-sends.md): its statement that the unsubscribe function holds `PutItem` only.
 - Plan: [0024-typed-errors-and-cost-neutral-storage.plan.md](0024-typed-errors-and-cost-neutral-storage.plan.md)
 - Amended: 2026-09-24, in implementation (plan T7). The AWS retry policy is capped with `Schedule.while` on the elapsed time plus the next delay, not with `Schedule.upTo`: `upTo` checks only the elapsed time at each step, so it still granted a wait past the 5 s operation timeout and a persistent failure ended as `TimeoutError`.
+- Amended: 2026-09-24, on the user's request (plan T12). Every function asks for AWS replies uncompressed. DynamoDB labels its larger error replies gzip without compressing them, so Node's fetch failed to decode throttled transactions and the client reported a defect (an empty 500) instead of the error.
 
 ## Context
 

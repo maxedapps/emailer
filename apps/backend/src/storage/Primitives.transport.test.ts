@@ -5,29 +5,34 @@ import { FetchHttpClient } from "effect/unstable/http";
 import { describe, expect, it } from "@effect/vitest";
 import { StorageUnavailable } from "@emailer/api/Errors";
 
-import { AwsRetryLive } from "../Lambda.ts";
+import { FunctionServicesLive } from "../Lambda.ts";
 import { str } from "./Items.ts";
 import { transactionPrimitives, updatePrimitives } from "./Primitives.ts";
 import { tokensFor } from "./Testing.ts";
 
 /**
  * The scripted table sits above the AWS client, so it cannot see the client's own retries. These
- * tests run the two conditional primitives over a stubbed transport, under the retry policy every
+ * tests run the two conditional primitives over a stubbed transport, under the services every
  * function provides, and prove the properties the store relies on: a transient answer is retried by
  * the client with the identical request, token included, and within the operation timeout; a
- * conflict cancellation is retried by the store as a new call with a new token.
+ * conflict cancellation is retried by the store as a new call with a new token; and every reply is
+ * requested uncompressed.
  */
 
 interface Transport {
   readonly fetch: typeof globalThis.fetch;
   readonly attempts: Array<string>;
+  readonly encodings: Array<string | null>;
 }
 
 const transportReplying = (responses: ReadonlyArray<() => Response>): Transport => {
   const attempts: Array<string> = [];
+  const encodings: Array<string | null> = [];
 
   const fetchStub: typeof globalThis.fetch = (input, init) => {
     const request = new Request(input, init);
+
+    encodings.push(request.headers.get("accept-encoding"));
 
     return request.text().then((body) => {
       attempts.push(body);
@@ -42,7 +47,7 @@ const transportReplying = (responses: ReadonlyArray<() => Response>): Transport 
     });
   };
 
-  return { fetch: fetchStub, attempts };
+  return { fetch: fetchStub, attempts, encodings };
 };
 
 interface DynamoDBReply {
@@ -88,17 +93,20 @@ const credentials = fromCredentials(
   "eu-central-1",
 );
 
-const bindings = (transport: Transport) =>
-  Layer.merge(
+const bindings = (transport: Transport) => {
+  const http = Layer.provide(
+    FetchHttpClient.layer,
+    Layer.succeed(FetchHttpClient.Fetch, transport.fetch),
+  );
+
+  return Layer.merge(
     Layer.provide(
       Layer.merge(AWS.DynamoDB.UpdateItemHttp, AWS.DynamoDB.TransactWriteItemsHttp),
-      Layer.merge(
-        credentials,
-        Layer.provide(FetchHttpClient.layer, Layer.succeed(FetchHttpClient.Fetch, transport.fetch)),
-      ),
+      Layer.merge(credentials, http),
     ),
-    AwsRetryLive,
+    Layer.provide(FunctionServicesLive, http),
   );
+};
 
 interface ResourceStandIn {
   readonly LogicalId: string;
@@ -209,6 +217,17 @@ describe("conditional primitives over the real client", () => {
       expect(Result.isSuccess(outcome)).toBe(true);
       expect(transport.attempts).toHaveLength(2);
       expect(transport.attempts[1]).toBe(transport.attempts[0]);
+    }),
+  );
+
+  // DynamoDB labels large error replies gzip without compressing them, which fetch cannot decode.
+  it.live("asks for every reply uncompressed, retries included", () =>
+    Effect.gen(function* () {
+      const transport = transportReplying([serverError, ok]);
+
+      yield* runTransaction(transport);
+
+      expect(transport.encodings).toStrictEqual(["identity", "identity"]);
     }),
   );
 
