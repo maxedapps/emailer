@@ -133,31 +133,24 @@ const wakeQueued = Effect.fn("Campaigns.wakeQueued")(function* (
 export const send = Effect.fn("Campaigns.send")(function* (campaignId: string) {
   const campaigns = yield* CampaignStore;
   const wake = yield* CampaignWake;
-  const schedules = yield* CampaignSchedule;
   const control = yield* campaigns.getCampaignControl(campaignId);
 
   switch (control.state) {
     case "draft":
     case "scheduled": {
-      const predecessor = control.runToken;
       const runToken = yield* newIdentifier;
       const now = yield* nowIso;
 
       const outcome = yield* campaigns.newRun(
         campaignId,
-        { state: control.state, runToken: predecessor },
+        { state: control.state, runToken: control.runToken },
         runToken,
         "queued",
         now,
       );
 
       if (outcome === "queued") {
-        // Wake first so a later cleanup 503 cannot unpublish; the queued write may already be durable.
         yield* wake.enqueue(campaignId, runToken);
-
-        if (predecessor !== undefined) {
-          yield* schedules.remove(predecessor);
-        }
       }
 
       return yield* campaigns.getCampaign(campaignId);
@@ -220,33 +213,20 @@ export const schedule = Effect.fn("Campaigns.schedule")(function* (
   switch (control.state) {
     case "draft":
     case "scheduled": {
-      const predecessor = control.runToken;
       const runToken = yield* newIdentifier;
 
       const outcome = yield* campaigns.newRun(
         campaignId,
-        { state: control.state, runToken: predecessor },
+        { state: control.state, runToken: control.runToken },
         runToken,
         "scheduled",
         sendAt,
       );
 
       if (outcome === "scheduled") {
-        // Durable scheduled intent may precede create or cleanup failure.
+        // Durable scheduled intent may precede a create failure. The predecessor's schedule, and
+        // this one if a cancel lands first, fire stale and delete themselves.
         yield* schedules.create(campaignId, runToken, sendAt);
-
-        const stillScheduled = yield* campaigns.getCampaignControl(campaignId).pipe(
-          Effect.map((current) => current.state === "scheduled" && current.runToken === runToken),
-          Effect.catchTag("NotFound", () => Effect.succeed(false)),
-        );
-
-        if (!stillScheduled) {
-          yield* schedules.remove(runToken);
-        }
-
-        if (predecessor !== undefined) {
-          yield* schedules.remove(predecessor);
-        }
       }
 
       return yield* campaigns.getCampaign(campaignId);
@@ -269,20 +249,15 @@ const cancellationReachedDestination = (source: CampaignControl, current: Campai
   return current.state === "paused" && current.pausedReason === "manual";
 };
 
+/** Withdraws a pending run. Only the campaign changes: its schedule fires stale and deletes itself. */
 export const cancel = Effect.fn("Campaigns.cancel")(function* (campaignId: string) {
   const campaigns = yield* CampaignStore;
-  const schedules = yield* CampaignSchedule;
   const control = yield* campaigns.getCampaignControl(campaignId);
 
   switch (control.state) {
     case "draft":
-    case "paused": {
-      if (control.runToken !== undefined) {
-        yield* schedules.remove(control.runToken);
-      }
-
+    case "paused":
       return yield* campaigns.getCampaign(campaignId);
-    }
 
     case "sending":
     case "completed":
@@ -303,20 +278,13 @@ export const cancel = Effect.fn("Campaigns.cancel")(function* (campaignId: strin
 
       const outcome = yield* campaigns.cancelCampaign(campaignId, source);
 
-      if (outcome === "applied") {
-        // Durable cancellation may precede cleanup failure; repeating cancel retries this token.
-        yield* schedules.remove(runToken);
+      if (outcome === "conflict") {
+        const current = yield* campaigns.getCampaignControl(campaignId);
 
-        return yield* campaigns.getCampaign(campaignId);
+        if (!cancellationReachedDestination(control, current)) {
+          return yield* new Schemas.CampaignStateConflict({ state: current.state });
+        }
       }
-
-      const current = yield* campaigns.getCampaignControl(campaignId);
-
-      if (!cancellationReachedDestination(control, current)) {
-        return yield* new Schemas.CampaignStateConflict({ state: current.state });
-      }
-
-      yield* schedules.remove(runToken);
 
       return yield* campaigns.getCampaign(campaignId);
     }

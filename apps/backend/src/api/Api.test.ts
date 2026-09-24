@@ -473,10 +473,6 @@ const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store 
       Effect.sync(() => {
         sequence.push("createSchedule");
       }),
-    remove: (_runToken) =>
-      Effect.sync(() => {
-        sequence.push("removeSchedule");
-      }),
   });
 
   const setCampaign = (campaign: Schemas.Campaign, runToken?: string) => {
@@ -1301,7 +1297,6 @@ describe("generated client round trip", () => {
         expect(body).toContain(`"state":"${submission.state}"`);
         expect(body).not.toContain("runToken");
         expect(store.writes).not.toContain("cancelCampaign");
-        expect(store.sequence).not.toContain("removeSchedule");
 
         const fetched = yield* client.campaigns.get({ params: { id: campaign.id } });
 

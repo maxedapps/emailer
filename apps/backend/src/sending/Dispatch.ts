@@ -54,8 +54,7 @@ export const dispatchQueue = AWS.SQS.Queue(
  * Stage-owned group for one-shot campaign schedules minted at runtime. A runtime-minted
  * schedule belongs to no Alchemy resource, so alchemy destroy cannot see it; putting every
  * schedule here means DeleteScheduleGroup removes them with the stage. The API function's
- * scheduler:CreateSchedule, scheduler:DeleteSchedule and iam:PassRole grants come from the
- * bindings, not from this module.
+ * scheduler:CreateSchedule and iam:PassRole grants come from the binding, not from this module.
  */
 export const scheduleGroup = AWS.Scheduler.ScheduleGroup("Schedules", {});
 

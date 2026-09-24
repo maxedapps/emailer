@@ -12,7 +12,11 @@ import { unavailable } from "../storage/Errors.ts";
 
 import type { StorageFailure } from "../storage/Errors.ts";
 
-/** One-shot EventBridge schedules that wake a campaign at its send time. */
+/**
+ * One-shot EventBridge schedules that wake a campaign at its send time, each named by its run
+ * token. Nothing deletes one: it deletes itself once it has fired, and the fire of a schedule its
+ * campaign has moved on from is discarded as stale.
+ */
 export class CampaignSchedule extends Context.Service<
   CampaignSchedule,
   {
@@ -21,7 +25,6 @@ export class CampaignSchedule extends Context.Service<
       runToken: string,
       sendAt: string,
     ) => Effect.Effect<void, StorageFailure>;
-    readonly remove: (runToken: string) => Effect.Effect<void, StorageFailure>;
   }
 >()("emailer/backend/CampaignSchedule") {}
 
@@ -29,9 +32,6 @@ export const campaignSchedule = (
   createSchedule: (
     request: AWS.Scheduler.CreateScheduleRequest,
   ) => Effect.Effect<scheduler.CreateScheduleOutput, scheduler.CreateScheduleError>,
-  deleteSchedule: (
-    request: AWS.Scheduler.DeleteScheduleRequest,
-  ) => Effect.Effect<scheduler.DeleteScheduleOutput, scheduler.DeleteScheduleError>,
   queueArn: Effect.Effect<string>,
 ) =>
   CampaignSchedule.of({
@@ -54,12 +54,6 @@ export const campaignSchedule = (
         Effect.mapError(unavailable("schedule")),
         Effect.asVoid,
       ),
-    remove: (runToken: string) =>
-      deleteSchedule({ Name: runToken }).pipe(
-        Effect.catchTag("ResourceNotFoundException", () => Effect.void),
-        Effect.mapError(unavailable("schedule")),
-        Effect.asVoid,
-      ),
   });
 
 export const CampaignScheduleLive = Layer.effect(CampaignSchedule)(
@@ -69,10 +63,7 @@ export const CampaignScheduleLive = Layer.effect(CampaignSchedule)(
 
     return campaignSchedule(
       yield* AWS.Scheduler.CreateSchedule(yield* schedulerRole, group),
-      yield* AWS.Scheduler.DeleteSchedule(group),
       yield* queue.queueArn,
     );
   }),
-).pipe(
-  Layer.provide(Layer.mergeAll(AWS.Scheduler.CreateScheduleHttp, AWS.Scheduler.DeleteScheduleHttp)),
-);
+).pipe(Layer.provide(AWS.Scheduler.CreateScheduleHttp));

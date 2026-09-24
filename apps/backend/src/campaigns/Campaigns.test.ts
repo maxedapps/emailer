@@ -1,6 +1,6 @@
 import { NodeServices } from "@effect/platform-node";
 import * as Schemas from "@emailer/api/Schemas";
-import { Deferred, Effect, Fiber, Layer, Result } from "effect";
+import { Effect, Layer, Result } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { CampaignSchedule } from "./CampaignSchedule.ts";
@@ -54,9 +54,6 @@ interface World {
   readonly control: Map<string, Array<CampaignControl>>;
   readonly order: Array<string>;
   beforeWrite?: Effect.Effect<void>;
-  beforeScheduleCreate?: Effect.Effect<void>;
-  afterScheduleCreate?: Effect.Effect<void>;
-  beforeScheduleRemove?: Effect.Effect<void>;
 }
 
 const emptyWorld = (): World => ({
@@ -310,7 +307,6 @@ interface ScheduleDouble {
     readonly runToken: string;
     readonly sendAt: string;
   }>;
-  readonly removed: Array<string>;
 }
 
 const scheduleDouble = (world: World, failure?: StorageFailure): ScheduleDouble => {
@@ -320,42 +316,19 @@ const scheduleDouble = (world: World, failure?: StorageFailure): ScheduleDouble 
     readonly sendAt: string;
   }> = [];
 
-  const removed: Array<string> = [];
-
   const layer = Layer.succeed(CampaignSchedule)({
     create: (campaignId, runToken, sendAt) =>
       Effect.gen(function* () {
-        if (world.beforeScheduleCreate !== undefined) {
-          yield* world.beforeScheduleCreate;
-        }
-
         if (failure !== undefined) {
           return yield* failure;
         }
 
         world.order.push("create");
         created.push({ campaignId, runToken, sendAt });
-
-        if (world.afterScheduleCreate !== undefined) {
-          yield* world.afterScheduleCreate;
-        }
-      }),
-    remove: (runToken) =>
-      Effect.gen(function* () {
-        if (world.beforeScheduleRemove !== undefined) {
-          yield* world.beforeScheduleRemove;
-        }
-
-        if (failure !== undefined) {
-          return yield* failure;
-        }
-
-        world.order.push("remove");
-        removed.push(runToken);
       }),
   });
 
-  return { layer, created, removed };
+  return { layer, created };
 };
 
 interface Scenario {
@@ -515,12 +488,11 @@ describe("send", () => {
         expect(fix.wake.messages).toHaveLength(1);
         expect(fix.wake.messages[0]?.campaignId).toBe(campaignId);
         expect(fix.world.runTokens.get(campaignId)).toBe(fix.wake.messages[0]?.runToken);
-        expect(fix.schedules.removed).toHaveLength(0);
         expect(storedCampaign(fix).submission.state).toBe("queued");
       }),
     ));
 
-  it("removes a retained predecessor token after enqueueing a draft", () =>
+  it("queues a draft that retains a token under a fresh one", () =>
     Effect.runPromise(
       Effect.gen(function* () {
         const fix = fixture({ runToken: existingRunToken });
@@ -530,8 +502,7 @@ describe("send", () => {
         expect(Result.isSuccess(attempt) && attempt.success?.submission.state).toBe("queued");
         expect(fix.wake.messages).toHaveLength(1);
         expect(fix.wake.messages[0]?.runToken).not.toBe(existingRunToken);
-        expect(fix.schedules.removed).toStrictEqual([existingRunToken]);
-        expect(fix.world.order).toStrictEqual(["newRun:queued", "enqueue", "remove"]);
+        expect(fix.world.order).toStrictEqual(["newRun:queued", "enqueue"]);
       }),
     ));
 
@@ -547,7 +518,6 @@ describe("send", () => {
           queuedAt,
         });
         expect(fix.wake.messages).toStrictEqual([{ campaignId, runToken: existingRunToken }]);
-        expect(fix.schedules.removed).toHaveLength(0);
       }),
     ));
 
@@ -588,7 +558,7 @@ describe("send", () => {
       }),
     ));
 
-  it("queues a scheduled campaign under a fresh token, wakes it, then removes the predecessor schedule", () =>
+  it("queues a scheduled campaign under a fresh token and wakes it", () =>
     Effect.runPromise(
       Effect.gen(function* () {
         const fix = fixture({ campaign: scheduledCampaign, runToken: existingRunToken });
@@ -601,33 +571,6 @@ describe("send", () => {
         expect(fix.wake.messages[0]?.campaignId).toBe(campaignId);
         expect(fix.wake.messages[0]?.runToken).not.toBe(existingRunToken);
         expect(fix.world.runTokens.get(campaignId)).toBe(fix.wake.messages[0]?.runToken);
-        expect(fix.schedules.removed).toStrictEqual([existingRunToken]);
-        expect(storedCampaign(fix).submission.state).toBe("queued");
-        expect(fix.world.order).toStrictEqual(["newRun:queued", "enqueue", "remove"]);
-      }),
-    ));
-
-  it("still publishes the wake when predecessor cleanup fails after send", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const fix = fixture({
-          campaign: scheduledCampaign,
-          runToken: existingRunToken,
-          scheduleFailure: new StorageFailure({
-            operationId: "schedule",
-            reason: "unavailable",
-            cause: "lost",
-          }),
-        });
-
-        const attempt = yield* runPublicly(fix, Campaigns.send(campaignId));
-
-        expect(failureOf(attempt)).toStrictEqual(
-          new Schemas.StorageUnavailable({ operationId: "schedule" }),
-        );
-        expect(fix.wake.messages).toHaveLength(1);
-        expect(fix.wake.messages[0]?.runToken).not.toBe(existingRunToken);
-        expect(fix.schedules.removed).toHaveLength(0);
         expect(storedCampaign(fix).submission.state).toBe("queued");
         expect(fix.world.order).toStrictEqual(["newRun:queued", "enqueue"]);
       }),
@@ -647,7 +590,6 @@ describe("send", () => {
 
         expect(Result.isSuccess(attempt) && attempt.success).toStrictEqual(sendingCampaign);
         expect(fix.wake.messages).toHaveLength(0);
-        expect(fix.schedules.removed).toHaveLength(0);
         expect(fix.world.order).toHaveLength(0);
       }),
     ));
@@ -778,7 +720,6 @@ describe("remove", () => {
 
         expect(Result.isSuccess(attempt)).toBe(true);
         expect(fix.world.campaigns.has(campaignId)).toBe(false);
-        expect(fix.schedules.removed).toHaveLength(0);
       }),
     ));
 
@@ -940,7 +881,6 @@ describe("resume", () => {
         expect(fix.wake.messages[0]?.runToken).not.toBe(existingRunToken);
         expect(fix.world.runTokens.get(campaignId)).toBe(fix.wake.messages[0]?.runToken);
         expect(fix.schedules.created).toHaveLength(0);
-        expect(fix.schedules.removed).toHaveLength(0);
         expect(storedCampaign(fix).submission.state).toBe("queued");
       }),
     ));
@@ -1007,7 +947,6 @@ describe("schedule", () => {
         expect(fix.schedules.created[0]?.campaignId).toBe(campaignId);
         expect(fix.schedules.created[0]?.sendAt).toBe(futureSendAt);
         expect(fix.world.runTokens.get(campaignId)).toBe(fix.schedules.created[0]?.runToken);
-        expect(fix.schedules.removed).toHaveLength(0);
         expect(storedCampaign(fix).submission).toStrictEqual({
           state: "scheduled",
           sendAt: futureSendAt,
@@ -1016,7 +955,7 @@ describe("schedule", () => {
       }),
     ));
 
-  it("creates the new generation before removing the predecessor token", () =>
+  it("reschedules under a fresh generation and leaves the predecessor schedule alone", () =>
     Effect.runPromise(
       Effect.gen(function* () {
         const fix = fixture({ campaign: scheduledCampaign, runToken: existingRunToken });
@@ -1031,73 +970,7 @@ describe("schedule", () => {
         expect(fix.schedules.created[0]?.sendAt).toBe(sendAt);
         expect(createdToken).not.toBe(existingRunToken);
         expect(fix.world.runTokens.get(campaignId)).toBe(createdToken);
-        expect(fix.schedules.removed).toStrictEqual([existingRunToken]);
-        expect(fix.schedules.removed).not.toContain(createdToken);
-        expect(fix.world.order).toStrictEqual(["newRun:scheduled", "create", "remove"]);
-      }),
-    ));
-
-  it("keeps a delayed predecessor delete aimed at the old token, not the new one", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const created = yield* Deferred.make<void>();
-        const allowRemove = yield* Deferred.make<void>();
-        const fix = fixture({ campaign: scheduledCampaign, runToken: existingRunToken });
-        const sendAt = "2099-06-01T00:00:00.000Z";
-
-        fix.world.afterScheduleCreate = Deferred.succeed(created, undefined);
-        fix.world.beforeScheduleRemove = Deferred.await(allowRemove);
-
-        const running = yield* Effect.forkChild(
-          runWith(fix, Campaigns.schedule(campaignId, sendAt)),
-        );
-
-        yield* Deferred.await(created);
-
-        const newToken = fix.schedules.created[0]?.runToken;
-
-        expect(newToken).not.toBe(existingRunToken);
-        expect(fix.schedules.removed).toHaveLength(0);
-
-        yield* Deferred.succeed(allowRemove, undefined);
-
-        const attempt = yield* Fiber.join(running);
-
-        expect(Result.isSuccess(attempt)).toBe(true);
-        expect(fix.schedules.removed).toStrictEqual([existingRunToken]);
-        expect(fix.schedules.removed).not.toContain(newToken);
-        expect(fix.world.order).toStrictEqual(["newRun:scheduled", "create", "remove"]);
-      }),
-    ));
-
-  it("deletes only its own late create when a reread shows a different generation", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const replacementToken = "0195f0a0-1111-4222-8333-44444444e5d3";
-        const fix = fixture({ campaign: scheduledCampaign, runToken: existingRunToken });
-        const sendAt = "2099-06-01T00:00:00.000Z";
-
-        fix.world.afterScheduleCreate = Effect.sync(() => {
-          fix.world.control.set(campaignId, [
-            {
-              state: "scheduled",
-              runToken: replacementToken,
-              startedAt: undefined,
-              pausedReason: undefined,
-            },
-          ]);
-        });
-
-        const attempt = yield* runWith(fix, Campaigns.schedule(campaignId, sendAt));
-        const createdToken = fix.schedules.created[0]?.runToken;
-
-        expect(Result.isSuccess(attempt)).toBe(true);
-        expect(createdToken).not.toBe(existingRunToken);
-        expect(createdToken).not.toBe(replacementToken);
-        expect(fix.schedules.removed).toContain(createdToken);
-        expect(fix.schedules.removed).toContain(existingRunToken);
-        expect(fix.schedules.removed).not.toContain(replacementToken);
-        expect(fix.world.order).toStrictEqual(["newRun:scheduled", "create", "remove", "remove"]);
+        expect(fix.world.order).toStrictEqual(["newRun:scheduled", "create"]);
       }),
     ));
 
@@ -1112,7 +985,6 @@ describe("schedule", () => {
           new Schemas.SendAtNotInFuture({ sendAt: queuedAt }),
         );
         expect(fix.schedules.created).toHaveLength(0);
-        expect(fix.schedules.removed).toHaveLength(0);
         expect(storedCampaign(fix)).toStrictEqual(draftCampaign);
         expect(fix.world.runTokens.has(campaignId)).toBe(false);
         expect(fix.world.order).toHaveLength(0);
@@ -1133,7 +1005,6 @@ describe("schedule", () => {
 
         expect(Result.isSuccess(attempt) && attempt.success).toStrictEqual(campaign);
         expect(fix.schedules.created).toHaveLength(0);
-        expect(fix.schedules.removed).toHaveLength(0);
         expect(fix.world.order).toHaveLength(0);
       }),
     ),
@@ -1156,7 +1027,6 @@ describe("schedule", () => {
           new Schemas.StorageUnavailable({ operationId: "schedule" }),
         );
         expect(fix.schedules.created).toHaveLength(0);
-        expect(fix.schedules.removed).toHaveLength(0);
         expect(storedCampaign(fix).submission).toStrictEqual({
           state: "scheduled",
           sendAt: futureSendAt,
@@ -1179,7 +1049,6 @@ describe("schedule", () => {
 
         expect(Result.isSuccess(attempt) && attempt.success).toStrictEqual(sendingCampaign);
         expect(fix.schedules.created).toHaveLength(0);
-        expect(fix.schedules.removed).toHaveLength(0);
         expect(fix.world.order).toHaveLength(0);
       }),
     ));
@@ -1224,7 +1093,7 @@ describe("cancel", () => {
     });
   };
 
-  it("returns a scheduled campaign to draft, retains the token, and removes the schedule after the write", () =>
+  it("returns a scheduled campaign to draft and retains the token", () =>
     Effect.runPromise(
       Effect.gen(function* () {
         const fix = fixture({ campaign: scheduledCampaign, runToken: existingRunToken });
@@ -1232,10 +1101,9 @@ describe("cancel", () => {
         const attempt = yield* runWith(fix, Campaigns.cancel(campaignId));
 
         expect(Result.isSuccess(attempt) && attempt.success).toStrictEqual(draftCampaign);
-        expect(fix.schedules.removed).toStrictEqual([existingRunToken]);
         expect(fix.world.runTokens.get(campaignId)).toBe(existingRunToken);
         expect(storedCampaign(fix).submission).toStrictEqual({ state: "draft" });
-        expect(fix.world.order).toStrictEqual(["cancelCampaign", "remove"]);
+        expect(fix.world.order).toStrictEqual(["cancelCampaign"]);
       }),
     ));
 
@@ -1249,8 +1117,7 @@ describe("cancel", () => {
         expect(Result.isSuccess(attempt) && attempt.success).toStrictEqual(draftCampaign);
         expect(fix.world.runTokens.get(campaignId)).toBe(existingRunToken);
         expect(storedCampaign(fix).submission).toStrictEqual({ state: "draft" });
-        expect(fix.schedules.removed).toStrictEqual([existingRunToken]);
-        expect(fix.world.order).toStrictEqual(["cancelCampaign", "remove"]);
+        expect(fix.world.order).toStrictEqual(["cancelCampaign"]);
       }),
     ));
 
@@ -1275,8 +1142,7 @@ describe("cancel", () => {
           reason: "manual",
         });
         expect(fix.world.runTokens.get(campaignId)).toBe(existingRunToken);
-        expect(fix.schedules.removed).toStrictEqual([existingRunToken]);
-        expect(fix.world.order).toStrictEqual(["cancelCampaign", "remove"]);
+        expect(fix.world.order).toStrictEqual(["cancelCampaign"]);
       }),
     ));
 
@@ -1284,7 +1150,7 @@ describe("cancel", () => {
     ["draft", draftCampaign],
     ["paused", pausedCampaign],
   ] as const)(
-    "retries deletion of a retained token on an already-inactive %s campaign",
+    "returns an already-inactive %s campaign unchanged and keeps its token",
     (_label, campaign) =>
       Effect.runPromise(
         Effect.gen(function* () {
@@ -1293,30 +1159,16 @@ describe("cancel", () => {
           const attempt = yield* runWith(fix, Campaigns.cancel(campaignId));
 
           expect(Result.isSuccess(attempt) && attempt.success).toStrictEqual(campaign);
-          expect(fix.schedules.removed).toStrictEqual([existingRunToken]);
-          expect(fix.world.order).toStrictEqual(["remove"]);
+          expect(fix.world.order).toHaveLength(0);
           expect(fix.world.runTokens.get(campaignId)).toBe(existingRunToken);
         }),
       ),
   );
 
-  it("leaves a tokenless draft inactive without schedule cleanup", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const fix = fixture();
-
-        const attempt = yield* runWith(fix, Campaigns.cancel(campaignId));
-
-        expect(Result.isSuccess(attempt) && attempt.success).toStrictEqual(draftCampaign);
-        expect(fix.schedules.removed).toHaveLength(0);
-        expect(fix.world.order).toHaveLength(0);
-      }),
-    ));
-
   it.each([
     ["sending", sendingCampaign],
     ["completed", completedCampaign],
-  ] as const)("conflicts with a %s campaign without mutating or cleaning up", (_label, campaign) =>
+  ] as const)("conflicts with a %s campaign without mutating it", (_label, campaign) =>
     Effect.runPromise(
       Effect.gen(function* () {
         const fix = fixture({ campaign, runToken: existingRunToken });
@@ -1327,7 +1179,6 @@ describe("cancel", () => {
           new Schemas.CampaignStateConflict({ state: campaign.submission.state }),
         );
         expect(storedCampaign(fix)).toStrictEqual(campaign);
-        expect(fix.schedules.removed).toHaveLength(0);
         expect(fix.world.order).toHaveLength(0);
       }),
     ),
@@ -1337,29 +1188,26 @@ describe("cancel", () => {
     ["draft", draftCampaign],
     ["paused", pausedCampaign],
     ["sending", sendingCampaign],
-  ] as const)(
-    "conflicts with a replacement %s generation and does not clean it up",
-    (_label, replacement) =>
-      Effect.runPromise(
-        Effect.gen(function* () {
-          const fix = fixture({ campaign: scheduledCampaign, runToken: existingRunToken });
+  ] as const)("conflicts with a replacement %s generation", (_label, replacement) =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const fix = fixture({ campaign: scheduledCampaign, runToken: existingRunToken });
 
-          fix.world.beforeWrite = Effect.sync(() => {
-            fix.world.campaigns.set(campaignId, replacement);
-            fix.world.runTokens.set(campaignId, replacementToken);
-            rememberHistory(fix.world, replacement);
-          });
+        fix.world.beforeWrite = Effect.sync(() => {
+          fix.world.campaigns.set(campaignId, replacement);
+          fix.world.runTokens.set(campaignId, replacementToken);
+          rememberHistory(fix.world, replacement);
+        });
 
-          const attempt = yield* runWith(fix, Campaigns.cancel(campaignId));
+        const attempt = yield* runWith(fix, Campaigns.cancel(campaignId));
 
-          expect(failureOf(attempt)).toStrictEqual(
-            new Schemas.CampaignStateConflict({ state: replacement.submission.state }),
-          );
-          expect(storedCampaign(fix)).toStrictEqual(replacement);
-          expect(fix.world.runTokens.get(campaignId)).toBe(replacementToken);
-          expect(fix.schedules.removed).toHaveLength(0);
-        }),
-      ),
+        expect(failureOf(attempt)).toStrictEqual(
+          new Schemas.CampaignStateConflict({ state: replacement.submission.state }),
+        );
+        expect(storedCampaign(fix)).toStrictEqual(replacement);
+        expect(fix.world.runTokens.get(campaignId)).toBe(replacementToken);
+      }),
+    ),
   );
 
   it("succeeds idempotently when a concurrent cancel already drafted the same scheduled token", () =>
@@ -1375,7 +1223,6 @@ describe("cancel", () => {
 
         expect(Result.isSuccess(attempt) && attempt.success).toStrictEqual(draftCampaign);
         expect(fix.world.runTokens.get(campaignId)).toBe(existingRunToken);
-        expect(fix.schedules.removed).toStrictEqual([existingRunToken]);
       }),
     ));
 
@@ -1409,7 +1256,6 @@ describe("cancel", () => {
 
         expect(Result.isSuccess(attempt) && attempt.success).toStrictEqual(manualPaused);
         expect(fix.world.runTokens.get(campaignId)).toBe(existingRunToken);
-        expect(fix.schedules.removed).toStrictEqual([existingRunToken]);
       }),
     ));
 
@@ -1436,7 +1282,6 @@ describe("cancel", () => {
           reason: "rate-limited",
         });
         expect(fix.world.runTokens.get(campaignId)).toBe(existingRunToken);
-        expect(fix.schedules.removed).toHaveLength(0);
       }),
     ));
 
@@ -1475,7 +1320,6 @@ describe("cancel", () => {
           reason: "rate-limited",
         });
         expect(fix.world.runTokens.get(campaignId)).toBe(existingRunToken);
-        expect(fix.schedules.removed).toHaveLength(0);
       }),
     ));
 
@@ -1500,7 +1344,6 @@ describe("cancel", () => {
           new Schemas.CampaignStateConflict({ state: "sending" }),
         );
         expect(storedCampaign(fix).submission.state).toBe("sending");
-        expect(fix.schedules.removed).toHaveLength(0);
       }),
     ));
 });

@@ -17,31 +17,20 @@ const queueArn = "arn:aws:sqs:eu-west-1:123456789012:jobs";
 
 interface AwsDouble {
   readonly created: Array<AWS.Scheduler.CreateScheduleRequest>;
-  readonly deleted: Array<AWS.Scheduler.DeleteScheduleRequest>;
   readonly failCreate: (error: scheduler.CreateScheduleError) => void;
-  readonly failDelete: (error: scheduler.DeleteScheduleError) => void;
   readonly create: (
     request: AWS.Scheduler.CreateScheduleRequest,
   ) => Effect.Effect<scheduler.CreateScheduleOutput, scheduler.CreateScheduleError>;
-  readonly delete: (
-    request: AWS.Scheduler.DeleteScheduleRequest,
-  ) => Effect.Effect<scheduler.DeleteScheduleOutput, scheduler.DeleteScheduleError>;
 }
 
 const awsDouble = (): AwsDouble => {
   const created: Array<AWS.Scheduler.CreateScheduleRequest> = [];
-  const deleted: Array<AWS.Scheduler.DeleteScheduleRequest> = [];
   let createError: scheduler.CreateScheduleError | undefined;
-  let deleteError: scheduler.DeleteScheduleError | undefined;
 
   return {
     created,
-    deleted,
     failCreate: (error) => {
       createError = error;
-    },
-    failDelete: (error) => {
-      deleteError = error;
     },
     create: (request) =>
       Effect.gen(function* () {
@@ -55,24 +44,13 @@ const awsDouble = (): AwsDouble => {
           ScheduleArn: `arn:aws:scheduler:eu-west-1:123456789012:schedule/${request.Name}`,
         };
       }),
-    delete: (request) =>
-      Effect.gen(function* () {
-        deleted.push(request);
-
-        if (deleteError !== undefined) {
-          return yield* deleteError;
-        }
-
-        return {};
-      }),
   };
 };
 
-const adapterFor = (aws: AwsDouble) =>
-  campaignSchedule(aws.create, aws.delete, Effect.succeed(queueArn));
+const adapterFor = (aws: AwsDouble) => campaignSchedule(aws.create, Effect.succeed(queueArn));
 
 describe("campaignSchedule", () => {
-  it("creates a generation-named one-shot schedule and does not delete", () =>
+  it("creates a generation-named one-shot schedule that deletes itself after it fires", () =>
     Effect.runPromise(
       Effect.gen(function* () {
         const aws = awsDouble();
@@ -81,7 +59,6 @@ describe("campaignSchedule", () => {
         yield* schedules.create(campaignId, runToken, sendAt);
 
         expect(aws.created).toHaveLength(1);
-        expect(aws.deleted).toHaveLength(0);
 
         const request = aws.created[0];
 
@@ -99,44 +76,7 @@ describe("campaignSchedule", () => {
       }),
     ));
 
-  it("removes by run token and treats ResourceNotFoundException as success", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const aws = awsDouble();
-        const schedules = adapterFor(aws);
-
-        aws.failDelete(new scheduler.ResourceNotFoundException({ message: "gone" }));
-
-        yield* schedules.remove(runToken);
-
-        expect(aws.deleted).toStrictEqual([{ Name: runToken }]);
-        expect(aws.created).toHaveLength(0);
-      }),
-    ));
-
-  it("surfaces a different delete error as schedule unavailable", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const aws = awsDouble();
-        const schedules = adapterFor(aws);
-        const conflict = new scheduler.ConflictException({ message: "exists" });
-
-        aws.failDelete(conflict);
-
-        const attempt = yield* Effect.result(schedules.remove(runToken));
-
-        expect(Result.isFailure(attempt) ? attempt.failure : undefined).toStrictEqual(
-          new StorageFailure({
-            operationId: "schedule",
-            reason: "unavailable",
-            cause: conflict,
-          }),
-        );
-        expect(aws.deleted).toStrictEqual([{ Name: runToken }]);
-      }),
-    ));
-
-  it("does not delete when create fails", () =>
+  it("surfaces a create error as schedule unavailable", () =>
     Effect.runPromise(
       Effect.gen(function* () {
         const aws = awsDouble();
@@ -155,7 +95,6 @@ describe("campaignSchedule", () => {
           }),
         );
         expect(aws.created).toHaveLength(1);
-        expect(aws.deleted).toHaveLength(0);
       }),
     ));
 });
