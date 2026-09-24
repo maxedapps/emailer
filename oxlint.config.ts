@@ -3,7 +3,12 @@ import { defineConfig } from "oxlint";
 
 export default defineConfig({
   extends: [recommended],
-  options: { typeAware: true, typeCheck: true },
+  options: {
+    typeAware: true,
+    typeCheck: true,
+    denyWarnings: true,
+    reportUnusedDisableDirectives: "error",
+  },
   plugins: ["typescript", "unicorn", "oxc", "import", "vitest"],
   categories: { correctness: "error" },
   ignorePatterns: [
