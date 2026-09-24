@@ -1,9 +1,9 @@
 import { describe, expect, it } from "@effect/vitest";
+import { StorageUnavailable } from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
 import { ConfigProvider, Effect, Layer, Redacted, Scope } from "effect";
 import { HttpEffect } from "effect/unstable/http";
 
-import { StorageFailure } from "../storage/Errors.ts";
 import { UnsubscribeStore } from "../storage/Unsubscribe.ts";
 import { maxTokenLength, mintToken } from "./Unsubscribe.ts";
 import { makeUnsubscribeHandler } from "./UnsubscribePage.ts";
@@ -38,10 +38,9 @@ const storeWith = (writeFails = false): Store => {
     unsubscribeAddress: (unsubscribe) =>
       writeFails
         ? Effect.fail(
-            new StorageFailure({
-              operationId: "unsubscribeAddress",
-              reason: "unavailable",
-              cause: "boom",
+            new StorageUnavailable({
+              operation: "unsubscribeAddress",
+              failure: "InternalServerError",
             }),
           )
         : Effect.sync(() => {
@@ -218,6 +217,18 @@ describe("POST /unsubscribe/:token", () => {
 
       expect(response.status).toBe(500);
       expect(yield* bodyOf(response)).not.toContain("unsubscribed");
+    }),
+  );
+});
+
+describe("paths it does not serve", () => {
+  it.effect("keep the router's 404", () =>
+    Effect.gen(function* () {
+      const response = yield* Effect.promise(() =>
+        handlerFor(storeWith())(new Request(`${baseUrl}/elsewhere`)),
+      );
+
+      expect(response.status).toBe(404);
     }),
   );
 });

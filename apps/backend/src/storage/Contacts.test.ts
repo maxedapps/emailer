@@ -1,17 +1,18 @@
-import * as Schemas from "@emailer/api/Schemas";
+import * as Errors from "@emailer/api/Errors";
 import { Effect, Struct } from "effect";
 import { describe, expect, it } from "@effect/vitest";
 
+import { CorruptItem } from "../Errors.ts";
 import { tableLogicalId } from "./Items.ts";
 import { contactOperations } from "./Contacts.ts";
 import {
   cancelled,
   contactId,
   createdAt,
-  failureOf,
+  defectOf,
+  primitivesFor,
   scriptedTable,
   serverError,
-  primitivesFor,
 } from "./Testing.ts";
 
 import type { Table } from "./Testing.ts";
@@ -136,7 +137,7 @@ describe("createContact", () => {
         transactWriteItems: [cancelled("None", "ConditionalCheckFailed")],
       });
 
-      expect(yield* Effect.flip(run)).toStrictEqual(new Schemas.EmailAlreadyUsed({ email }));
+      expect(yield* Effect.flip(run)).toStrictEqual(new Errors.EmailAlreadyUsed({ email }));
     }),
   );
 
@@ -146,7 +147,7 @@ describe("createContact", () => {
         transactWriteItems: [cancelled("ConditionalCheckFailed", "None")],
       });
 
-      expect(failureOf(yield* Effect.result(run)).reason).toBe("unavailable");
+      expect(yield* Effect.flip(run)).toBeInstanceOf(Errors.StorageUnavailable);
     }),
   );
 
@@ -156,10 +157,10 @@ describe("createContact", () => {
 
       // Captured once: the stub serves replies by call order, so running the same effect twice
       // would take the default reply and report a success that never happened.
-      const attempt = yield* Effect.result(run);
+      const failure = yield* Effect.flip(run);
 
-      expect(failureOf(attempt).reason).toBe("unavailable");
-      expect(failureOf(attempt).operationId).toBe("createContact");
+      expect(failure).toBeInstanceOf(Errors.StorageUnavailable);
+      expect(failure).toMatchObject({ operation: "createContact" });
     }),
   );
 });
@@ -200,7 +201,7 @@ describe("getContact", () => {
       const storage = operationsFor(scriptedTable({}));
 
       expect(yield* Effect.flip(storage.getContact(contactId))).toStrictEqual(
-        new Schemas.NotFound({ entity: "contact" }),
+        new Errors.ContactNotFound(),
       );
     }),
   );
@@ -213,9 +214,9 @@ describe("getContact", () => {
 
       const storage = operationsFor(table);
 
-      const attempt = yield* Effect.result(storage.getContact(contactId));
+      const defect = yield* defectOf(storage.getContact(contactId));
 
-      expect(failureOf(attempt).reason).toBe("corrupt");
+      expect(defect).toStrictEqual(new CorruptItem({ operation: "getContact" }));
     }),
   );
 
@@ -227,7 +228,9 @@ describe("getContact", () => {
 
       const storage = operationsFor(table);
 
-      expect(failureOf(yield* Effect.result(storage.getContact(contactId))).reason).toBe("corrupt");
+      expect(yield* defectOf(storage.getContact(contactId))).toStrictEqual(
+        new CorruptItem({ operation: "getContact" }),
+      );
     }),
   );
 });
@@ -258,7 +261,7 @@ describe("getContactByEmail", () => {
       const table = scriptedTable({});
 
       expect(yield* Effect.flip(operationsFor(table).getContactByEmail(email))).toStrictEqual(
-        new Schemas.NotFound({ entity: "contact" }),
+        new Errors.ContactNotFound(),
       );
       expect(table.getItemRequests).toHaveLength(1);
     }),
@@ -271,7 +274,7 @@ describe("getContactByEmail", () => {
       });
 
       expect(yield* Effect.flip(operationsFor(table).getContactByEmail(email))).toStrictEqual(
-        new Schemas.NotFound({ entity: "contact" }),
+        new Errors.ContactNotFound(),
       );
     }),
   );
@@ -286,7 +289,7 @@ describe("getContactByEmail", () => {
       });
 
       expect(yield* Effect.flip(operationsFor(table).getContactByEmail(email))).toStrictEqual(
-        new Schemas.NotFound({ entity: "contact" }),
+        new Errors.ContactNotFound(),
       );
     }),
   );
@@ -297,9 +300,9 @@ describe("getContactByEmail", () => {
         getItem: [Effect.succeed({ Item: { pk: { S: `EMAIL#${email}` }, sk: { S: "META" } } })],
       });
 
-      const attempt = yield* Effect.result(operationsFor(table).getContactByEmail(email));
+      const defect = yield* defectOf(operationsFor(table).getContactByEmail(email));
 
-      expect(failureOf(attempt).reason).toBe("corrupt");
+      expect(defect).toStrictEqual(new CorruptItem({ operation: "getContactByEmail" }));
     }),
   );
 });
@@ -327,7 +330,7 @@ describe("updateContact", () => {
     Effect.gen(function* () {
       const { table, run } = update({}, { name: "Maxi" });
 
-      expect(yield* Effect.flip(run)).toStrictEqual(new Schemas.NotFound({ entity: "contact" }));
+      expect(yield* Effect.flip(run)).toStrictEqual(new Errors.ContactNotFound());
       expect(table.transactionRequests).toStrictEqual([]);
     }),
   );
@@ -492,7 +495,7 @@ describe("updateContact", () => {
         { name: "Maxi" },
       );
 
-      expect(failureOf(yield* Effect.result(run)).reason).toBe("unavailable");
+      expect(yield* Effect.flip(run)).toBeInstanceOf(Errors.StorageUnavailable);
     }),
   );
 
@@ -507,7 +510,7 @@ describe("updateContact", () => {
       );
 
       expect(yield* Effect.flip(run)).toStrictEqual(
-        new Schemas.EmailAlreadyUsed({ email: "new@example.com" }),
+        new Errors.EmailAlreadyUsed({ email: "new@example.com" }),
       );
     }),
   );
@@ -524,7 +527,7 @@ describe("updateContact", () => {
           { email: "new@example.com" },
         );
 
-        expect(yield* Effect.flip(run)).toStrictEqual(new Schemas.AddressOptedOut({ email }));
+        expect(yield* Effect.flip(run)).toStrictEqual(new Errors.AddressOptedOut({ email }));
       }),
   );
 
@@ -540,7 +543,7 @@ describe("updateContact", () => {
         { email: "new@example.com" },
       );
 
-      expect(yield* Effect.flip(run)).toStrictEqual(new Schemas.AddressOptedOut({ email }));
+      expect(yield* Effect.flip(run)).toStrictEqual(new Errors.AddressOptedOut({ email }));
     }),
   );
 
@@ -554,7 +557,7 @@ describe("updateContact", () => {
         { email: "new@example.com" },
       );
 
-      expect(failureOf(yield* Effect.result(run)).reason).toBe("unavailable");
+      expect(yield* Effect.flip(run)).toBeInstanceOf(Errors.StorageUnavailable);
     }),
   );
 });

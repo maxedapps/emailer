@@ -1,6 +1,6 @@
-import { Unauthorized } from "@emailer/api/Api";
 import { makeEmailerClient } from "@emailer/api/Client";
 import type { EmailerClient } from "@emailer/api/Client";
+import * as Errors from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
 import {
   Clock,
@@ -17,7 +17,6 @@ import {
 import { describe, expect, it } from "vitest";
 
 import { newIdentifier, nowIso } from "../Identifiers.ts";
-import { StorageFailure } from "../storage/Errors.ts";
 
 import {
   accountSendQuota,
@@ -476,7 +475,7 @@ describe("the deployed service", () => {
           );
 
           expect(Result.isFailure(past) ? past.failure : undefined).toStrictEqual(
-            new Schemas.SendAtNotInFuture({ sendAt: pastSendAt }),
+            new Errors.SendAtNotInFuture({ sendAt: pastSendAt }),
           );
 
           const now = yield* Clock.currentTimeMillis;
@@ -803,7 +802,7 @@ describe("the deployed service", () => {
         );
 
         expect(Result.isFailure(attempt) ? attempt.failure : undefined).toBeInstanceOf(
-          Unauthorized,
+          Errors.Unauthorized,
         );
       }),
     ));
@@ -846,7 +845,7 @@ describe("the deployed table", () => {
         const contactId = yield* contactFor(storage, yield* uniqueAddress);
 
         expect(yield* Effect.flip(storage.addMember(listId, contactId, now))).toStrictEqual(
-          new Schemas.NotFound({ entity: "list" }),
+          new Errors.ListNotFound(),
         );
 
         // No read path shows a membership of a list that is not there, so the absence of both
@@ -1024,7 +1023,7 @@ describe("the deployed contact identity", () => {
               createdAt: now,
             }),
           ),
-        ).toStrictEqual(new Schemas.EmailAlreadyUsed({ email: email.toUpperCase() }));
+        ).toStrictEqual(new Errors.EmailAlreadyUsed({ email: email.toUpperCase() }));
 
         const found = yield* storage.getContactByEmail(email.toUpperCase());
 
@@ -1051,7 +1050,7 @@ describe("the deployed contact identity", () => {
 
         expect(updated.email).toBe(replacement);
         expect(yield* Effect.flip(storage.getContactByEmail(original))).toStrictEqual(
-          new Schemas.NotFound({ entity: "contact" }),
+          new Errors.ContactNotFound(),
         );
         expect((yield* storage.getContactByEmail(replacement)).id).toBe(id);
 
@@ -1108,7 +1107,7 @@ describe("the deployed contact identity", () => {
 
         expect(members.items).toStrictEqual([]);
         expect(yield* Effect.flip(storage.getContact(id))).toStrictEqual(
-          new Schemas.NotFound({ entity: "contact" }),
+          new Errors.ContactNotFound(),
         );
 
         // The reverse item is gone too. No read path exposes it, so it is proven by rebuilding the
@@ -1163,10 +1162,10 @@ describe("the deployed delete cascade", () => {
         yield* storage.deleteList(listId);
 
         expect(yield* Effect.flip(storage.getList(listId))).toStrictEqual(
-          new Schemas.NotFound({ entity: "list" }),
+          new Errors.ListNotFound(),
         );
         expect(yield* Effect.flip(storage.listMembers(listId, 100, undefined))).toStrictEqual(
-          new Schemas.NotFound({ entity: "list" }),
+          new Errors.ListNotFound(),
         );
 
         // `listMembers` reads the list's META first, so its `NotFound` says the list is gone and
@@ -1236,16 +1235,15 @@ describe("the deployed delete cascade", () => {
           ),
         );
 
-        // Slot 0 checks the list, slot 1 checks the contact exists, slot 2 is the holder check.
-        // Exactly that slot failing says DynamoDB refused the stale holder and nothing else.
+        // DynamoDB refused the stale holder: the import wrote nothing and answers a retryable 503.
         const refusal = Result.isFailure(attempt) ? attempt.failure : undefined;
 
-        expect(refusal).toBeInstanceOf(StorageFailure);
-        expect(refusal).toMatchObject({
-          operationId: "importContacts",
-          reason: "unavailable",
-          cause: new Set([2]),
-        });
+        expect(refusal).toStrictEqual(
+          new Errors.StorageUnavailable({
+            operation: "importContacts",
+            failure: "ConditionalCheckFailed",
+          }),
+        );
 
         const members = yield* storage.listMembers(listId, 25, undefined);
 

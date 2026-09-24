@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as Errors from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
 import { ConfigProvider, Duration, Effect, Layer, Result } from "effect";
 
@@ -77,7 +78,7 @@ const fixture = (scenario: Scenario = {}) => {
           pageRequests.push(limit);
 
           if (scenario.listMissing === true) {
-            return yield* new Schemas.NotFound({ entity: "list" });
+            return yield* new Errors.ListNotFound();
           }
 
           const items = [...(scenario.members ?? [])];
@@ -91,9 +92,7 @@ const fixture = (scenario: Scenario = {}) => {
     Layer.succeed(CampaignStore)({
       ...unusedCampaigns,
       getCampaign: (id) =>
-        id === campaignId
-          ? Effect.succeed(campaign)
-          : Effect.fail(new Schemas.NotFound({ entity: "campaign" })),
+        id === campaignId ? Effect.succeed(campaign) : Effect.fail(new Errors.CampaignNotFound()),
     }),
     Layer.succeed(Mailer)({
       send: (recipient, content, unsubscribeUrl, purpose) =>
@@ -236,7 +235,7 @@ describe("sendTest", () => {
       const attempt = yield* run(fix, { listId });
 
       expect(failureOf(attempt)).toStrictEqual(
-        new Schemas.TestAudienceTooLarge({ limit: Schemas.maxTestRecipients }),
+        new Errors.TestAudienceTooLarge({ limit: Schemas.maxTestRecipients }),
       );
       expect(fix.sent).toHaveLength(0);
     }),
@@ -246,15 +245,13 @@ describe("sendTest", () => {
     Effect.gen(function* () {
       const fix = fixture({ listMissing: true });
 
-      expect(failureOf(yield* run(fix, { listId }))).toStrictEqual(
-        new Schemas.NotFound({ entity: "list" }),
-      );
+      expect(failureOf(yield* run(fix, { listId }))).toStrictEqual(new Errors.ListNotFound());
 
       const missing = yield* Effect.result(
         sendTest("0195f0a0-1111-4222-8333-4444444ca40a", { to: ["a@example.com"] }),
       ).pipe(Effect.provide(fix.layer));
 
-      expect(failureOf(missing)).toStrictEqual(new Schemas.NotFound({ entity: "campaign" }));
+      expect(failureOf(missing)).toStrictEqual(new Errors.CampaignNotFound());
       expect(fix.sent).toHaveLength(0);
     }),
   );
@@ -268,7 +265,7 @@ describe("sendTest", () => {
 
       const attempt = yield* run(fix, { to: ["a@example.com"] });
 
-      expect(failureOf(attempt)).toStrictEqual(new Schemas.SendingPaused({ reason }));
+      expect(failureOf(attempt)).toStrictEqual(new Errors.SendingPaused({ reason }));
       expect(fix.sent).toHaveLength(0);
       expect(fix.slots).toHaveLength(0);
     }),

@@ -4,7 +4,7 @@ import * as Schemas from "@emailer/api/Schemas";
 import * as AWS from "alchemy/AWS";
 import { Context, Data, Duration, Effect, Layer } from "effect";
 
-import { describeCause } from "../Diagnostics.ts";
+import { describeCause } from "../Errors.ts";
 import { sendingIdentity } from "../identity/SendingIdentity.ts";
 import { compose, fromHeader, senderSettings } from "./Message.ts";
 

@@ -3,10 +3,10 @@ import { Stack } from "alchemy";
 import * as AWS from "alchemy/AWS";
 import { Config, Duration, Effect, Layer, Schema, Stream } from "effect";
 
-import { reportedAndFatal } from "../Diagnostics.ts";
 import { classify, decodeEmailEvent } from "./FeedbackClassification.ts";
 import { nowIso } from "../Identifiers.ts";
 import { lambdaBasics } from "../Lambda.ts";
+import { failingInvocation, ReportingLive } from "../Reporting.ts";
 import { configurationSet } from "../sending/Mailer.ts";
 import { FeedbackStore, FeedbackStoreLive } from "../storage/Feedback.ts";
 
@@ -252,7 +252,9 @@ const feedbackProps = Effect.gen(function* () {
 });
 
 /** Every service an event uses, bound once per instance. */
-const FeedbackLive = FeedbackStoreLive.pipe(Layer.provideMerge(NodeCrypto.layer));
+const FeedbackLive = Layer.mergeAll(FeedbackStoreLive, ReportingLive).pipe(
+  Layer.provideMerge(NodeCrypto.layer),
+);
 
 export default class FeedbackFunction extends AWS.Lambda.Function<FeedbackFunction>()(
   "Feedback",
@@ -265,7 +267,7 @@ export default class FeedbackFunction extends AWS.Lambda.Function<FeedbackFuncti
         const expected = yield* expectedConfigurationSet;
 
         yield* Stream.runForEach(records, (message) => handleMessage(expected, message.body));
-      }).pipe(Effect.provideContext(services), reportedAndFatal),
+      }).pipe(failingInvocation, Effect.provideContext(services)),
     );
 
     return {};

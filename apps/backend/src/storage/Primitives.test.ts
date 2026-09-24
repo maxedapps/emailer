@@ -1,3 +1,4 @@
+import * as Errors from "@emailer/api/Errors";
 import { Effect, Fiber } from "effect";
 import { TestClock } from "effect/testing";
 import { describe, expect, it } from "@effect/vitest";
@@ -6,14 +7,7 @@ import * as dynamodb from "@distilled.cloud/aws/dynamodb";
 
 import { str, tableLogicalId } from "./Items.ts";
 import { allPrimitives } from "./Primitives.ts";
-import {
-  cancelled,
-  conditionFailed,
-  failureOf,
-  scriptedTable,
-  tokensFor,
-  serverError,
-} from "./Testing.ts";
+import { cancelled, conditionFailed, scriptedTable, tokensFor, serverError } from "./Testing.ts";
 
 import type { ScriptedReplies } from "./Testing.ts";
 
@@ -160,10 +154,10 @@ describe("readItems", () => {
 
       yield* TestClock.adjust(pastEveryDelay);
 
-      const attempt = yield* Effect.result(Fiber.join(running));
+      const failure = yield* Effect.flip(Fiber.join(running));
 
-      expect(failureOf(attempt).operationId).toBe("listContacts");
-      expect(failureOf(attempt).reason).toBe("unavailable");
+      expect(failure).toBeInstanceOf(Errors.StorageUnavailable);
+      expect(failure).toMatchObject({ operation: "listContacts" });
       expect(table.batchGetItemRequests).toHaveLength(4);
     }),
   );
@@ -186,9 +180,9 @@ describe("readItems", () => {
 
       yield* TestClock.adjust(pastEveryDelay);
 
-      const attempt = yield* Effect.result(Fiber.join(running));
+      const failure = yield* Effect.flip(Fiber.join(running));
 
-      expect(failureOf(attempt).reason).toBe("unavailable");
+      expect(failure).toBeInstanceOf(Errors.StorageUnavailable);
       expect(table.batchGetItemRequests.length).toBeLessThan(4);
     }),
   );
@@ -424,10 +418,10 @@ describe("updateIf", () => {
     Effect.gen(function* () {
       const { primitives } = withTable({ updateItem: [Effect.fail(serverError)] });
 
-      const attempt = yield* Effect.result(primitives.updateIf("beginRun", request));
+      const failure = yield* Effect.flip(primitives.updateIf("beginRun", request));
 
-      expect(failureOf(attempt).reason).toBe("unavailable");
-      expect(failureOf(attempt).operationId).toBe("beginRun");
+      expect(failure).toBeInstanceOf(Errors.StorageUnavailable);
+      expect(failure).toMatchObject({ operation: "beginRun" });
     }),
   );
 
@@ -439,11 +433,11 @@ describe("updateIf", () => {
         ],
       });
 
-      const attempt = yield* Effect.result(primitives.updateIf("beginRun", request));
+      const failure = yield* Effect.flip(primitives.updateIf("beginRun", request));
 
       // The scripted table sits above the client, whose default policy retries this class;
       // the primitive itself sends once and reports what came back.
-      expect(failureOf(attempt).reason).toBe("unavailable");
+      expect(failure).toBeInstanceOf(Errors.StorageUnavailable);
       expect(table.updateItemRequests).toHaveLength(1);
     }),
   );
@@ -524,9 +518,9 @@ describe("runTransaction", () => {
         transactWriteItems: [cancelled("ConditionalCheckFailed", "TransactionConflict")],
       });
 
-      const attempt = yield* Effect.result(primitives.runTransaction("claimRecipient", request));
+      const failure = yield* Effect.flip(primitives.runTransaction("claimRecipient", request));
 
-      expect(failureOf(attempt).reason).toBe("unavailable");
+      expect(failure).toBeInstanceOf(Errors.StorageUnavailable);
       expect(table.transactionRequests).toHaveLength(1);
     }),
   );
@@ -541,9 +535,9 @@ describe("runTransaction", () => {
 
       yield* TestClock.adjust(pastEveryDelay);
 
-      const attempt = yield* Effect.result(Fiber.join(running));
+      const failure = yield* Effect.flip(Fiber.join(running));
 
-      expect(failureOf(attempt).reason).toBe("unavailable");
+      expect(failure).toBeInstanceOf(Errors.StorageUnavailable);
       expect(table.transactionRequests).toHaveLength(7);
     }),
   );

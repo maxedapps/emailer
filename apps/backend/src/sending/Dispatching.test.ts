@@ -1,5 +1,6 @@
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
+import * as Errors from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
 import {
   Clock,
@@ -134,7 +135,7 @@ const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> 
           world.listCalls.push({ listId: id, limit, cursor });
 
           if (world.listMissing) {
-            return yield* new Schemas.NotFound({ entity: "list" });
+            return yield* new Errors.ListNotFound();
           }
 
           const items = [...world.members];

@@ -9,7 +9,7 @@ import { dataTable } from "./Table.ts";
 
 import type { TableOperations } from "./Items.ts";
 import type { UpdatePrimitives } from "./Primitives.ts";
-import type { StorageFailure } from "./Errors.ts";
+import type { StorageUnavailable } from "@emailer/api/Errors";
 
 /**
  * Shared send-pacing counter. One item per limiter key; the live Layer binds
@@ -36,7 +36,7 @@ const unsupported = (method: string) =>
     }),
   });
 
-const storeFailure = (cause: StorageFailure | Error) =>
+const storeFailure = (cause: StorageUnavailable | Error) =>
   new RateLimiter.RateLimiterError({
     reason: new RateLimiter.RateLimitStoreError({
       message: "Failed to execute fixedWindow rate limiting command",

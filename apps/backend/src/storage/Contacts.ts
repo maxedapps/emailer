@@ -1,8 +1,14 @@
 import type * as dynamodb from "@distilled.cloud/aws/dynamodb";
+import {
+  AddressOptedOut,
+  ContactNotFound,
+  EmailAlreadyUsed,
+  StorageUnavailable,
+} from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
 import { Effect, Schema, SchemaTransformation, Struct } from "effect";
 
-import { corrupt, unavailable } from "./Errors.ts";
+import { corrupt } from "../Errors.ts";
 import { unsubscribeKey } from "./Addresses.ts";
 import {
   attributeOf,
@@ -139,15 +145,18 @@ export const contactOperations = (
     }
 
     if (outcome.conditionFailures.has(1)) {
-      return yield* new Schemas.EmailAlreadyUsed({ email: contact.email });
+      return yield* new EmailAlreadyUsed({ email: contact.email });
     }
 
-    return yield* unavailable("createContact")(outcome.conditionFailures);
+    return yield* new StorageUnavailable({
+      operation: "createContact",
+      failure: "ConditionalCheckFailed",
+    });
   });
 
-  const readContact = (operationId: string, item: dynamodb.AttributeMap) =>
+  const readContact = (operation: string, item: dynamodb.AttributeMap) =>
     decodeContactItem(item).pipe(
-      Effect.mapError(corrupt(operationId)),
+      corrupt(operation),
       Effect.map((stored): Schemas.Contact => Struct.omit(stored, ["v"])),
     );
 
@@ -155,7 +164,7 @@ export const contactOperations = (
     const response = yield* readItem("getContact", contactKey(contactId));
 
     if (response.Item === undefined) {
-      return yield* new Schemas.NotFound({ entity: "contact" });
+      return yield* new ContactNotFound();
     }
 
     return yield* readContact("getContact", response.Item);
@@ -175,12 +184,10 @@ export const contactOperations = (
     const reservation = yield* readItem("getContactByEmail", reservationKey(email));
 
     if (reservation.Item === undefined) {
-      return yield* new Schemas.NotFound({ entity: "contact" });
+      return yield* new ContactNotFound();
     }
 
-    const reserved = yield* decodeReservation(reservation.Item).pipe(
-      Effect.mapError(corrupt("getContactByEmail")),
-    );
+    const reserved = yield* decodeReservation(reservation.Item).pipe(corrupt("getContactByEmail"));
 
     const found = yield* getContact(reserved.contactId);
 
@@ -188,7 +195,7 @@ export const contactOperations = (
     // cannot disagree. If they ever did, answering "no contact has this address" is honest, where
     // returning a contact under an address it does not hold would not be.
     if (Schemas.mailboxKey(found.email) !== Schemas.mailboxKey(email)) {
-      return yield* new Schemas.NotFound({ entity: "contact" });
+      return yield* new ContactNotFound();
     }
 
     return found;
@@ -278,14 +285,17 @@ export const contactOperations = (
     // Answered before `EmailAlreadyUsed` when both fail: another address can be chosen, an opt-out
     // cannot be worked around.
     if (outcome.conditionFailures.has(1)) {
-      return yield* new Schemas.AddressOptedOut({ email: current.email });
+      return yield* new AddressOptedOut({ email: current.email });
     }
 
     if (outcome.conditionFailures.has(3)) {
-      return yield* new Schemas.EmailAlreadyUsed({ email });
+      return yield* new EmailAlreadyUsed({ email });
     }
 
-    return yield* unavailable("updateContact")(outcome.conditionFailures);
+    return yield* new StorageUnavailable({
+      operation: "updateContact",
+      failure: "ConditionalCheckFailed",
+    });
   });
 
   return {

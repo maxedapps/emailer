@@ -1,33 +1,23 @@
-import type * as Schemas from "@emailer/api/Schemas";
+import type * as cloudwatch from "@distilled.cloud/aws/cloudwatch";
+import type * as sesv2 from "@distilled.cloud/aws/sesv2";
+import {
+  AlarmsUnavailable,
+  EmailServiceUnavailable,
+  StorageUnavailable,
+} from "@emailer/api/Errors";
+import type { SendingPaused } from "@emailer/api/Errors";
 import * as AWS from "alchemy/AWS";
 import { Config, Context, Effect, Layer, Option } from "effect";
 import { RateLimiter } from "effect/unstable/persistence";
 
+import { unavailable } from "../Errors.ts";
 import { reputationAlarms } from "./Reputation.ts";
-import { unavailable } from "../storage/Errors.ts";
 import { RateLimitStoreLive } from "../storage/RateLimit.ts";
-
-import type { StorageFailure } from "../storage/Errors.ts";
-
-export interface SendQuota {
-  readonly MaxSendRate?: number | undefined;
-  readonly Max24HourSend?: number | undefined;
-  readonly SentLast24Hours?: number | undefined;
-}
-
-export interface AccountStatus {
-  readonly SendQuota?: SendQuota | undefined;
-  readonly EnforcementStatus?: string | undefined;
-}
-
-export interface AlarmStates {
-  readonly MetricAlarms?: ReadonlyArray<{ readonly StateValue?: string | undefined }> | undefined;
-}
 
 export interface SendAllowance {
   readonly limit: number;
   /** Why nothing may be sent now. A reputation halt outranks a spent daily budget. */
-  readonly refusal?: Schemas.SendingPaused["reason"];
+  readonly refusal?: SendingPaused["reason"];
 }
 
 /**
@@ -35,8 +25,8 @@ export interface SendAllowance {
  * the optional `EMAILER_DAILY_SEND_CEILING`.
  */
 export const sendGuard = (
-  account: AccountStatus,
-  alarms: AlarmStates,
+  account: sesv2.GetAccountResponse,
+  alarms: cloudwatch.DescribeAlarmsOutput,
   ceiling: number | undefined,
 ): SendAllowance => {
   const quota = account.SendQuota;
@@ -86,7 +76,7 @@ export const makeSlot = (limiter: RateLimiter.RateLimiter) => (limit: number) =>
     })
     .pipe(
       Effect.map((consumed) => consumed.delay),
-      Effect.mapError(unavailable("pacing")),
+      Effect.mapError(unavailable(StorageUnavailable, "pacing")),
     );
 
 const dailySendCeiling = Config.option(Config.Int("EMAILER_DAILY_SEND_CEILING"));
@@ -107,15 +97,13 @@ export class SendGuard extends Context.Service<SendGuard>()("emailer/backend/Sen
     const ceiling = Option.getOrUndefined(yield* dailySendCeiling);
 
     // The binding types its failure as `any`; mapping it here restores a typed failure.
-    const alarmStates: Effect.Effect<AlarmStates, StorageFailure> = Effect.mapError(
-      describeAlarms(),
-      unavailable("describeAlarms"),
-    );
+    const alarmStates: Effect.Effect<cloudwatch.DescribeAlarmsOutput, AlarmsUnavailable> =
+      Effect.mapError(describeAlarms(), unavailable(AlarmsUnavailable, "describeAlarms"));
 
     return {
       // Two independent reads; neither depends on the other.
       current: Effect.zip(
-        getAccount().pipe(Effect.mapError(unavailable("getAccount"))),
+        getAccount().pipe(Effect.mapError(unavailable(EmailServiceUnavailable, "getAccount"))),
         alarmStates,
         { concurrent: true },
       ).pipe(Effect.map(([account, alarms]) => sendGuard(account, alarms, ceiling))),

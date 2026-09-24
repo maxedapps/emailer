@@ -1,4 +1,5 @@
 import * as dynamodb from "@distilled.cloud/aws/dynamodb";
+import * as Errors from "@emailer/api/Errors";
 import { DateTime, Effect, Result } from "effect";
 import { TestClock } from "effect/testing";
 import { describe, expect, it } from "@effect/vitest";
@@ -8,7 +9,6 @@ import { tableLogicalId } from "./Items.ts";
 import {
   conditionFailed,
   createdAt,
-  failureOf,
   scriptedTable,
   serverError,
   primitivesFor,
@@ -126,10 +126,10 @@ describe("suppressAddress", () => {
     Effect.gen(function* () {
       const table = scriptedTable({ putItem: [Effect.fail(serverError)] });
 
-      const attempt = yield* Effect.result(operationsFor(table).suppressAddress(suppression));
+      const failure = yield* Effect.flip(operationsFor(table).suppressAddress(suppression));
 
-      expect(failureOf(attempt).reason).toBe("unavailable");
-      expect(failureOf(attempt).operationId).toBe("suppressAddress");
+      expect(failure).toBeInstanceOf(Errors.StorageUnavailable);
+      expect(failure).toMatchObject({ operation: "suppressAddress" });
     }),
   );
 });
@@ -171,10 +171,10 @@ describe("unsubscribeAddress", () => {
     Effect.gen(function* () {
       const table = scriptedTable({ putItem: [Effect.fail(serverError)] });
 
-      const attempt = yield* Effect.result(operationsFor(table).unsubscribeAddress(unsubscribe));
+      const failure = yield* Effect.flip(operationsFor(table).unsubscribeAddress(unsubscribe));
 
-      expect(failureOf(attempt).reason).toBe("unavailable");
-      expect(failureOf(attempt).operationId).toBe("unsubscribeAddress");
+      expect(failure).toBeInstanceOf(Errors.StorageUnavailable);
+      expect(failure).toMatchObject({ operation: "unsubscribeAddress" });
     }),
   );
 });
@@ -302,10 +302,10 @@ describe("addressStatus", () => {
     Effect.gen(function* () {
       const table = scriptedTable({ batchGetItem: [Effect.fail(serverError)] });
 
-      const attempt = yield* Effect.result(operationsFor(table).addressStatus("sam@example.com"));
+      const failure = yield* Effect.flip(operationsFor(table).addressStatus("sam@example.com"));
 
-      expect(failureOf(attempt).reason).toBe("unavailable");
-      expect(failureOf(attempt).operationId).toBe("addressStatus");
+      expect(failure).toBeInstanceOf(Errors.StorageUnavailable);
+      expect(failure).toMatchObject({ operation: "addressStatus" });
     }),
   );
 });

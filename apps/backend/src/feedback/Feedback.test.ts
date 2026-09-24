@@ -1,10 +1,10 @@
 import { describe, expect, it } from "@effect/vitest";
+import { StorageUnavailable } from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
 import type * as AWS from "alchemy/AWS";
 import { ConfigProvider, Effect, Layer, Logger, References, Result } from "effect";
 
 import { expectedConfigurationSet, handleMessage } from "./Feedback.ts";
-import { StorageFailure } from "../storage/Errors.ts";
 import { FeedbackStore } from "../storage/Feedback.ts";
 
 import type { AddressSuppression } from "../storage/Addresses.ts";
@@ -397,10 +397,9 @@ describe("idempotence and the campaign tag", () => {
         ...storageOperations(world),
         suppressAddress: () =>
           Effect.fail(
-            new StorageFailure({
-              operationId: "suppressAddress",
-              reason: "unavailable",
-              cause: "boom",
+            new StorageUnavailable({
+              operation: "suppressAddress",
+              failure: "InternalServerError",
             }),
           ),
       });
@@ -446,10 +445,9 @@ describe("idempotence and the campaign tag", () => {
           recordFeedback: (row, write) =>
             historyFails
               ? Effect.fail(
-                  new StorageFailure({
-                    operationId: "recordFeedback",
-                    reason: "unavailable",
-                    cause: "boom",
+                  new StorageUnavailable({
+                    operation: "recordFeedback",
+                    failure: "InternalServerError",
                   }),
                 )
               : storageOperations(world).recordFeedback(row, write),

@@ -1,8 +1,9 @@
+import { QueueUnavailable } from "@emailer/api/Errors";
 import { EntityId } from "@emailer/api/Schemas";
 import * as AWS from "alchemy/AWS";
 import { Context, Duration, Effect, Layer, Schema } from "effect";
 
-import { unavailable } from "../storage/Errors.ts";
+import { unavailable } from "../Errors.ts";
 
 /**
  * Campaign wake-up queue, message and sender. This module must not grow a Function class: the API
@@ -116,7 +117,7 @@ export class CampaignWake extends Context.Service<CampaignWake>()("emailer/backe
         encodeDispatchMessage({ campaignId, runToken }).pipe(
           Effect.orDie,
           Effect.flatMap((MessageBody) => sendMessage({ MessageBody })),
-          Effect.mapError(unavailable("dispatch")),
+          Effect.mapError(unavailable(QueueUnavailable, "dispatch")),
           Effect.asVoid,
         ),
     } as const;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
-import * as Schemas from "@emailer/api/Schemas";
+import * as Errors from "@emailer/api/Errors";
 import { Cause, Config, ConfigProvider, Data, Effect, Exit, Runtime, Schema } from "effect";
 import { TestConsole } from "effect/testing";
 import { HttpClientError, HttpClientRequest } from "effect/unstable/http";
@@ -118,11 +118,13 @@ describe("reporting", () => {
   it.effect("still prints a contract error's fields, which are its diagnostic", () =>
     Effect.gen(function* () {
       const { text } = yield* capturing(
-        reporting(Effect.fail(new Schemas.NotFound({ entity: "contact" }))),
+        reporting(Effect.fail(new Errors.EmailAlreadyUsed({ email: "sam@example.com" }))),
       );
 
-      expect(text).toContain("NotFound");
-      expect(text).toContain('"entity": "contact"');
+      expect(text).toContain("EmailAlreadyUsed");
+      expect(text).toContain('"email": "sam@example.com"');
+      // The reporting annotations live on the prototype, so they never print.
+      expect(text).not.toContain("ErrorReporter");
     }),
   );
 

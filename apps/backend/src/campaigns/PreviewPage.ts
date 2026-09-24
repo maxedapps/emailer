@@ -1,8 +1,8 @@
 import { Clock, Duration, Effect, Layer, Option } from "effect";
 import { HttpRouter, HttpServerResponse } from "effect/unstable/http";
 
-import { reportedAndFatal } from "../Diagnostics.ts";
 import { lambdaBasics } from "../Lambda.ts";
+import { ReportingLive, respondingToFailures } from "../Reporting.ts";
 import { compose, escapeHtml, senderSettings } from "../sending/Message.ts";
 import { CampaignReader, CampaignReaderLive } from "../storage/Campaigns.ts";
 import {
@@ -134,8 +134,7 @@ const showPreview = (settings: PreviewSender) =>
       );
     }).pipe(
       // A campaign deleted since the link was signed.
-      Effect.catchTag("NotFound", () => Effect.succeed(notFound)),
-      reportedAndFatal,
+      Effect.catchTag("CampaignNotFound", () => Effect.succeed(notFound)),
     ),
   );
 
@@ -146,7 +145,10 @@ const routerConfig = Layer.succeed(HttpRouter.RouterConfig)({
 
 /** Built once per instance, like the other public page. */
 export const makePreviewHandler = (settings: PreviewSender) =>
-  HttpRouter.toHttpEffect(showPreview(settings)).pipe(Effect.provide(routerConfig));
+  HttpRouter.toHttpEffect(showPreview(settings)).pipe(
+    Effect.map(respondingToFailures),
+    Effect.provide(routerConfig),
+  );
 
 const previewProps = Effect.gen(function* () {
   const { logGroupName, ...basics } = yield* lambdaBasics("Preview", "preview");
@@ -174,7 +176,7 @@ export default PreviewFunction.make(
   Effect.gen(function* () {
     const settings = yield* senderSettings;
     // GetItem on the one table, and nothing else.
-    const services = yield* Layer.build(CampaignReaderLive);
+    const services = yield* Layer.build(Layer.mergeAll(CampaignReaderLive, ReportingLive));
 
     return { fetch: Effect.provideContext(yield* makePreviewHandler(settings), services) };
   }),

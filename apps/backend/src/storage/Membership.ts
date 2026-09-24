@@ -1,9 +1,10 @@
 import type * as dynamodb from "@distilled.cloud/aws/dynamodb";
 import type * as AWS from "alchemy/AWS";
+import { ContactNotFound, ListNotFound, StorageUnavailable } from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
 import { Effect, Schema, Struct } from "effect";
 
-import { corrupt, unavailable } from "./Errors.ts";
+import { corrupt } from "../Errors.ts";
 import {
   contactItem,
   contactKey,
@@ -92,7 +93,7 @@ export const membershipOperations = (
 
   /**
    * Adding to or importing into a list that is gone must write no membership, and removing from one
-   * answers `NotFound`, so each of those transactions carries this check. It targets the list's
+   * answers `ListNotFound`, so each of those transactions carries this check. It targets the list's
    * `META`, never a member item, so it shares a transaction with the member writes without targeting
    * any item twice.
    */
@@ -146,11 +147,11 @@ export const membershipOperations = (
     }
 
     if (outcome.conditionFailures.has(0)) {
-      return yield* new Schemas.NotFound({ entity: "contact" });
+      return yield* new ContactNotFound();
     }
 
     if (outcome.conditionFailures.has(1)) {
-      return yield* new Schemas.NotFound({ entity: "list" });
+      return yield* new ListNotFound();
     }
 
     return "already-member" as const;
@@ -158,7 +159,7 @@ export const membershipOperations = (
 
   /**
    * Both directions go, and slot 2 checks the list, so removing from a list that is not there
-   * answers `NotFound` rather than a quiet success. Neither delete is conditioned: removing
+   * answers `ListNotFound` rather than a quiet success. Neither delete is conditioned: removing
    * someone who is not a member is a no-op, and repeating the request must stay harmless.
    */
   const removeMember = Effect.fn("Storage.removeMember")(function* (
@@ -170,14 +171,14 @@ export const membershipOperations = (
     });
 
     if (!outcome.committed) {
-      return yield* new Schemas.NotFound({ entity: "list" });
+      return yield* new ListNotFound();
     }
   });
 
   /**
    * Members are read from the base table, never from the index, and hydrated into whole contacts:
    * a caller listing a list's members wants the people, and bare identifiers would only force a
-   * second round trip per member. `NotFound` means the list itself is absent, which is a different
+   * second round trip per member. `ListNotFound` means the list itself is absent, which is a different
    * answer from a list with no members.
    */
   const listMembers = Effect.fn("Storage.listMembers")(function* (
@@ -188,7 +189,7 @@ export const membershipOperations = (
     const list = yield* readItem("listMembers", listKey(listId));
 
     if (list.Item === undefined) {
-      return yield* new Schemas.NotFound({ entity: "list" });
+      return yield* new ListNotFound();
     }
 
     const request = {
@@ -206,9 +207,7 @@ export const membershipOperations = (
     const memberIds: Array<string> = [];
 
     for (const item of page.Items ?? []) {
-      const { contactId: memberId } = yield* decodeMemberEntry(item).pipe(
-        Effect.mapError(corrupt("listMembers")),
-      );
+      const { contactId: memberId } = yield* decodeMemberEntry(item).pipe(corrupt("listMembers"));
 
       memberIds.push(memberId);
     }
@@ -216,7 +215,7 @@ export const membershipOperations = (
     const byId = new Map<string, Schemas.Contact>();
 
     for (const item of yield* readItems("listMembers", memberIds.map(contactKey))) {
-      const stored = yield* decodeContactItem(item).pipe(Effect.mapError(corrupt("listMembers")));
+      const stored = yield* decodeContactItem(item).pipe(corrupt("listMembers"));
 
       byId.set(stored.id, Struct.omit(stored, ["v"]));
     }
@@ -235,7 +234,7 @@ export const membershipOperations = (
 
     // A `LastEvaluatedKey` that cannot be turned into a cursor would silently end the listing, so
     // it is decoded rather than read: a page that is there but unreachable is corrupt, not absent.
-    const { sk } = yield* decodeMemberCursor(last).pipe(Effect.mapError(corrupt("listMembers")));
+    const { sk } = yield* decodeMemberCursor(last).pipe(corrupt("listMembers"));
 
     return { items: contacts, nextCursor: sk.slice("MEMBER#".length) } satisfies StoredPage<
       Schemas.Contact,
@@ -279,12 +278,10 @@ export const membershipOperations = (
     const stored = yield* readItem("deleteContact", contactKey(contactId));
 
     if (stored.Item === undefined) {
-      return yield* new Schemas.NotFound({ entity: "contact" });
+      return yield* new ContactNotFound();
     }
 
-    const contact = yield* decodeContactItem(stored.Item).pipe(
-      Effect.mapError(corrupt("deleteContact")),
-    );
+    const contact = yield* decodeContactItem(stored.Item).pipe(corrupt("deleteContact"));
 
     let startKey: dynamodb.AttributeMap | undefined;
 
@@ -305,16 +302,17 @@ export const membershipOperations = (
       );
 
       for (const item of page.Items ?? []) {
-        const { listId } = yield* decodeMembershipEntry(item).pipe(
-          Effect.mapError(corrupt("deleteContact")),
-        );
+        const { listId } = yield* decodeMembershipEntry(item).pipe(corrupt("deleteContact"));
 
         const removal = yield* runTransaction("deleteContact", {
           TransactItems: removeMembership(listId, contactId),
         });
 
         if (!removal.committed) {
-          return yield* unavailable("deleteContact")(removal.conditionFailures);
+          return yield* new StorageUnavailable({
+            operation: "deleteContact",
+            failure: "ConditionalCheckFailed",
+          });
         }
       }
 
@@ -341,7 +339,10 @@ export const membershipOperations = (
     });
 
     if (!outcome.committed) {
-      return yield* unavailable("deleteContact")(outcome.conditionFailures);
+      return yield* new StorageUnavailable({
+        operation: "deleteContact",
+        failure: "ConditionalCheckFailed",
+      });
     }
   });
 
@@ -359,7 +360,7 @@ export const membershipOperations = (
     const stored = yield* readItem("deleteList", listKey(listId));
 
     if (stored.Item === undefined) {
-      return yield* new Schemas.NotFound({ entity: "list" });
+      return yield* new ListNotFound();
     }
 
     let startKey: dynamodb.AttributeMap | undefined;
@@ -380,9 +381,7 @@ export const membershipOperations = (
       const removals: Array<AWS.DynamoDB.TransactWriteItemsRequest["TransactItems"][number]> = [];
 
       for (const item of page.Items ?? []) {
-        const { contactId: memberId } = yield* decodeMemberEntry(item).pipe(
-          Effect.mapError(corrupt("deleteList")),
-        );
+        const { contactId: memberId } = yield* decodeMemberEntry(item).pipe(corrupt("deleteList"));
 
         removals.push(...removeMembership(listId, memberId));
       }
@@ -391,7 +390,10 @@ export const membershipOperations = (
         const outcome = yield* runTransaction("deleteList", { TransactItems: removals });
 
         if (!outcome.committed) {
-          return yield* unavailable("deleteList")(outcome.conditionFailures);
+          return yield* new StorageUnavailable({
+            operation: "deleteList",
+            failure: "ConditionalCheckFailed",
+          });
         }
       }
 
@@ -403,7 +405,10 @@ export const membershipOperations = (
     });
 
     if (!outcome.committed) {
-      return yield* unavailable("deleteList")(outcome.conditionFailures);
+      return yield* new StorageUnavailable({
+        operation: "deleteList",
+        failure: "ConditionalCheckFailed",
+      });
     }
   });
 
@@ -415,7 +420,7 @@ export const membershipOperations = (
    *
    * The pre-read is advisory only — a strong read still does not make a later write atomic. The
    * transaction's own conditions are the authority: slot 0 checks the list, so a missing list is
-   * `NotFound`; every existing contact carries a `ConditionCheck`, so an import racing that
+   * `ListNotFound`; every existing contact carries a `ConditionCheck`, so an import racing that
    * contact's deletion fails rather than resurrecting a membership; and each new address is
    * reserved conditionally, so losing a race to a concurrent creation fails too. Both races
    * resolve on a repeat, whose pre-read then sees the new state.
@@ -433,9 +438,7 @@ export const membershipOperations = (
     const holders = new Map<string, string>();
 
     for (const item of reserved) {
-      const entry = yield* decodeReservationEntry(item).pipe(
-        Effect.mapError(corrupt("importContacts")),
-      );
+      const entry = yield* decodeReservationEntry(item).pipe(corrupt("importContacts"));
 
       holders.set(entry.pk.slice("EMAIL#".length), entry.contactId);
     }
@@ -509,10 +512,13 @@ export const membershipOperations = (
     }
 
     if (outcome.conditionFailures.has(0)) {
-      return yield* new Schemas.NotFound({ entity: "list" });
+      return yield* new ListNotFound();
     }
 
-    return yield* unavailable("importContacts")(outcome.conditionFailures);
+    return yield* new StorageUnavailable({
+      operation: "importContacts",
+      failure: "ConditionalCheckFailed",
+    });
   });
 
   return {

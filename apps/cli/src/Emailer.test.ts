@@ -91,7 +91,7 @@ describe("the emailer executable", { timeout: 60_000 }, () => {
       );
 
       expect(result.exitCode).not.toBe(0);
-      expect(result.stderr).toContain("NotFound");
+      expect(result.stderr).toContain("CampaignNotFound");
       expect(result.stdout).toBe("");
     }).pipe(Effect.provide(NodeServices.layer)),
   );

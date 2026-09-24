@@ -6,9 +6,8 @@
  */
 import * as dynamodb from "@distilled.cloud/aws/dynamodb";
 import type * as AWS from "alchemy/AWS";
-import { Effect, Result } from "effect";
+import { Cause, Effect, Exit, Result } from "effect";
 
-import { StorageFailure } from "./Errors.ts";
 import { allPrimitives } from "./Primitives.ts";
 
 import type { TransactionTokens } from "./Primitives.ts";
@@ -111,14 +110,17 @@ export const conditionFailed = Effect.fail(
   new dynamodb.ConditionalCheckFailedException({ message: "the conditional request failed" }),
 );
 
-/** The storage failure an operation ended with. A success, or a contract error, fails the test. */
-export const failureOf = <A, E>(attempt: Result.Result<A, E>): StorageFailure => {
-  if (Result.isSuccess(attempt) || !(attempt.failure instanceof StorageFailure)) {
-    throw new Error("Expected the operation to fail with a storage failure");
-  }
+/** The defect an operation died with, such as `CorruptItem`. Anything else fails the test. */
+export const defectOf = <A, E, R>(operation: Effect.Effect<A, E, R>) =>
+  Effect.map(Effect.exit(operation), (exit) => {
+    const defect = Exit.isFailure(exit) ? Cause.findDefect(exit.cause) : undefined;
 
-  return attempt.failure;
-};
+    if (defect === undefined || Result.isFailure(defect)) {
+      throw new Error("Expected the operation to die");
+    }
+
+    return defect.success;
+  });
 
 export const contactId = "0195f0a0-1111-4222-8333-44444444c001";
 

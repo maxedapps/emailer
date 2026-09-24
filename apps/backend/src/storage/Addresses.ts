@@ -1,8 +1,9 @@
 import type * as dynamodb from "@distilled.cloud/aws/dynamodb";
+import { StorageUnavailable } from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
 import { Clock, Duration, Effect, Schema, Struct } from "effect";
 
-import { corrupt, unavailable } from "./Errors.ts";
+import { corrupt } from "../Errors.ts";
 import {
   attributeOf,
   num,
@@ -152,9 +153,7 @@ export const addressReads = (primitives: BatchPrimitives) => {
         return "mailable" as const;
       }
 
-      const stored = yield* decodeStoredTransient(transient).pipe(
-        Effect.mapError(corrupt(operationId)),
-      );
+      const stored = yield* decodeStoredTransient(transient).pipe(corrupt(operationId));
 
       const now = yield* Clock.currentTimeMillis;
 
@@ -205,23 +204,18 @@ export const addressReads = (primitives: BatchPrimitives) => {
     const unsubscribe =
       rows.unsubscribe === undefined
         ? undefined
-        : yield* decodeStoredUnsubscribe(rows.unsubscribe).pipe(
-            Effect.mapError(corrupt("addressRecord")),
-          );
+        : yield* decodeStoredUnsubscribe(rows.unsubscribe).pipe(corrupt("addressRecord"));
 
     const suppression =
       rows.suppression === undefined
         ? undefined
-        : yield* decodeStoredSuppression(rows.suppression).pipe(
-            Effect.mapError(corrupt("addressRecord")),
-          );
+        : yield* decodeStoredSuppression(rows.suppression).pipe(corrupt("addressRecord"));
 
     const transientBounces =
       rows.transient === undefined
         ? []
-        : ((yield* decodeStoredTransient(rows.transient).pipe(
-            Effect.mapError(corrupt("addressRecord")),
-          )).occurrences?.SS ?? []);
+        : ((yield* decodeStoredTransient(rows.transient).pipe(corrupt("addressRecord"))).occurrences
+            ?.SS ?? []);
 
     const record = { email, status: rows.status, transientBounces, accountSuppression: null };
 
@@ -252,7 +246,10 @@ export const addressWrites = (primitives: TransactionPrimitives) => {
     });
 
     if (!outcome.committed) {
-      return yield* unavailable("unsuppress")(outcome);
+      return yield* new StorageUnavailable({
+        operation: "unsuppress",
+        failure: "ConditionalCheckFailed",
+      });
     }
   });
 

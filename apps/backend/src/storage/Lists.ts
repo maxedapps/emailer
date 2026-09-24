@@ -1,7 +1,8 @@
+import { ListNotFound } from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
 import { Effect, Schema, Struct } from "effect";
 
-import { corrupt } from "./Errors.ts";
+import { corrupt } from "../Errors.ts";
 import {
   attributeOf,
   listingAttributes,
@@ -53,10 +54,10 @@ export const listOperations = (
     const response = yield* readItem("getList", listKey(listId));
 
     if (response.Item === undefined) {
-      return yield* new Schemas.NotFound({ entity: "list" });
+      return yield* new ListNotFound();
     }
 
-    const stored = yield* decodeStoredList(response.Item).pipe(Effect.mapError(corrupt("getList")));
+    const stored = yield* decodeStoredList(response.Item).pipe(corrupt("getList"));
 
     return Struct.omit(stored, ["v"]);
   });
@@ -69,7 +70,7 @@ export const listOperations = (
 
     const lists = yield* Effect.forEach(page.items, (item) =>
       decodeStoredList(item).pipe(
-        Effect.mapError(corrupt("listLists")),
+        corrupt("listLists"),
         Effect.map((stored) => Struct.omit(stored, ["v"])),
       ),
     );
@@ -93,12 +94,10 @@ export const listOperations = (
     });
 
     if (!outcome.applied) {
-      return yield* new Schemas.NotFound({ entity: "list" });
+      return yield* new ListNotFound();
     }
 
-    const stored = yield* decodeStoredList(outcome.attributes).pipe(
-      Effect.mapError(corrupt("renameList")),
-    );
+    const stored = yield* decodeStoredList(outcome.attributes).pipe(corrupt("renameList"));
 
     return Struct.omit(stored, ["v"]);
   });

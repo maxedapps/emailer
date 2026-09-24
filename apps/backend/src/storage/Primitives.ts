@@ -2,7 +2,9 @@ import type * as dynamodb from "@distilled.cloud/aws/dynamodb";
 import type * as AWS from "alchemy/AWS";
 import { Data, Duration, Effect, Predicate, Random, Schedule, Schema } from "effect";
 
-import { corrupt, StorageFailure, unavailable } from "./Errors.ts";
+import { StorageUnavailable } from "@emailer/api/Errors";
+
+import { corrupt, unavailable } from "../Errors.ts";
 import { attributeOf, listingIndexName, operationTimeout, str, tableLogicalId } from "./Items.ts";
 
 import type { TableOperations } from "./Items.ts";
@@ -14,6 +16,9 @@ const CancellationCodes = Schema.UndefinedOr(
 );
 
 const decodeCancellationCodes = Schema.decodeUnknownEffect(CancellationCodes);
+
+/** Every failure of a table call: the store was unreachable, timed out, or refused the request. */
+const storageUnavailable = (operation: string) => unavailable(StorageUnavailable, operation);
 
 type TransactionOutcome =
   | { readonly committed: true }
@@ -75,11 +80,11 @@ const decodeIndexEntry = Schema.decodeUnknownEffect(IndexEntry);
  * An unreadable `LastEvaluatedKey` is corrupt rather than absent, for the same reason: reading it
  * as "no more pages" would truncate the listing silently.
  */
-const nextCursorOf = (operationId: string, lastEvaluatedKey: dynamodb.AttributeMap | undefined) =>
+const nextCursorOf = (operation: string, lastEvaluatedKey: dynamodb.AttributeMap | undefined) =>
   lastEvaluatedKey === undefined
     ? Effect.undefined
     : decodeIndexEntry(lastEvaluatedKey).pipe(
-        Effect.mapError(corrupt(operationId)),
+        corrupt(operation),
         Effect.map((entry) => entry.gsi1sk),
       );
 
@@ -104,7 +109,7 @@ export const readPrimitives = (operations: Pick<TableOperations, "getItem">) => 
   const readItem = (operationId: string, key: AWS.DynamoDB.GetItemRequest["Key"]) =>
     operations
       .getItem({ Key: key, ConsistentRead: true })
-      .pipe(Effect.timeout(operationTimeout), Effect.mapError(unavailable(operationId)));
+      .pipe(Effect.timeout(operationTimeout), Effect.mapError(storageUnavailable(operationId)));
 
   return { readItem } as const;
 };
@@ -122,7 +127,7 @@ export const writePrimitives = (operations: Pick<TableOperations, "putItem">) =>
     operations.putItem({ Item: item, ConditionExpression: "attribute_not_exists(pk)" }).pipe(
       Effect.timeout(operationTimeout),
       Effect.catchTag("ConditionalCheckFailedException", () => Effect.void),
-      Effect.mapError(unavailable(operationId)),
+      Effect.mapError(storageUnavailable(operationId)),
       Effect.asVoid,
     );
 
@@ -150,14 +155,14 @@ export const updatePrimitives = (operations: Pick<TableOperations, "updateItem">
   const updateIf = (
     operationId: string,
     request: AWS.DynamoDB.UpdateItemRequest,
-  ): Effect.Effect<UpdateIfResult, StorageFailure> =>
+  ): Effect.Effect<UpdateIfResult, StorageUnavailable> =>
     operations.updateItem(request).pipe(
       Effect.map((output): UpdateIfResult => ({ applied: true, attributes: output.Attributes })),
       Effect.catchTag("ConditionalCheckFailedException", () =>
         Effect.succeed<UpdateIfResult>({ applied: false }),
       ),
       Effect.timeout(operationTimeout),
-      Effect.mapError(unavailable(operationId)),
+      Effect.mapError(storageUnavailable(operationId)),
     );
 
   return { updateIf } as const;
@@ -179,7 +184,7 @@ const queryPrimitives = (operations: Pick<TableOperations, "query">) => {
   ) =>
     operations
       .query(target === "index" ? request : { ...request, ConsistentRead: true })
-      .pipe(Effect.timeout(operationTimeout), Effect.mapError(unavailable(operationId)));
+      .pipe(Effect.timeout(operationTimeout), Effect.mapError(storageUnavailable(operationId)));
 
   return { runQuery } as const;
 };
@@ -228,7 +233,7 @@ const batchPrimitives = (operations: Pick<TableOperations, "batchGetItem">) => {
       for (let attempt = 1; attempt <= batchAttempts; attempt += 1) {
         const response = yield* operations
           .batchGetItem({ RequestItems: { [tableLogicalId]: requested } })
-          .pipe(Effect.mapError(unavailable(operationId)));
+          .pipe(Effect.mapError(storageUnavailable(operationId)));
 
         items.push(...responseItems(response));
 
@@ -250,12 +255,16 @@ const batchPrimitives = (operations: Pick<TableOperations, "batchGetItem">) => {
         }
       }
 
-      return yield* unavailable(operationId)(new IncompleteBatch({ items, pending: requested }));
+      return yield* storageUnavailable(operationId)(
+        new IncompleteBatch({ items, pending: requested }),
+      );
     }).pipe(
       // One deadline for the whole operation, retries included, rather than one per attempt: the
       // caller's budget does not grow because the store needed several rounds.
       Effect.timeout(batchDeadline),
-      Effect.catchTag("TimeoutError", (timeout) => Effect.fail(unavailable(operationId)(timeout))),
+      Effect.catchTag("TimeoutError", (timeout) =>
+        Effect.fail(storageUnavailable(operationId)(timeout)),
+      ),
     );
 
   return { readItems } as const;
@@ -308,9 +317,7 @@ const pagePrimitives = (primitives: QueryPrimitives & BatchPrimitives) => {
       const keys: Array<dynamodb.AttributeMap> = [];
 
       for (const entry of page.Items ?? []) {
-        const { gsi1sk } = yield* decodeIndexEntry(entry).pipe(
-          Effect.mapError(corrupt(operationId)),
-        );
+        const { gsi1sk } = yield* decodeIndexEntry(entry).pipe(corrupt(operationId));
 
         keys.push(keyOf(gsi1sk.slice(gsi1sk.indexOf("#") + 1)));
       }
@@ -365,7 +372,7 @@ export const transactionPrimitives = (
   const runTransaction = (
     operationId: string,
     request: TransactionRequest,
-  ): Effect.Effect<TransactionOutcome, StorageFailure> =>
+  ): Effect.Effect<TransactionOutcome, StorageUnavailable> =>
     tokens.pipe(
       Effect.flatMap((token) =>
         operations.transactWriteItems({ ...request, ClientRequestToken: token }).pipe(
@@ -397,7 +404,7 @@ export const transactionPrimitives = (
       ),
       Effect.retry({ schedule: conflictRetry, while: isConflictCancellation }),
       Effect.timeout(operationTimeout),
-      Effect.mapError(unavailable(operationId)),
+      Effect.mapError(storageUnavailable(operationId)),
     );
 
   return { runTransaction } as const;

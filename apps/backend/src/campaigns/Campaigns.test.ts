@@ -1,16 +1,16 @@
 import { NodeServices } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
+import * as Errors from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
 import { Effect, Layer, Result } from "effect";
 
 import { CampaignSchedule } from "./CampaignSchedule.ts";
 import * as Campaigns from "./Campaigns.ts";
+import { CorruptItem } from "../Errors.ts";
 import { CampaignWake } from "../sending/Dispatch.ts";
-import { publicly } from "../Diagnostics.ts";
 import { AudienceStore } from "../storage/Audience.ts";
 import { CampaignStore } from "../storage/Campaigns.ts";
-import { StorageFailure } from "../storage/Errors.ts";
-import { unusedAudience, unusedCampaigns } from "../storage/Testing.ts";
+import { defectOf, unusedAudience, unusedCampaigns } from "../storage/Testing.ts";
 
 import type { CampaignControl } from "../storage/Campaigns.ts";
 
@@ -135,8 +135,8 @@ const rememberHistory = (world: World, campaign: Schemas.Campaign) => {
 };
 
 /** A stored entity, or the store's answer for one that is not there. */
-const found = <A>(value: A | undefined, entity: Schemas.NotFound["entity"]) =>
-  value === undefined ? Effect.fail(new Schemas.NotFound({ entity })) : Effect.succeed(value);
+const found = <A, E>(value: A | undefined, missing: E) =>
+  value === undefined ? Effect.fail(missing) : Effect.succeed(value);
 
 const afterWrite = <A>(world: World, apply: () => A) =>
   Effect.gen(function* () {
@@ -151,7 +151,7 @@ const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> 
   Layer.mergeAll(
     Layer.succeed(AudienceStore)({
       ...unusedAudience,
-      getList: (id) => found(world.lists.get(id), "list"),
+      getList: (id) => found(world.lists.get(id), new Errors.ListNotFound()),
     }),
     Layer.succeed(CampaignStore)({
       ...unusedCampaigns,
@@ -159,7 +159,7 @@ const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> 
         Effect.sync(() => {
           world.campaigns.set(campaign.id, { ...campaign, submission: { state: "draft" } });
         }),
-      getCampaign: (id) => found(world.campaigns.get(id), "campaign"),
+      getCampaign: (id) => found(world.campaigns.get(id), new Errors.CampaignNotFound()),
       getCampaignControl: (id) =>
         Effect.gen(function* () {
           const scripted = world.control.get(id)?.shift();
@@ -168,7 +168,10 @@ const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> 
             return scripted;
           }
 
-          return controlOfCampaign(world, yield* found(world.campaigns.get(id), "campaign"));
+          return controlOfCampaign(
+            world,
+            yield* found(world.campaigns.get(id), new Errors.CampaignNotFound()),
+          );
         }),
       newRun: (id, expected, newToken, target, at) =>
         afterWrite(world, () => {
@@ -282,7 +285,7 @@ interface WakeDouble {
   readonly messages: Array<{ readonly campaignId: string; readonly runToken: string }>;
 }
 
-const wakeDouble = (world: World, failure?: StorageFailure): WakeDouble => {
+const wakeDouble = (world: World, failure?: Errors.QueueUnavailable): WakeDouble => {
   const messages: Array<{ readonly campaignId: string; readonly runToken: string }> = [];
 
   const layer = Layer.succeed(CampaignWake)({
@@ -309,7 +312,7 @@ interface ScheduleDouble {
   }>;
 }
 
-const scheduleDouble = (world: World, failure?: StorageFailure): ScheduleDouble => {
+const scheduleDouble = (world: World, failure?: Errors.SchedulerUnavailable): ScheduleDouble => {
   const created: Array<{
     readonly campaignId: string;
     readonly runToken: string;
@@ -336,8 +339,8 @@ interface Scenario {
   readonly runToken?: string;
   readonly startedAt?: string;
   readonly history?: RunHistory;
-  readonly wakeFailure?: StorageFailure;
-  readonly scheduleFailure?: StorageFailure;
+  readonly wakeFailure?: Errors.QueueUnavailable;
+  readonly scheduleFailure?: Errors.SchedulerUnavailable;
 }
 
 interface Fixture {
@@ -382,9 +385,6 @@ const fixture = (scenario: Scenario = {}): Fixture => {
 const runWith = <A, E, R>(fix: Fixture, effect: Effect.Effect<A, E, R>) =>
   Effect.result(effect).pipe(Effect.provide(Layer.mergeAll(fix.layer, NodeServices.layer)));
 
-const runPublicly = <A, E, R>(fix: Fixture, effect: Effect.Effect<A, E, R>) =>
-  runWith(fix, publicly(effect));
-
 const storedCampaign = (fix: Fixture): Schemas.Campaign => {
   const campaign = fix.world.campaigns.get(campaignId);
 
@@ -394,6 +394,16 @@ const storedCampaign = (fix: Fixture): Schemas.Campaign => {
 
   return campaign;
 };
+
+const queueUnavailable = new Errors.QueueUnavailable({
+  operation: "dispatch",
+  failure: "ServiceUnavailable",
+});
+
+const schedulerUnavailable = new Errors.SchedulerUnavailable({
+  operation: "schedule",
+  failure: "ServiceUnavailable",
+});
 
 const failureOf = <A, E>(attempt: Result.Result<A, E>): E => {
   if (Result.isSuccess(attempt)) {
@@ -415,7 +425,7 @@ describe("create", () => {
         Campaigns.create({ listId, subject: "Hi", text: "There" }),
       );
 
-      expect(failureOf(attempt)).toBeInstanceOf(Schemas.NotFound);
+      expect(failureOf(attempt)).toStrictEqual(new Errors.ListNotFound());
     }),
   );
 
@@ -528,21 +538,13 @@ describe("send", () => {
     }),
   );
 
-  it.effect("fails StorageUnavailable when the wake fails after the queued write", () =>
+  it.effect("fails QueueUnavailable when the wake fails after the queued write", () =>
     Effect.gen(function* () {
-      const fix = fixture({
-        wakeFailure: new StorageFailure({
-          operationId: "dispatch",
-          reason: "unavailable",
-          cause: "lost",
-        }),
-      });
+      const fix = fixture({ wakeFailure: queueUnavailable });
 
-      const attempt = yield* runPublicly(fix, Campaigns.send(campaignId));
+      const attempt = yield* runWith(fix, Campaigns.send(campaignId));
 
-      expect(failureOf(attempt)).toStrictEqual(
-        new Schemas.StorageUnavailable({ operationId: "dispatch" }),
-      );
+      expect(failureOf(attempt)).toStrictEqual(queueUnavailable);
       expect(fix.wake.messages).toHaveLength(0);
       expect(storedCampaign(fix).submission.state).toBe("queued");
     }),
@@ -631,7 +633,7 @@ describe("update", () => {
 
       const missing = yield* runWith(fix, Campaigns.update(campaignId, { listId: otherList }));
 
-      expect(failureOf(missing)).toStrictEqual(new Schemas.NotFound({ entity: "list" }));
+      expect(failureOf(missing)).toStrictEqual(new Errors.ListNotFound());
       expect(fix.world.order).toHaveLength(0);
 
       fix.world.lists.set(otherList, {
@@ -654,7 +656,7 @@ describe("update", () => {
 
       const attempt = yield* runWith(fix, Campaigns.update(campaignId, { subject: "x" }));
 
-      expect(failureOf(attempt)).toStrictEqual(new Schemas.NotFound({ entity: "campaign" }));
+      expect(failureOf(attempt)).toStrictEqual(new Errors.CampaignNotFound());
     }),
   );
 
@@ -671,7 +673,7 @@ describe("update", () => {
       const attempt = yield* runWith(fix, Campaigns.update(campaignId, { subject: "x" }));
 
       expect(failureOf(attempt)).toStrictEqual(
-        new Schemas.CampaignStateConflict({ state: campaign.submission.state }),
+        new Errors.CampaignStateConflict({ state: campaign.submission.state }),
       );
       expect(storedCampaign(fix)).toStrictEqual(campaign);
     }),
@@ -688,7 +690,7 @@ describe("update", () => {
       const attempt = yield* runWith(fix, Campaigns.update(campaignId, { subject: "x" }));
 
       expect(failureOf(attempt)).toStrictEqual(
-        new Schemas.CampaignStateConflict({ state: "queued" }),
+        new Errors.CampaignStateConflict({ state: "queued" }),
       );
       expect(storedCampaign(fix)).toStrictEqual(queuedCampaign);
     }),
@@ -720,7 +722,7 @@ describe("remove", () => {
       const attempt = yield* runWith(fix, Campaigns.remove(campaignId));
 
       expect(failureOf(attempt)).toStrictEqual(
-        new Schemas.CampaignStateConflict({ state: campaign.submission.state }),
+        new Errors.CampaignStateConflict({ state: campaign.submission.state }),
       );
       expect(storedCampaign(fix)).toStrictEqual(campaign);
     }),
@@ -736,7 +738,7 @@ describe("remove", () => {
 
       const attempt = yield* runWith(fix, Campaigns.remove(campaignId));
 
-      expect(failureOf(attempt)).toStrictEqual(new Schemas.NotFound({ entity: "campaign" }));
+      expect(failureOf(attempt)).toStrictEqual(new Errors.CampaignNotFound());
     }),
   );
 });
@@ -829,15 +831,9 @@ describe("queued wake repair", () => {
       Effect.gen(function* () {
         const fix = fixture({ campaign: queuedCampaign });
 
-        const attempt = yield* runWith(fix, queuedRepair[command](campaignId));
+        const defect = yield* defectOf(runWith(fix, queuedRepair[command](campaignId)));
 
-        expect(failureOf(attempt)).toStrictEqual(
-          new StorageFailure({
-            operationId: "getCampaignControl",
-            reason: "corrupt",
-            cause: "queued campaign has no run token",
-          }),
-        );
+        expect(defect).toStrictEqual(new CorruptItem({ operation: "getCampaignControl" }));
         expect(fix.wake.messages).toHaveLength(0);
       }),
   );
@@ -951,7 +947,7 @@ describe("schedule", () => {
 
       const attempt = yield* runWith(fix, Campaigns.schedule(campaignId, queuedAt));
 
-      expect(failureOf(attempt)).toStrictEqual(new Schemas.SendAtNotInFuture({ sendAt: queuedAt }));
+      expect(failureOf(attempt)).toStrictEqual(new Errors.SendAtNotInFuture({ sendAt: queuedAt }));
       expect(fix.schedules.created).toHaveLength(0);
       expect(storedCampaign(fix)).toStrictEqual(draftCampaign);
       expect(fix.world.runTokens.has(campaignId)).toBe(false);
@@ -976,21 +972,13 @@ describe("schedule", () => {
     }),
   );
 
-  it.effect("fails StorageUnavailable when the schedule service fails after the write", () =>
+  it.effect("fails SchedulerUnavailable when the schedule service fails after the write", () =>
     Effect.gen(function* () {
-      const fix = fixture({
-        scheduleFailure: new StorageFailure({
-          operationId: "schedule",
-          reason: "unavailable",
-          cause: "lost",
-        }),
-      });
+      const fix = fixture({ scheduleFailure: schedulerUnavailable });
 
-      const attempt = yield* runPublicly(fix, Campaigns.schedule(campaignId, futureSendAt));
+      const attempt = yield* runWith(fix, Campaigns.schedule(campaignId, futureSendAt));
 
-      expect(failureOf(attempt)).toStrictEqual(
-        new Schemas.StorageUnavailable({ operationId: "schedule" }),
-      );
+      expect(failureOf(attempt)).toStrictEqual(schedulerUnavailable);
       expect(fix.schedules.created).toHaveLength(0);
       expect(storedCampaign(fix).submission).toStrictEqual({
         state: "scheduled",
@@ -1136,7 +1124,7 @@ describe("cancel", () => {
       const attempt = yield* runWith(fix, Campaigns.cancel(campaignId));
 
       expect(failureOf(attempt)).toStrictEqual(
-        new Schemas.CampaignStateConflict({ state: campaign.submission.state }),
+        new Errors.CampaignStateConflict({ state: campaign.submission.state }),
       );
       expect(storedCampaign(fix)).toStrictEqual(campaign);
       expect(fix.world.order).toHaveLength(0);
@@ -1160,7 +1148,7 @@ describe("cancel", () => {
       const attempt = yield* runWith(fix, Campaigns.cancel(campaignId));
 
       expect(failureOf(attempt)).toStrictEqual(
-        new Schemas.CampaignStateConflict({ state: replacement.submission.state }),
+        new Errors.CampaignStateConflict({ state: replacement.submission.state }),
       );
       expect(storedCampaign(fix)).toStrictEqual(replacement);
       expect(fix.world.runTokens.get(campaignId)).toBe(replacementToken);
@@ -1231,7 +1219,7 @@ describe("cancel", () => {
         const attempt = yield* runWith(fix, Campaigns.cancel(campaignId));
 
         expect(failureOf(attempt)).toStrictEqual(
-          new Schemas.CampaignStateConflict({ state: "paused" }),
+          new Errors.CampaignStateConflict({ state: "paused" }),
         );
         expect(storedCampaign(fix).submission).toStrictEqual({
           state: "paused",
@@ -1270,7 +1258,7 @@ describe("cancel", () => {
         const attempt = yield* runWith(fix, Campaigns.cancel(campaignId));
 
         expect(failureOf(attempt)).toStrictEqual(
-          new Schemas.CampaignStateConflict({ state: "paused" }),
+          new Errors.CampaignStateConflict({ state: "paused" }),
         );
         expect(storedCampaign(fix).submission).toStrictEqual({
           state: "paused",
@@ -1301,7 +1289,7 @@ describe("cancel", () => {
       const attempt = yield* runWith(fix, Campaigns.cancel(campaignId));
 
       expect(failureOf(attempt)).toStrictEqual(
-        new Schemas.CampaignStateConflict({ state: "sending" }),
+        new Errors.CampaignStateConflict({ state: "sending" }),
       );
       expect(storedCampaign(fix).submission.state).toBe("sending");
     }),

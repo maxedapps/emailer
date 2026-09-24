@@ -1,3 +1,4 @@
+import * as Errors from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
 import { Effect } from "effect";
 import { describe, expect, it } from "@effect/vitest";
@@ -8,7 +9,6 @@ import {
   cancelled,
   contactId,
   createdAt,
-  failureOf,
   listId,
   scriptedTable,
   serverError,
@@ -93,7 +93,7 @@ describe("addMember", () => {
         transactWriteItems: [cancelled("ConditionalCheckFailed", "None", "None", "None")],
       });
 
-      expect(yield* Effect.flip(run)).toStrictEqual(new Schemas.NotFound({ entity: "contact" }));
+      expect(yield* Effect.flip(run)).toStrictEqual(new Errors.ContactNotFound());
     }),
   );
 
@@ -103,7 +103,7 @@ describe("addMember", () => {
         transactWriteItems: [cancelled("None", "ConditionalCheckFailed", "None", "None")],
       });
 
-      expect(yield* Effect.flip(run)).toStrictEqual(new Schemas.NotFound({ entity: "list" }));
+      expect(yield* Effect.flip(run)).toStrictEqual(new Errors.ListNotFound());
     }),
   );
 
@@ -125,7 +125,7 @@ describe("addMember", () => {
         transactWriteItems: [cancelled("None", "None", "None", "ValidationError")],
       });
 
-      expect(failureOf(yield* Effect.result(run)).reason).toBe("unavailable");
+      expect(yield* Effect.flip(run)).toBeInstanceOf(Errors.StorageUnavailable);
     }),
   );
 
@@ -133,7 +133,7 @@ describe("addMember", () => {
     Effect.gen(function* () {
       const { run } = addMember({ transactWriteItems: [Effect.fail(serverError)] });
 
-      expect(failureOf(yield* Effect.result(run)).reason).toBe("unavailable");
+      expect(yield* Effect.flip(run)).toBeInstanceOf(Errors.StorageUnavailable);
     }),
   );
 });
@@ -187,7 +187,7 @@ describe("removeMember", () => {
         transactWriteItems: [cancelled("None", "None", "ConditionalCheckFailed")],
       });
 
-      expect(yield* Effect.flip(run)).toStrictEqual(new Schemas.NotFound({ entity: "list" }));
+      expect(yield* Effect.flip(run)).toStrictEqual(new Errors.ListNotFound());
     }),
   );
 
@@ -209,7 +209,7 @@ describe("removeMember", () => {
     Effect.gen(function* () {
       const { run } = removeMember({ transactWriteItems: [Effect.fail(serverError)] });
 
-      expect(failureOf(yield* Effect.result(run)).reason).toBe("unavailable");
+      expect(yield* Effect.flip(run)).toBeInstanceOf(Errors.StorageUnavailable);
     }),
   );
 });
@@ -236,7 +236,7 @@ describe("listMembers", () => {
 
       expect(
         yield* Effect.flip(operationsFor(table).listMembers(listId, 25, undefined)),
-      ).toStrictEqual(new Schemas.NotFound({ entity: "list" }));
+      ).toStrictEqual(new Errors.ListNotFound());
       expect(table.queryRequests).toStrictEqual([]);
     }),
   );
@@ -358,7 +358,7 @@ describe("deleteContact", () => {
       const table = scriptedTable({});
 
       expect(yield* Effect.flip(operationsFor(table).deleteContact(contactId))).toStrictEqual(
-        new Schemas.NotFound({ entity: "contact" }),
+        new Errors.ContactNotFound(),
       );
       expect(table.transactionRequests).toStrictEqual([]);
     }),
@@ -426,9 +426,9 @@ describe("deleteContact", () => {
         transactWriteItems: [cancelled("ConditionalCheckFailed", "None")],
       });
 
-      const attempt = yield* Effect.result(operationsFor(table).deleteContact(contactId));
+      const failure = yield* Effect.flip(operationsFor(table).deleteContact(contactId));
 
-      expect(failureOf(attempt).reason).toBe("unavailable");
+      expect(failure).toBeInstanceOf(Errors.StorageUnavailable);
     }),
   );
 
@@ -489,7 +489,7 @@ describe("deleteList", () => {
       const table = scriptedTable({});
 
       expect(yield* Effect.flip(operationsFor(table).deleteList(listId))).toStrictEqual(
-        new Schemas.NotFound({ entity: "list" }),
+        new Errors.ListNotFound(),
       );
       expect(table.transactionRequests).toStrictEqual([]);
     }),
@@ -737,7 +737,7 @@ describe("importContacts", () => {
         [candidate(contactId, "sam@example.com")],
       );
 
-      expect(yield* Effect.flip(run)).toStrictEqual(new Schemas.NotFound({ entity: "list" }));
+      expect(yield* Effect.flip(run)).toStrictEqual(new Errors.ListNotFound());
     }),
   );
 
@@ -755,7 +755,7 @@ describe("importContacts", () => {
         [candidate(contactId, "sam@example.com")],
       );
 
-      expect(failureOf(yield* Effect.result(run)).reason).toBe("unavailable");
+      expect(yield* Effect.flip(run)).toBeInstanceOf(Errors.StorageUnavailable);
     }),
   );
 });

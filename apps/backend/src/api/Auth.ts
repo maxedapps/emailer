@@ -1,4 +1,5 @@
-import { Authorization, Unauthorized } from "@emailer/api/Api";
+import { Authorization } from "@emailer/api/Api";
+import { Unauthorized } from "@emailer/api/Errors";
 import { Config, Data, Effect, Layer, Redacted } from "effect";
 
 import { tokensMatch } from "../SignedToken.ts";

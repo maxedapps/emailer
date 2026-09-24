@@ -1,3 +1,4 @@
+import { SendingPaused, TestAudienceTooLarge } from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
 import { Effect } from "effect";
 
@@ -17,7 +18,7 @@ const listRecipients = Effect.fn("TestSends.listRecipients")(function* (listId: 
   const page = yield* audience.listMembers(listId, Schemas.maxTestRecipients + 1, undefined);
 
   if (page.nextCursor !== undefined) {
-    return yield* new Schemas.TestAudienceTooLarge({ limit: Schemas.maxTestRecipients });
+    return yield* new TestAudienceTooLarge({ limit: Schemas.maxTestRecipients });
   }
 
   return page.items.map((member) => member.email);
@@ -43,7 +44,7 @@ export const sendTest = Effect.fn("TestSends.sendTest")(function* (
   const allowance = yield* guard.current;
 
   if (allowance.refusal !== undefined) {
-    return yield* new Schemas.SendingPaused({ reason: allowance.refusal });
+    return yield* new SendingPaused({ reason: allowance.refusal });
   }
 
   const content = {

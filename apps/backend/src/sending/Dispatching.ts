@@ -1,5 +1,5 @@
 import type * as Schemas from "@emailer/api/Schemas";
-import { Clock, Data, Duration, Effect } from "effect";
+import { Clock, Data, Duration, Effect, ErrorReporter } from "effect";
 
 import { unsubscribeLink } from "../consent/Unsubscribe.ts";
 import { newIdentifier, nowIso } from "../Identifiers.ts";
@@ -31,9 +31,14 @@ const breaker = {
 /**
  * The first member's limiter delay already exceeds the remaining invocation
  * budget. Returning normally would acknowledge the SQS message and drop the
- * work; failing lets `reportedAndFatal` die so SQS redelivers.
+ * work; failing fails the invocation, so SQS redelivers. That is the expected
+ * way out of a saturated limiter, so it is reported as a warning.
  */
-export class SliceOverrun extends Data.TaggedError("SliceOverrun") {}
+export class SliceOverrun extends Data.TaggedError("SliceOverrun") {
+  override get [ErrorReporter.severity]() {
+    return "Warn" as const;
+  }
+}
 
 const rateLimitedBackoffs = [
   Duration.seconds(1),
@@ -99,7 +104,7 @@ export const runSlice = Effect.fn("Dispatching.runSlice")(function* (
   // A list deleted mid-run leaves nobody to send to, so the run completes.
   const page = yield* audience
     .listMembers(listId, memberPageSize, previous)
-    .pipe(Effect.catchTag("NotFound", () => Effect.undefined));
+    .pipe(Effect.catchTag("ListNotFound", () => Effect.undefined));
 
   if (page === undefined) {
     yield* campaigns.completeRun(message.campaignId, message.runToken, yield* nowIso);

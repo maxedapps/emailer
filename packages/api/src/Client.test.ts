@@ -3,7 +3,7 @@ import { Effect, Redacted, Result, Schema } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 
 import { makeEmailerClient } from "./Client.ts";
-import * as Schemas from "./Schemas.ts";
+import * as Errors from "./Errors.ts";
 
 const baseUrl = "http://emailer.test";
 
@@ -111,7 +111,7 @@ describe("makeEmailerClient", () => {
 
   it.effect("surfaces a declared public error as a typed failure", () =>
     Effect.gen(function* () {
-      const notFoundBody = '{"_tag":"NotFound","entity":"contact"}';
+      const notFoundBody = '{"_tag":"ContactNotFound"}';
 
       const transport = transportReplying(() => json(404, notFoundBody));
 
@@ -120,9 +120,8 @@ describe("makeEmailerClient", () => {
       );
 
       expect(Result.isFailure(result) ? result.failure : undefined).toBeInstanceOf(
-        Schemas.NotFound,
+        Errors.ContactNotFound,
       );
-      expect(Result.isFailure(result) && result.failure).toMatchObject({ entity: "contact" });
     }),
   );
 
@@ -137,7 +136,7 @@ describe("makeEmailerClient", () => {
       );
 
       expect(Result.isFailure(result) ? result.failure : undefined).toBeInstanceOf(
-        Schemas.CampaignStateConflict,
+        Errors.CampaignStateConflict,
       );
       expect(Result.isFailure(result) && result.failure).toMatchObject({ state: "sending" });
       expect(Result.isFailure(result) && result.failure).not.toHaveProperty("runToken");

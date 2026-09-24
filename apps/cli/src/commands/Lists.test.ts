@@ -128,7 +128,7 @@ describe("list management from the command line", () => {
       expect(outcome.listed.stdout).toContain("Monthly");
       expect(outcome.deleted.exitCode).toBe(0);
       expect(outcome.after.exitCode).not.toBe(0);
-      expect(outcome.after.stderr).toContain("NotFound");
+      expect(outcome.after.stderr).toContain("ListNotFound");
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 });

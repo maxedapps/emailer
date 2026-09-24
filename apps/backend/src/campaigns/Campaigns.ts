@@ -1,12 +1,13 @@
-import * as Schemas from "@emailer/api/Schemas";
+import { CampaignStateConflict, SendAtNotInFuture } from "@emailer/api/Errors";
+import type * as Schemas from "@emailer/api/Schemas";
 import { Clock, Effect } from "effect";
 
+import { CorruptItem } from "../Errors.ts";
 import { newIdentifier, nowIso } from "../Identifiers.ts";
 import { CampaignWake } from "../sending/Dispatch.ts";
 import { CampaignSchedule } from "./CampaignSchedule.ts";
 import { AudienceStore } from "../storage/Audience.ts";
 import { CampaignStore } from "../storage/Campaigns.ts";
-import { corrupt } from "../storage/Errors.ts";
 
 import type { CampaignControl } from "../storage/Campaigns.ts";
 
@@ -34,7 +35,7 @@ const draftConflict = Effect.fn("Campaigns.draftConflict")(function* (campaignId
   const campaigns = yield* CampaignStore;
   const control = yield* campaigns.getCampaignControl(campaignId);
 
-  return yield* new Schemas.CampaignStateConflict({ state: control.state });
+  return yield* new CampaignStateConflict({ state: control.state });
 });
 
 /** Absent fields keep their value; null removes the HTML body or the filter. */
@@ -68,7 +69,7 @@ export const update = Effect.fn("Campaigns.update")(function* (
   const current = yield* campaigns.getCampaign(campaignId);
 
   if (current.submission.state !== "draft") {
-    return yield* new Schemas.CampaignStateConflict({ state: current.submission.state });
+    return yield* new CampaignStateConflict({ state: current.submission.state });
   }
 
   // Read only to answer NotFound for a list that does not exist.
@@ -95,7 +96,7 @@ export const remove = Effect.fn("Campaigns.remove")(function* (campaignId: strin
   const control = yield* campaigns.getCampaignControl(campaignId);
 
   if (control.state !== "draft") {
-    return yield* new Schemas.CampaignStateConflict({ state: control.state });
+    return yield* new CampaignStateConflict({ state: control.state });
   }
 
   if ((yield* campaigns.deleteDraft(campaignId)) === "conflict") {
@@ -104,8 +105,9 @@ export const remove = Effect.fn("Campaigns.remove")(function* (campaignId: strin
 });
 
 const requireRunToken = (control: CampaignControl) => {
+  // Scheduled, queued and paused campaigns always carry one.
   if (control.runToken === undefined) {
-    return corrupt("getCampaignControl")(`${control.state} campaign has no run token`);
+    return Effect.die(new CorruptItem({ operation: "getCampaignControl" }));
   }
 
   return Effect.succeed(control.runToken);
@@ -207,7 +209,7 @@ export const schedule = Effect.fn("Campaigns.schedule")(function* (
   const control = yield* campaigns.getCampaignControl(campaignId);
 
   if (Date.parse(sendAt) <= (yield* Clock.currentTimeMillis)) {
-    return yield* new Schemas.SendAtNotInFuture({ sendAt });
+    return yield* new SendAtNotInFuture({ sendAt });
   }
 
   switch (control.state) {
@@ -261,7 +263,7 @@ export const cancel = Effect.fn("Campaigns.cancel")(function* (campaignId: strin
 
     case "sending":
     case "completed":
-      return yield* new Schemas.CampaignStateConflict({ state: control.state });
+      return yield* new CampaignStateConflict({ state: control.state });
 
     case "scheduled":
     case "queued": {
@@ -282,7 +284,7 @@ export const cancel = Effect.fn("Campaigns.cancel")(function* (campaignId: strin
         const current = yield* campaigns.getCampaignControl(campaignId);
 
         if (!cancellationReachedDestination(control, current)) {
-          return yield* new Schemas.CampaignStateConflict({ state: current.state });
+          return yield* new CampaignStateConflict({ state: current.state });
         }
       }
 

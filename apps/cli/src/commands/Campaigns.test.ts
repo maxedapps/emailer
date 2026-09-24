@@ -232,7 +232,7 @@ describe("campaign management from the command line", { timeout: 60_000 }, () =>
 
   it.live("reports a 503 from send on stderr and exits nonzero", () =>
     Effect.gen(function* () {
-      const service = inMemoryService(token, { dispatchUnavailable: true });
+      const service = inMemoryService(token, { queueUnavailable: true });
 
       const text = yield* tempFile("txt", textBody);
 
@@ -255,7 +255,7 @@ describe("campaign management from the command line", { timeout: 60_000 }, () =>
 
       expect(outcome.exitCode).not.toBe(0);
       expect(outcome.stdout).toBe("");
-      expect(outcome.stderr).toContain("StorageUnavailable");
+      expect(outcome.stderr).toContain("QueueUnavailable");
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 

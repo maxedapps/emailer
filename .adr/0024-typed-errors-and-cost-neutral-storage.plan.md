@@ -60,7 +60,12 @@ Status: Done
 
 ### T2 — Error model and reporting
 
-Status: Not started
+Status: Done. As built:
+
+- Only `SliceOverrun` carries a severity (`Warn`). The reporter logs every other failure that reaches it at `Error`, so the dependency errors need no severity annotation.
+- The HTTP boundary answers what Effect's own boundary answers (`causeResponse`): a router's 404 for an unknown path, 499 for a client abort, an empty 500 otherwise.
+- An authenticated request the API cannot decode is logged once, by its tag (`HttpApiSchemaError`). Authorization runs before decoding, so unauthenticated requests log nothing. Today's code logged the same case through Alchemy's boundary, with the schema issue.
+- The task adds 154 production lines net: sixteen error classes and exact per-endpoint declarations. The deletions come in T3–T5.
 
 - **`packages/api/src/Errors.ts`** holds every public error. They move out of `Schemas.ts`, along with `Unauthorized` from `Api.ts`.
   - Business errors carry `[ErrorReporter.ignore] = true`:

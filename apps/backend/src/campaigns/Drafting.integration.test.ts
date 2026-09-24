@@ -1,5 +1,5 @@
 import { makeEmailerClient } from "@emailer/api/Client";
-import * as Schemas from "@emailer/api/Schemas";
+import * as Errors from "@emailer/api/Errors";
 import { Effect, Result } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/unstable/http";
 import { describe, expect, it } from "vitest";
@@ -77,7 +77,7 @@ describe("drafting a campaign", () => {
           const gone = yield* Effect.result(client.campaigns.get({ params: { id: campaign.id } }));
 
           expect(Result.isFailure(gone) ? gone.failure : undefined).toStrictEqual(
-            new Schemas.NotFound({ entity: "campaign" }),
+            new Errors.CampaignNotFound(),
           );
         }),
       ),
@@ -111,7 +111,7 @@ describe("drafting a campaign", () => {
             client.campaigns.remove({ params: { id: campaign.id } }),
           );
 
-          const conflict = new Schemas.CampaignStateConflict({ state: "scheduled" });
+          const conflict = new Errors.CampaignStateConflict({ state: "scheduled" });
 
           expect(Result.isFailure(edit) ? edit.failure : undefined).toStrictEqual(conflict);
           expect(Result.isFailure(removal) ? removal.failure : undefined).toStrictEqual(conflict);

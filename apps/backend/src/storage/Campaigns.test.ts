@@ -1,7 +1,9 @@
+import * as Errors from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
 import { Effect } from "effect";
 import { afterEach, describe, expect, it } from "@effect/vitest";
 
+import { CorruptItem } from "../Errors.ts";
 import { campaignOperations } from "./Campaigns.ts";
 import { str, strMap, tableLogicalId, withOptional } from "./Items.ts";
 import {
@@ -10,14 +12,12 @@ import {
   conditionFailed,
   contactId,
   createdAt,
-  failureOf,
+  defectOf,
   listId,
   primitivesFor,
   scriptedTable,
   serverError,
 } from "./Testing.ts";
-
-import type { StorageFailure } from "./Errors.ts";
 
 import type { Table } from "./Testing.ts";
 
@@ -400,9 +400,9 @@ describe("campaign records", () => {
         ],
       });
 
-      const attempt = yield* Effect.result(storage.getCampaign(campaignId));
+      const defect = yield* defectOf(storage.getCampaign(campaignId));
 
-      expect(failureOf(attempt).reason).toBe("corrupt");
+      expect(defect).toStrictEqual(new CorruptItem({ operation: "getCampaign" }));
     }),
   );
 
@@ -459,10 +459,9 @@ describe("campaign records", () => {
         getItem: [Effect.succeed({ Item: meta({ state: "draft" }) }), Effect.succeed({})],
       });
 
-      const attempt = yield* Effect.result(storage.getCampaign(campaignId));
+      const defect = yield* defectOf(storage.getCampaign(campaignId));
 
-      expect(failureOf(attempt).reason).toBe("corrupt");
-      expect(failureOf(attempt).operationId).toBe("getCampaignBody");
+      expect(defect).toStrictEqual(new CorruptItem({ operation: "getCampaignBody" }));
     }),
   );
 });
@@ -539,7 +538,7 @@ describe("getCampaignControl", () => {
       });
 
       expect(yield* Effect.flip(storage.getCampaignControl(campaignId))).toStrictEqual(
-        new Schemas.NotFound({ entity: "campaign" }),
+        new Errors.CampaignNotFound(),
       );
     }),
   );
@@ -922,12 +921,12 @@ describe("newRun", () => {
           transactWriteItems: [Effect.fail(serverError)],
         });
 
-        const attempt = yield* Effect.result(
+        const failure = yield* Effect.flip(
           storage.newRun(campaignId, observed(source, runToken), nextToken, target, now),
         );
 
-        expect(failureOf(attempt).reason).toBe("unavailable");
-        expect(failureOf(attempt).operationId).toBe(operationId);
+        expect(failure).toBeInstanceOf(Errors.StorageUnavailable);
+        expect(failure).toMatchObject({ operation: operationId });
       }),
   );
 });
@@ -1191,11 +1190,11 @@ describe("claimRecipient", () => {
         transactWriteItems: [Effect.fail(serverError)],
       });
 
-      const attempt = yield* Effect.result(
+      const failure = yield* Effect.flip(
         storage.claimRecipient(campaignId, runToken, contactId, recipient, sendId, now),
       );
 
-      expect(failureOf(attempt).reason).toBe("unavailable");
+      expect(failure).toBeInstanceOf(Errors.StorageUnavailable);
     }),
   );
 });
@@ -1448,7 +1447,7 @@ describe("condition failures", () => {
     readonly [
       string,
       ScriptedReplies,
-      (storage: CampaignStorage) => Effect.Effect<string | object, StorageFailure>,
+      (storage: CampaignStorage) => Effect.Effect<string | object, Errors.StorageUnavailable>,
       string,
     ]
   >([

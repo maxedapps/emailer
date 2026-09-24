@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Result, Schema } from "effect";
 
+import * as Errors from "./Errors.ts";
 import * as Schemas from "./Schemas.ts";
 
 describe("Timestamp", () => {
@@ -659,8 +660,8 @@ describe("CampaignStateConflict", () => {
   it.each(["draft", "scheduled", "queued", "sending", "paused", "completed"] as const)(
     "encodes with state %s",
     (state) => {
-      const error = new Schemas.CampaignStateConflict({ state });
-      const encoded = Result.getOrThrow(Schema.encodeResult(Schemas.CampaignStateConflict)(error));
+      const error = new Errors.CampaignStateConflict({ state });
+      const encoded = Result.getOrThrow(Schema.encodeResult(Errors.CampaignStateConflict)(error));
 
       expect(encoded._tag).toBe("CampaignStateConflict");
       expect(encoded.state).toBe(state);
@@ -671,13 +672,22 @@ describe("CampaignStateConflict", () => {
 
 describe("public error statuses", () => {
   const declared = [
-    [Schemas.NotFound, 404],
-    [Schemas.EmailAlreadyUsed, 409],
-    [Schemas.AddressOptedOut, 409],
-    [Schemas.SendAtNotInFuture, 409],
-    [Schemas.CampaignStateConflict, 409],
-    [Schemas.PayloadTooLarge, 413],
-    [Schemas.StorageUnavailable, 503],
+    [Errors.Unauthorized, 401],
+    [Errors.ContactNotFound, 404],
+    [Errors.ListNotFound, 404],
+    [Errors.CampaignNotFound, 404],
+    [Errors.EmailAlreadyUsed, 409],
+    [Errors.AddressOptedOut, 409],
+    [Errors.SendAtNotInFuture, 409],
+    [Errors.CampaignStateConflict, 409],
+    [Errors.TestAudienceTooLarge, 409],
+    [Errors.PayloadTooLarge, 413],
+    [Errors.SendingPaused, 503],
+    [Errors.StorageUnavailable, 503],
+    [Errors.EmailServiceUnavailable, 503],
+    [Errors.QueueUnavailable, 503],
+    [Errors.SchedulerUnavailable, 503],
+    [Errors.AlarmsUnavailable, 503],
   ] as const;
 
   it.each(declared)("declares the status every consumer decodes against", (error, status) => {

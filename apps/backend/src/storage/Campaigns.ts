@@ -1,8 +1,9 @@
+import { CampaignNotFound } from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
 import * as AWS from "alchemy/AWS";
 import { Context, Crypto, Effect, Layer, Schema, SchemaTransformation, Struct } from "effect";
 
-import { corrupt } from "./Errors.ts";
+import { corrupt } from "../Errors.ts";
 import {
   attributeOf,
   bodyKey,
@@ -231,9 +232,7 @@ const campaignReads = (primitives: ReadPrimitives) => {
   const getCampaignBody = Effect.fn("Storage.getCampaignBody")(function* (campaignId: string) {
     const response = yield* readItem("getCampaignBody", bodyKey(campaignId));
 
-    const stored = yield* decodeStoredCampaignBody(response.Item).pipe(
-      Effect.mapError(corrupt("getCampaignBody")),
-    );
+    const stored = yield* decodeStoredCampaignBody(response.Item).pipe(corrupt("getCampaignBody"));
 
     return Struct.omit(stored, ["v"]);
   });
@@ -242,14 +241,12 @@ const campaignReads = (primitives: ReadPrimitives) => {
     const response = yield* readItem("getCampaign", campaignKey(campaignId));
 
     if (response.Item === undefined) {
-      return yield* new Schemas.NotFound({ entity: "campaign" });
+      return yield* new CampaignNotFound();
     }
 
-    const stored = yield* decodeStoredCampaign(response.Item).pipe(
-      Effect.mapError(corrupt("getCampaign")),
-    );
+    const stored = yield* decodeStoredCampaign(response.Item).pipe(corrupt("getCampaign"));
 
-    const summary = yield* summaryOf(stored).pipe(Effect.mapError(corrupt("getCampaign")));
+    const summary = yield* summaryOf(stored).pipe(corrupt("getCampaign"));
     const body = yield* getCampaignBody(campaignId);
 
     return { ...summary, ...body } satisfies Schemas.Campaign;
@@ -311,10 +308,7 @@ export const campaignOperations = (
     const page = yield* readEntityPage("listCampaigns", campaignKind, campaignKey, limit, cursor);
 
     const campaigns = yield* Effect.forEach(page.items, (item) =>
-      decodeStoredCampaign(item).pipe(
-        Effect.flatMap(summaryOf),
-        Effect.mapError(corrupt("listCampaigns")),
-      ),
+      decodeStoredCampaign(item).pipe(Effect.flatMap(summaryOf), corrupt("listCampaigns")),
     );
 
     return { ...page, items: campaigns } satisfies StoredPage<Schemas.CampaignSummary, string>;
@@ -328,12 +322,10 @@ export const campaignOperations = (
     const response = yield* readItem("getCampaignControl", campaignKey(campaignId));
 
     if (response.Item === undefined) {
-      return yield* new Schemas.NotFound({ entity: "campaign" });
+      return yield* new CampaignNotFound();
     }
 
-    const stored = yield* decodeStoredCampaign(response.Item).pipe(
-      Effect.mapError(corrupt("getCampaignControl")),
-    );
+    const stored = yield* decodeStoredCampaign(response.Item).pipe(corrupt("getCampaignControl"));
 
     return controlOf(stored);
   });
@@ -462,9 +454,7 @@ export const campaignOperations = (
       return "stale" as const;
     }
 
-    const stored = yield* decodeStoredCampaign(outcome.attributes).pipe(
-      Effect.mapError(corrupt("beginRun")),
-    );
+    const stored = yield* decodeStoredCampaign(outcome.attributes).pipe(corrupt("beginRun"));
 
     return {
       outcome: "running" as const,
