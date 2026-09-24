@@ -52,6 +52,23 @@ export interface Table {
   readonly transactionRequests: Array<AWS.DynamoDB.TransactWriteItemsRequest>;
 }
 
+/**
+ * One operation of the double: it records each request and answers with the reply scripted for its
+ * position in the call order, or the fallback once the script runs out.
+ */
+const recorder =
+  <Request, A, E>(
+    requests: Array<Request>,
+    replies: ReadonlyArray<Effect.Effect<A, E>> | undefined,
+    fallback: A,
+  ) =>
+  (request: Request): Effect.Effect<A, E> =>
+    Effect.suspend(() => {
+      requests.push(request);
+
+      return replies?.[requests.length - 1] ?? Effect.succeed(fallback);
+    });
+
 export const scriptedTable = (replies: ScriptedReplies): Table => {
   const getItemRequests: Array<AWS.DynamoDB.GetItemRequest> = [];
   const batchGetItemRequests: Array<AWS.DynamoDB.BatchGetItemRequest> = [];
@@ -61,42 +78,12 @@ export const scriptedTable = (replies: ScriptedReplies): Table => {
   const transactionRequests: Array<AWS.DynamoDB.TransactWriteItemsRequest> = [];
 
   const operations: TableOperations = {
-    getItem: (request) =>
-      Effect.suspend(() => {
-        getItemRequests.push(request);
-
-        return replies.getItem?.[getItemRequests.length - 1] ?? Effect.succeed({});
-      }),
-    batchGetItem: (request) =>
-      Effect.suspend(() => {
-        batchGetItemRequests.push(request);
-
-        return replies.batchGetItem?.[batchGetItemRequests.length - 1] ?? Effect.succeed({});
-      }),
-    putItem: (request) =>
-      Effect.suspend(() => {
-        putItemRequests.push(request);
-
-        return replies.putItem?.[putItemRequests.length - 1] ?? Effect.succeed({});
-      }),
-    updateItem: (request) =>
-      Effect.suspend(() => {
-        updateItemRequests.push(request);
-
-        return replies.updateItem?.[updateItemRequests.length - 1] ?? Effect.succeed({});
-      }),
-    query: (request) =>
-      Effect.suspend((): QueryReply => {
-        queryRequests.push(request);
-
-        return replies.query?.[queryRequests.length - 1] ?? Effect.succeed({ Items: [] });
-      }),
-    transactWriteItems: (request) =>
-      Effect.suspend(() => {
-        transactionRequests.push(request);
-
-        return replies.transactWriteItems?.[transactionRequests.length - 1] ?? Effect.succeed({});
-      }),
+    getItem: recorder(getItemRequests, replies.getItem, {}),
+    batchGetItem: recorder(batchGetItemRequests, replies.batchGetItem, {}),
+    putItem: recorder(putItemRequests, replies.putItem, {}),
+    updateItem: recorder(updateItemRequests, replies.updateItem, {}),
+    query: recorder(queryRequests, replies.query, { Items: [] }),
+    transactWriteItems: recorder(transactionRequests, replies.transactWriteItems, {}),
   };
 
   return {

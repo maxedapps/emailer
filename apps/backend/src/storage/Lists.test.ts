@@ -1,6 +1,6 @@
 import * as Schemas from "@emailer/api/Schemas";
 import { Effect } from "effect";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "@effect/vitest";
 
 import { str } from "./Items.ts";
 import { listOperations } from "./Lists.ts";
@@ -37,8 +37,9 @@ const withTable = (replies: ScriptedReplies) => {
 };
 
 describe("createList", () => {
-  it("writes the list with the listing attributes, without which it is invisible to the index", () =>
-    Effect.runPromise(
+  it.effect(
+    "writes the list with the listing attributes, without which it is invisible to the index",
+    () =>
       Effect.gen(function* () {
         const { table, operations } = withTable({});
 
@@ -48,87 +49,83 @@ describe("createList", () => {
           listItem(listId, "Subscribers", createdAt),
         );
       }),
-    ));
+  );
 });
 
 describe("getList", () => {
-  it("reads the list itself, leaving its key and index attributes behind", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { operations } = withTable({
-          getItem: [Effect.succeed({ Item: listItem(listId, "Subscribers", createdAt) })],
-        });
+  it.effect("reads the list itself, leaving its key and index attributes behind", () =>
+    Effect.gen(function* () {
+      const { operations } = withTable({
+        getItem: [Effect.succeed({ Item: listItem(listId, "Subscribers", createdAt) })],
+      });
 
-        expect(yield* operations.getList(listId)).toStrictEqual({
-          id: listId,
-          name: "Subscribers",
-          createdAt,
-        });
-      }),
-    ));
+      expect(yield* operations.getList(listId)).toStrictEqual({
+        id: listId,
+        name: "Subscribers",
+        createdAt,
+      });
+    }),
+  );
 });
 
 describe("listLists", () => {
-  it("queries its own index partition and yields the page in index order", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const older = listItem(otherListId, "Older", olderCreatedAt);
-        const newer = listItem(listId, "Newer", createdAt);
+  it.effect("queries its own index partition and yields the page in index order", () =>
+    Effect.gen(function* () {
+      const older = listItem(otherListId, "Older", olderCreatedAt);
+      const newer = listItem(listId, "Newer", createdAt);
 
-        const { table, operations } = withTable({
-          query: [Effect.succeed({ Items: [older, newer] })],
-          // A batch read answers in no particular order; the newer list comes back first.
-          batchGetItem: [Effect.succeed({ Responses: { [physicalName]: [newer, older] } })],
-        });
+      const { table, operations } = withTable({
+        query: [Effect.succeed({ Items: [older, newer] })],
+        // A batch read answers in no particular order; the newer list comes back first.
+        batchGetItem: [Effect.succeed({ Responses: { [physicalName]: [newer, older] } })],
+      });
 
-        const page = yield* operations.listLists(25, undefined);
+      const page = yield* operations.listLists(25, undefined);
 
-        expect(table.queryRequests[0]?.ExpressionAttributeValues?.[":kind"]).toStrictEqual(
-          str("list"),
-        );
-        expect(page.items.map((list) => list.id)).toStrictEqual([otherListId, listId]);
-      }),
-    ));
+      expect(table.queryRequests[0]?.ExpressionAttributeValues?.[":kind"]).toStrictEqual(
+        str("list"),
+      );
+      expect(page.items.map((list) => list.id)).toStrictEqual([otherListId, listId]);
+    }),
+  );
 });
 
 describe("renameList", () => {
-  it("touches the name and nothing else, and answers the list the write returned", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, operations } = withTable({
-          updateItem: [Effect.succeed({ Attributes: listItem(listId, "Members", createdAt) })],
-        });
+  it.effect("touches the name and nothing else, and answers the list the write returned", () =>
+    Effect.gen(function* () {
+      const { table, operations } = withTable({
+        updateItem: [Effect.succeed({ Attributes: listItem(listId, "Members", createdAt) })],
+      });
 
-        expect(yield* operations.renameList(listId, "Members")).toStrictEqual({
-          id: listId,
-          name: "Members",
-          createdAt,
-        });
+      expect(yield* operations.renameList(listId, "Members")).toStrictEqual({
+        id: listId,
+        name: "Members",
+        createdAt,
+      });
 
-        // Asserted whole: an added `gsi1sk` clause would keep the index out of step with the item,
-        // and a dropped condition would let a rename resurrect a list deleted underneath it.
-        expect(table.updateItemRequests).toStrictEqual([
-          {
-            Key: { pk: str(`LIST#${listId}`), sk: str("META") },
-            UpdateExpression: "SET #name = :name",
-            ConditionExpression: "attribute_exists(pk)",
-            ExpressionAttributeNames: { "#name": "name" },
-            ExpressionAttributeValues: { ":name": str("Members") },
-            ReturnValues: "ALL_NEW",
-          },
-        ]);
-        expect(table.getItemRequests).toStrictEqual([]);
-      }),
-    ));
+      // Asserted whole: an added `gsi1sk` clause would keep the index out of step with the item,
+      // and a dropped condition would let a rename resurrect a list deleted underneath it.
+      expect(table.updateItemRequests).toStrictEqual([
+        {
+          Key: { pk: str(`LIST#${listId}`), sk: str("META") },
+          UpdateExpression: "SET #name = :name",
+          ConditionExpression: "attribute_exists(pk)",
+          ExpressionAttributeNames: { "#name": "name" },
+          ExpressionAttributeValues: { ":name": str("Members") },
+          ReturnValues: "ALL_NEW",
+        },
+      ]);
+      expect(table.getItemRequests).toStrictEqual([]);
+    }),
+  );
 
-  it("answers NotFound when the write's condition fails", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { operations } = withTable({ updateItem: [conditionFailed] });
+  it.effect("answers NotFound when the write's condition fails", () =>
+    Effect.gen(function* () {
+      const { operations } = withTable({ updateItem: [conditionFailed] });
 
-        expect(yield* Effect.flip(operations.renameList(listId, "Members"))).toStrictEqual(
-          new Schemas.NotFound({ entity: "list" }),
-        );
-      }),
-    ));
+      expect(yield* Effect.flip(operations.renameList(listId, "Members"))).toStrictEqual(
+        new Schemas.NotFound({ entity: "list" }),
+      );
+    }),
+  );
 });

@@ -1,6 +1,6 @@
 import * as Schemas from "@emailer/api/Schemas";
 import { Effect } from "effect";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "@effect/vitest";
 
 import { campaignOperations } from "./Campaigns.ts";
 import { str, strMap, tableLogicalId, withOptional } from "./Items.ts";
@@ -16,6 +16,8 @@ import {
   scriptedTable,
   serverError,
 } from "./Testing.ts";
+
+import type { StorageFailure } from "./Errors.ts";
 
 import type { Table } from "./Testing.ts";
 
@@ -146,122 +148,127 @@ const body = (html?: string) =>
     [["html", html]],
   );
 
+type CampaignStorage = ReturnType<typeof operationsFor>;
+
+/** Every table the running test created, so the sweep below reaches each of them. */
+const tables: Array<Table> = [];
+
 const withStorage = (replies: ScriptedReplies) => {
   const table = scriptedTable(replies);
+
+  tables.push(table);
 
   return { table, storage: operationsFor(table) };
 };
 
+afterEach(() => {
+  for (const table of tables.splice(0)) {
+    expectAliasedReservedNames(table);
+  }
+});
+
 describe("campaign records", () => {
-  it("round-trips multi-byte content through the stored encoding", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({});
+  it.effect("round-trips multi-byte content through the stored encoding", () =>
+    Effect.gen(function* () {
+      const { table, storage } = withStorage({});
 
-        yield* storage.createCampaign({
-          id: campaignId,
-          listId,
-          subject: "Grüße 😀",
-          text: multiByteText,
-          createdAt,
-          submission: { state: "draft" },
-        });
+      yield* storage.createCampaign({
+        id: campaignId,
+        listId,
+        subject: "Grüße 😀",
+        text: multiByteText,
+        createdAt,
+        submission: { state: "draft" },
+      });
 
-        const readBack = scriptedTable({
-          getItem: [
-            Effect.succeed({ Item: table.putItemRequests[1]?.Item ?? {} }),
-            Effect.succeed({ Item: table.putItemRequests[0]?.Item ?? {} }),
-          ],
-        });
+      const readBack = withStorage({
+        getItem: [
+          Effect.succeed({ Item: table.putItemRequests[1]?.Item ?? {} }),
+          Effect.succeed({ Item: table.putItemRequests[0]?.Item ?? {} }),
+        ],
+      });
 
-        const campaign = yield* operationsFor(readBack).getCampaign(campaignId);
+      const campaign = yield* readBack.storage.getCampaign(campaignId);
 
-        expect(table.putItemRequests[0]?.Item).not.toHaveProperty("html");
-        expect(campaign).toStrictEqual({
-          id: campaignId,
-          listId,
-          subject: "Grüße 😀",
-          text: multiByteText,
-          createdAt,
-          submission: { state: "draft" },
-        });
-        expect(campaign).not.toHaveProperty("html");
-        expectAliasedReservedNames(table);
-        expectAliasedReservedNames(readBack);
-      }),
-    ));
+      expect(table.putItemRequests[0]?.Item).not.toHaveProperty("html");
+      expect(campaign).toStrictEqual({
+        id: campaignId,
+        listId,
+        subject: "Grüße 😀",
+        text: multiByteText,
+        createdAt,
+        submission: { state: "draft" },
+      });
+    }),
+  );
 
-  it("stores html beside text and round-trips multi-byte HTML", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({});
+  it.effect("stores html beside text and round-trips multi-byte HTML", () =>
+    Effect.gen(function* () {
+      const { table, storage } = withStorage({});
 
-        yield* storage.createCampaign({
-          id: campaignId,
-          listId,
-          subject: "Grüße 😀",
-          text: multiByteText,
-          html: multiByteHtml,
-          createdAt,
-          submission: { state: "draft" },
-        });
+      yield* storage.createCampaign({
+        id: campaignId,
+        listId,
+        subject: "Grüße 😀",
+        text: multiByteText,
+        html: multiByteHtml,
+        createdAt,
+        submission: { state: "draft" },
+      });
 
-        const writtenBody = table.putItemRequests[0]?.Item ?? {};
+      const writtenBody = table.putItemRequests[0]?.Item ?? {};
 
-        expect(writtenBody["text"]).toStrictEqual({ S: multiByteText });
-        expect(writtenBody["html"]).toStrictEqual({ S: multiByteHtml });
-        expect(table.putItemRequests[1]?.Item).not.toHaveProperty("html");
+      expect(writtenBody["text"]).toStrictEqual({ S: multiByteText });
+      expect(writtenBody["html"]).toStrictEqual({ S: multiByteHtml });
+      expect(table.putItemRequests[1]?.Item).not.toHaveProperty("html");
 
-        const readBack = scriptedTable({
-          getItem: [
-            Effect.succeed({ Item: table.putItemRequests[1]?.Item ?? {} }),
-            Effect.succeed({ Item: writtenBody }),
-          ],
-        });
+      const readBack = withStorage({
+        getItem: [
+          Effect.succeed({ Item: table.putItemRequests[1]?.Item ?? {} }),
+          Effect.succeed({ Item: writtenBody }),
+        ],
+      });
 
-        const campaign = yield* operationsFor(readBack).getCampaign(campaignId);
+      const campaign = yield* readBack.storage.getCampaign(campaignId);
 
-        expect(campaign).toStrictEqual({
-          id: campaignId,
-          listId,
-          subject: "Grüße 😀",
-          text: multiByteText,
-          html: multiByteHtml,
-          createdAt,
-          submission: { state: "draft" },
-        });
-        expectAliasedReservedNames(table);
-        expectAliasedReservedNames(readBack);
-      }),
-    ));
+      expect(campaign).toStrictEqual({
+        id: campaignId,
+        listId,
+        subject: "Grüße 😀",
+        text: multiByteText,
+        html: multiByteHtml,
+        createdAt,
+        submission: { state: "draft" },
+      });
+    }),
+  );
 
-  it("projects html from a stored body that has it", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const html = "<p>Hello there</p>";
+  it.effect("projects html from a stored body that has it", () =>
+    Effect.gen(function* () {
+      const html = "<p>Hello there</p>";
 
-        const { table, storage } = withStorage({
-          getItem: [
-            Effect.succeed({ Item: meta({ state: "draft" }) }),
-            Effect.succeed({ Item: body(html) }),
-          ],
-        });
+      const { storage } = withStorage({
+        getItem: [
+          Effect.succeed({ Item: meta({ state: "draft" }) }),
+          Effect.succeed({ Item: body(html) }),
+        ],
+      });
 
-        expect(yield* storage.getCampaign(campaignId)).toStrictEqual({
-          id: campaignId,
-          listId,
-          subject: "Release",
-          text: "Body",
-          html,
-          createdAt,
-          submission: { state: "draft" },
-        });
-        expectAliasedReservedNames(table);
-      }),
-    ));
+      expect(yield* storage.getCampaign(campaignId)).toStrictEqual({
+        id: campaignId,
+        listId,
+        subject: "Release",
+        text: "Body",
+        html,
+        createdAt,
+        submission: { state: "draft" },
+      });
+    }),
+  );
 
-  it("always stores a new campaign as a draft with zero counters, whatever the caller passed", () =>
-    Effect.runPromise(
+  it.effect(
+    "always stores a new campaign as a draft with zero counters, whatever the caller passed",
+    () =>
       Effect.gen(function* () {
         const { table, storage } = withStorage({});
 
@@ -300,198 +307,186 @@ describe("campaign records", () => {
         expect(written).not.toHaveProperty("sendId");
         expect(written).not.toHaveProperty("messageId");
         expect(written).not.toHaveProperty("filter");
-        expectAliasedReservedNames(table);
       }),
-    ));
+  );
 
-  it("decodes every public state including progress", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({
-          // Every `getCampaign` reads META then BODY, so the replies interleave.
-          getItem: [
-            Effect.succeed({ Item: meta({ state: "draft" }) }),
-            Effect.succeed({ Item: body() }),
-            Effect.succeed({ Item: meta({ state: "scheduled", queuedAt }) }),
-            Effect.succeed({ Item: body() }),
-            Effect.succeed({ Item: meta({ state: "queued", queuedAt }) }),
-            Effect.succeed({ Item: body() }),
-            Effect.succeed({
-              Item: meta({
-                state: "sending",
-                queuedAt,
-                startedAt,
-                ...progress,
-              }),
+  it.effect("decodes every public state including progress", () =>
+    Effect.gen(function* () {
+      const { storage } = withStorage({
+        // Every `getCampaign` reads META then BODY, so the replies interleave.
+        getItem: [
+          Effect.succeed({ Item: meta({ state: "draft" }) }),
+          Effect.succeed({ Item: body() }),
+          Effect.succeed({ Item: meta({ state: "scheduled", queuedAt }) }),
+          Effect.succeed({ Item: body() }),
+          Effect.succeed({ Item: meta({ state: "queued", queuedAt }) }),
+          Effect.succeed({ Item: body() }),
+          Effect.succeed({
+            Item: meta({
+              state: "sending",
+              queuedAt,
+              startedAt,
+              ...progress,
             }),
-            Effect.succeed({ Item: body() }),
-            Effect.succeed({
-              Item: meta({
-                state: "paused",
-                queuedAt,
-                startedAt,
-                pausedReason: "rate-limited",
-                ...progress,
-              }),
+          }),
+          Effect.succeed({ Item: body() }),
+          Effect.succeed({
+            Item: meta({
+              state: "paused",
+              queuedAt,
+              startedAt,
+              pausedReason: "rate-limited",
+              ...progress,
             }),
-            Effect.succeed({ Item: body() }),
-            Effect.succeed({
-              Item: meta({
-                state: "completed",
-                queuedAt,
-                startedAt,
-                finishedAt,
-                ...progress,
-              }),
+          }),
+          Effect.succeed({ Item: body() }),
+          Effect.succeed({
+            Item: meta({
+              state: "completed",
+              queuedAt,
+              startedAt,
+              finishedAt,
+              ...progress,
             }),
-            Effect.succeed({ Item: body() }),
-          ],
-        });
+          }),
+          Effect.succeed({ Item: body() }),
+        ],
+      });
 
-        expect((yield* storage.getCampaign(campaignId)).submission).toStrictEqual({
-          state: "draft",
-        });
-        expect((yield* storage.getCampaign(campaignId)).submission).toStrictEqual({
-          state: "scheduled",
-          sendAt: queuedAt,
-        });
-        expect((yield* storage.getCampaign(campaignId)).submission).toStrictEqual({
-          state: "queued",
-          queuedAt,
-        });
-        expect((yield* storage.getCampaign(campaignId)).submission).toStrictEqual({
-          state: "sending",
-          queuedAt,
-          startedAt,
-          progress,
-          feedback: { bounced: 0, complained: 0 },
-        });
-        expect((yield* storage.getCampaign(campaignId)).submission).toStrictEqual({
-          state: "paused",
-          queuedAt,
-          startedAt,
-          progress,
-          feedback: { bounced: 0, complained: 0 },
-          reason: "rate-limited",
-        });
-        expect((yield* storage.getCampaign(campaignId)).submission).toStrictEqual({
-          state: "completed",
-          queuedAt,
-          startedAt,
-          finishedAt,
-          progress,
-          feedback: { bounced: 0, complained: 0 },
-        });
-        expectAliasedReservedNames(table);
-      }),
-    ));
+      expect((yield* storage.getCampaign(campaignId)).submission).toStrictEqual({
+        state: "draft",
+      });
+      expect((yield* storage.getCampaign(campaignId)).submission).toStrictEqual({
+        state: "scheduled",
+        sendAt: queuedAt,
+      });
+      expect((yield* storage.getCampaign(campaignId)).submission).toStrictEqual({
+        state: "queued",
+        queuedAt,
+      });
+      expect((yield* storage.getCampaign(campaignId)).submission).toStrictEqual({
+        state: "sending",
+        queuedAt,
+        startedAt,
+        progress,
+        feedback: { bounced: 0, complained: 0 },
+      });
+      expect((yield* storage.getCampaign(campaignId)).submission).toStrictEqual({
+        state: "paused",
+        queuedAt,
+        startedAt,
+        progress,
+        feedback: { bounced: 0, complained: 0 },
+        reason: "rate-limited",
+      });
+      expect((yield* storage.getCampaign(campaignId)).submission).toStrictEqual({
+        state: "completed",
+        queuedAt,
+        startedAt,
+        finishedAt,
+        progress,
+        feedback: { bounced: 0, complained: 0 },
+      });
+    }),
+  );
 
-  it("treats a sending campaign without a queuedAt as corrupt", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({
-          getItem: [
-            Effect.succeed({
-              Item: meta({ state: "sending", startedAt }),
-            }),
-          ],
-        });
+  it.effect("treats a sending campaign without a queuedAt as corrupt", () =>
+    Effect.gen(function* () {
+      const { storage } = withStorage({
+        getItem: [
+          Effect.succeed({
+            Item: meta({ state: "sending", startedAt }),
+          }),
+        ],
+      });
 
-        const attempt = yield* Effect.result(storage.getCampaign(campaignId));
+      const attempt = yield* Effect.result(storage.getCampaign(campaignId));
 
-        expect(failureOf(attempt).reason).toBe("corrupt");
-        expectAliasedReservedNames(table);
-      }),
-    ));
+      expect(failureOf(attempt).reason).toBe("corrupt");
+    }),
+  );
 
-  it("reads META then BODY and merges them into one campaign", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({
-          getItem: [
-            Effect.succeed({ Item: meta({ state: "draft" }) }),
-            Effect.succeed({ Item: body() }),
-          ],
-        });
+  it.effect("reads META then BODY and merges them into one campaign", () =>
+    Effect.gen(function* () {
+      const { table, storage } = withStorage({
+        getItem: [
+          Effect.succeed({ Item: meta({ state: "draft" }) }),
+          Effect.succeed({ Item: body() }),
+        ],
+      });
 
-        const campaign = yield* storage.getCampaign(campaignId);
+      const campaign = yield* storage.getCampaign(campaignId);
 
-        expect(table.getItemRequests.map((request) => request.Key)).toStrictEqual([
-          { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } },
-          { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "BODY" } },
-        ]);
-        expect(campaign).toStrictEqual({
-          id: campaignId,
-          listId,
-          subject: "Release",
-          createdAt,
-          submission: { state: "draft" },
-          text: "Body",
-        });
-        expectAliasedReservedNames(table);
-      }),
-    ));
+      expect(table.getItemRequests.map((request) => request.Key)).toStrictEqual([
+        { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } },
+        { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "BODY" } },
+      ]);
+      expect(campaign).toStrictEqual({
+        id: campaignId,
+        listId,
+        subject: "Release",
+        createdAt,
+        submission: { state: "draft" },
+        text: "Body",
+      });
+    }),
+  );
 
-  it("projects a stored filter into the campaign", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({
-          getItem: [
-            Effect.succeed({ Item: meta({ state: "draft", filter: { plan: "pro" } }) }),
-            Effect.succeed({ Item: body() }),
-          ],
-        });
+  it.effect("projects a stored filter into the campaign", () =>
+    Effect.gen(function* () {
+      const { storage } = withStorage({
+        getItem: [
+          Effect.succeed({ Item: meta({ state: "draft", filter: { plan: "pro" } }) }),
+          Effect.succeed({ Item: body() }),
+        ],
+      });
 
-        expect(yield* storage.getCampaign(campaignId)).toStrictEqual({
-          id: campaignId,
-          listId,
-          subject: "Release",
-          createdAt,
-          submission: { state: "draft" },
-          text: "Body",
-          filter: { plan: "pro" },
-        });
-        expectAliasedReservedNames(table);
-      }),
-    ));
+      expect(yield* storage.getCampaign(campaignId)).toStrictEqual({
+        id: campaignId,
+        listId,
+        subject: "Release",
+        createdAt,
+        submission: { state: "draft" },
+        text: "Body",
+        filter: { plan: "pro" },
+      });
+    }),
+  );
 
-  it("treats a META without a BODY as corrupt", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({
-          getItem: [Effect.succeed({ Item: meta({ state: "draft" }) }), Effect.succeed({})],
-        });
+  it.effect("treats a META without a BODY as corrupt", () =>
+    Effect.gen(function* () {
+      const { storage } = withStorage({
+        getItem: [Effect.succeed({ Item: meta({ state: "draft" }) }), Effect.succeed({})],
+      });
 
-        const attempt = yield* Effect.result(storage.getCampaign(campaignId));
+      const attempt = yield* Effect.result(storage.getCampaign(campaignId));
 
-        expect(failureOf(attempt).reason).toBe("corrupt");
-        expect(failureOf(attempt).operationId).toBe("getCampaignBody");
-        expectAliasedReservedNames(table);
-      }),
-    ));
+      expect(failureOf(attempt).reason).toBe("corrupt");
+      expect(failureOf(attempt).operationId).toBe("getCampaignBody");
+    }),
+  );
 });
 
 describe("getCampaignBody", () => {
-  it("reads the BODY key and projects the text", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({
-          getItem: [Effect.succeed({ Item: body() })],
-        });
+  it.effect("reads the BODY key and projects the text", () =>
+    Effect.gen(function* () {
+      const { table, storage } = withStorage({
+        getItem: [Effect.succeed({ Item: body() })],
+      });
 
-        expect(yield* storage.getCampaignBody(campaignId)).toStrictEqual({ text: "Body" });
-        expect(table.getItemRequests[0]?.Key).toStrictEqual({
-          pk: { S: `CAMPAIGN#${campaignId}` },
-          sk: { S: "BODY" },
-        });
-        expectAliasedReservedNames(table);
-      }),
-    ));
+      expect(yield* storage.getCampaignBody(campaignId)).toStrictEqual({ text: "Body" });
+      expect(table.getItemRequests[0]?.Key).toStrictEqual({
+        pk: { S: `CAMPAIGN#${campaignId}` },
+        sk: { S: "BODY" },
+      });
+    }),
+  );
 });
 
 describe("getCampaignControl", () => {
-  it("returns state, run token, startedAt and pausedReason from one strongly consistent META read", () =>
-    Effect.runPromise(
+  it.effect(
+    "returns state, run token, startedAt and pausedReason from one strongly consistent META read",
+    () =>
       Effect.gen(function* () {
         const { table, storage } = withStorage({
           getItem: [
@@ -519,86 +514,78 @@ describe("getCampaignControl", () => {
             ConsistentRead: true,
           },
         ]);
-        expectAliasedReservedNames(table);
       }),
-    ));
+  );
 
-  it("treats a tokenless draft as a valid control snapshot", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({
-          getItem: [Effect.succeed({ Item: meta({ state: "draft" }) })],
-        });
+  it.effect("treats a tokenless draft as a valid control snapshot", () =>
+    Effect.gen(function* () {
+      const { storage } = withStorage({
+        getItem: [Effect.succeed({ Item: meta({ state: "draft" }) })],
+      });
 
-        expect(yield* storage.getCampaignControl(campaignId)).toStrictEqual({
-          state: "draft",
-          runToken: undefined,
-          startedAt: undefined,
-          pausedReason: undefined,
-        });
-        expectAliasedReservedNames(table);
-      }),
-    ));
+      expect(yield* storage.getCampaignControl(campaignId)).toStrictEqual({
+        state: "draft",
+        runToken: undefined,
+        startedAt: undefined,
+        pausedReason: undefined,
+      });
+    }),
+  );
 
-  it("answers NotFound when the campaign is missing", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({
-          getItem: [Effect.succeed({})],
-        });
+  it.effect("answers NotFound when the campaign is missing", () =>
+    Effect.gen(function* () {
+      const { storage } = withStorage({
+        getItem: [Effect.succeed({})],
+      });
 
-        expect(yield* Effect.flip(storage.getCampaignControl(campaignId))).toStrictEqual(
-          new Schemas.NotFound({ entity: "campaign" }),
-        );
-        expectAliasedReservedNames(table);
-      }),
-    ));
+      expect(yield* Effect.flip(storage.getCampaignControl(campaignId))).toStrictEqual(
+        new Schemas.NotFound({ entity: "campaign" }),
+      );
+    }),
+  );
 
-  it("decodes a queued record without a run token rather than treating it as corrupt", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({
-          getItem: [Effect.succeed({ Item: meta({ state: "queued", queuedAt }) })],
-        });
+  it.effect("decodes a queued record without a run token rather than treating it as corrupt", () =>
+    Effect.gen(function* () {
+      const { storage } = withStorage({
+        getItem: [Effect.succeed({ Item: meta({ state: "queued", queuedAt }) })],
+      });
 
-        expect(yield* storage.getCampaignControl(campaignId)).toStrictEqual({
-          state: "queued",
-          runToken: undefined,
-          startedAt: undefined,
-          pausedReason: undefined,
-        });
-        expectAliasedReservedNames(table);
-      }),
-    ));
+      expect(yield* storage.getCampaignControl(campaignId)).toStrictEqual({
+        state: "queued",
+        runToken: undefined,
+        startedAt: undefined,
+        pausedReason: undefined,
+      });
+    }),
+  );
 });
 
 describe("createCampaign", () => {
-  it("writes the BODY item then the META item, each only where nothing is", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({});
+  it.effect("writes the BODY item then the META item, each only where nothing is", () =>
+    Effect.gen(function* () {
+      const { table, storage } = withStorage({});
 
-        yield* storage.createCampaign({
-          id: campaignId,
-          listId,
-          subject: "Release",
-          text: "Body",
-          createdAt,
-          submission: { state: "draft" },
-        });
+      yield* storage.createCampaign({
+        id: campaignId,
+        listId,
+        subject: "Release",
+        text: "Body",
+        createdAt,
+        submission: { state: "draft" },
+      });
 
-        expect(table.putItemRequests).toHaveLength(2);
-        expect(table.putItemRequests[0]?.ConditionExpression).toBe("attribute_not_exists(pk)");
-        expect(table.putItemRequests[0]?.Item).toStrictEqual(body());
-        expect(table.putItemRequests[1]?.ConditionExpression).toBe("attribute_not_exists(pk)");
-        expect(table.putItemRequests[1]?.Item?.["sk"]).toStrictEqual({ S: "META" });
-        expect(table.putItemRequests[1]?.Item).not.toHaveProperty("text");
-        expectAliasedReservedNames(table);
-      }),
-    ));
+      expect(table.putItemRequests).toHaveLength(2);
+      expect(table.putItemRequests[0]?.ConditionExpression).toBe("attribute_not_exists(pk)");
+      expect(table.putItemRequests[0]?.Item).toStrictEqual(body());
+      expect(table.putItemRequests[1]?.ConditionExpression).toBe("attribute_not_exists(pk)");
+      expect(table.putItemRequests[1]?.Item?.["sk"]).toStrictEqual({ S: "META" });
+      expect(table.putItemRequests[1]?.Item).not.toHaveProperty("text");
+    }),
+  );
 
-  it("writes the listing attributes, without which the campaign is invisible to the index", () =>
-    Effect.runPromise(
+  it.effect(
+    "writes the listing attributes, without which the campaign is invisible to the index",
+    () =>
       Effect.gen(function* () {
         const { table, storage } = withStorage({});
 
@@ -616,141 +603,112 @@ describe("createCampaign", () => {
         expect(item["gsi1pk"]).toStrictEqual({ S: "campaign" });
         expect(item["gsi1sk"]).toStrictEqual({ S: `${createdAt}#${campaignId}` });
       }),
-    ));
+  );
 
-  it("writes filter as a string map on the META put", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({});
+  it.effect("writes filter as a string map on the META put", () =>
+    Effect.gen(function* () {
+      const { table, storage } = withStorage({});
 
-        yield* storage.createCampaign({
-          id: campaignId,
-          listId,
-          subject: "Release",
-          text: "Body",
-          createdAt,
-          submission: { state: "draft" },
-          filter: { plan: "pro" },
-        });
+      yield* storage.createCampaign({
+        id: campaignId,
+        listId,
+        subject: "Release",
+        text: "Body",
+        createdAt,
+        submission: { state: "draft" },
+        filter: { plan: "pro" },
+      });
 
-        expect(table.putItemRequests[1]?.Item?.["filter"]).toStrictEqual({
-          M: { plan: { S: "pro" } },
-        });
-        expectAliasedReservedNames(table);
-      }),
-    ));
+      expect(table.putItemRequests[1]?.Item?.["filter"]).toStrictEqual({
+        M: { plan: { S: "pro" } },
+      });
+    }),
+  );
 });
 
-describe("updateDraft", () => {
-  const draft: Schemas.Campaign = {
-    id: campaignId,
-    listId,
-    subject: "Release",
-    text: "Body",
-    createdAt,
-    submission: { state: "draft" },
-  };
+const draft: Schemas.Campaign = {
+  id: campaignId,
+  listId,
+  subject: "Release",
+  text: "Body",
+  createdAt,
+  submission: { state: "draft" },
+};
 
+describe("updateDraft", () => {
   const metaKey = { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } };
 
-  it("rewrites the editable META fields and BODY in one draft-only transaction", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({});
+  it.effect("rewrites the editable META fields and BODY in one draft-only transaction", () =>
+    Effect.gen(function* () {
+      const { table, storage } = withStorage({});
 
-        expect(
-          yield* storage.updateDraft({ ...draft, html: "<p>Body</p>", filter: { plan: "pro" } }),
-        ).toBe("updated");
-        expect(table.transactionRequests).toHaveLength(1);
-        expect(table.transactionRequests[0]?.TransactItems).toStrictEqual([
-          {
-            Update: {
-              Table: tableLogicalId,
-              Key: metaKey,
-              ConditionExpression: "#state = :draft",
-              ExpressionAttributeNames: { "#state": "state", "#filter": "filter" },
-              UpdateExpression: "SET subject = :subject, listId = :listId, #filter = :filter",
-              ExpressionAttributeValues: {
-                ":subject": { S: "Release" },
-                ":listId": { S: listId },
-                ":draft": { S: "draft" },
-                ":filter": { M: { plan: { S: "pro" } } },
-              },
+      expect(
+        yield* storage.updateDraft({ ...draft, html: "<p>Body</p>", filter: { plan: "pro" } }),
+      ).toBe("updated");
+      expect(table.transactionRequests).toHaveLength(1);
+      expect(table.transactionRequests[0]?.TransactItems).toStrictEqual([
+        {
+          Update: {
+            Table: tableLogicalId,
+            Key: metaKey,
+            ConditionExpression: "#state = :draft",
+            ExpressionAttributeNames: { "#state": "state", "#filter": "filter" },
+            UpdateExpression: "SET subject = :subject, listId = :listId, #filter = :filter",
+            ExpressionAttributeValues: {
+              ":subject": { S: "Release" },
+              ":listId": { S: listId },
+              ":draft": { S: "draft" },
+              ":filter": { M: { plan: { S: "pro" } } },
             },
           },
-          { Put: { Table: tableLogicalId, Item: body("<p>Body</p>") } },
-        ]);
-        expectAliasedReservedNames(table);
-      }),
-    ));
+        },
+        { Put: { Table: tableLogicalId, Item: body("<p>Body</p>") } },
+      ]);
+    }),
+  );
 
-  it("removes the filter and writes a BODY without html when the draft has neither", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({});
+  it.effect("removes the filter and writes a BODY without html when the draft has neither", () =>
+    Effect.gen(function* () {
+      const { table, storage } = withStorage({});
 
-        yield* storage.updateDraft(draft);
+      yield* storage.updateDraft(draft);
 
-        const [update, put] = table.transactionRequests[0]?.TransactItems ?? [];
+      const [update, put] = table.transactionRequests[0]?.TransactItems ?? [];
 
-        expect(update?.Update?.UpdateExpression).toBe(
-          "SET subject = :subject, listId = :listId REMOVE #filter",
-        );
-        expect(update?.Update?.ExpressionAttributeValues).not.toHaveProperty(":filter");
-        expect(put?.Put?.Item).toStrictEqual(body());
-        expectAliasedReservedNames(table);
-      }),
-    ));
-
-  it("reports conflict when the campaign is no longer a draft", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { storage } = withStorage({
-          transactWriteItems: [cancelled("ConditionalCheckFailed", "None")],
-        });
-
-        expect(yield* storage.updateDraft(draft)).toBe("conflict");
-      }),
-    ));
+      expect(update?.Update?.UpdateExpression).toBe(
+        "SET subject = :subject, listId = :listId REMOVE #filter",
+      );
+      expect(update?.Update?.ExpressionAttributeValues).not.toHaveProperty(":filter");
+      expect(put?.Put?.Item).toStrictEqual(body());
+    }),
+  );
 });
 
 describe("deleteDraft", () => {
-  it("deletes META, only while a draft, together with BODY", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({});
+  it.effect("deletes META, only while a draft, together with BODY", () =>
+    Effect.gen(function* () {
+      const { table, storage } = withStorage({});
 
-        expect(yield* storage.deleteDraft(campaignId)).toBe("deleted");
-        expect(table.transactionRequests[0]?.TransactItems).toStrictEqual([
-          {
-            Delete: {
-              Table: tableLogicalId,
-              Key: { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } },
-              ConditionExpression: "#state = :draft",
-              ExpressionAttributeNames: { "#state": "state" },
-              ExpressionAttributeValues: { ":draft": { S: "draft" } },
-            },
+      expect(yield* storage.deleteDraft(campaignId)).toBe("deleted");
+      expect(table.transactionRequests[0]?.TransactItems).toStrictEqual([
+        {
+          Delete: {
+            Table: tableLogicalId,
+            Key: { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } },
+            ConditionExpression: "#state = :draft",
+            ExpressionAttributeNames: { "#state": "state" },
+            ExpressionAttributeValues: { ":draft": { S: "draft" } },
           },
-          {
-            Delete: {
-              Table: tableLogicalId,
-              Key: { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "BODY" } },
-            },
+        },
+        {
+          Delete: {
+            Table: tableLogicalId,
+            Key: { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "BODY" } },
           },
-        ]);
-      }),
-    ));
-
-  it("reports conflict when the campaign is no longer a draft", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { storage } = withStorage({
-          transactWriteItems: [cancelled("ConditionalCheckFailed", "None")],
-        });
-
-        expect(yield* storage.deleteDraft(campaignId)).toBe("conflict");
-      }),
-    ));
+        },
+      ]);
+    }),
+  );
 });
 
 describe("listCampaigns", () => {
@@ -763,8 +721,9 @@ describe("listCampaigns", () => {
     gsi1sk: { S: `${at}#${id}` },
   });
 
-  it("queries its own index partition and yields draft and paused summaries in index order", () =>
-    Effect.runPromise(
+  it.effect(
+    "queries its own index partition and yields draft and paused summaries in index order",
+    () =>
       Effect.gen(function* () {
         const older = listingItem(otherCampaignId, olderCreatedAt, { state: "draft" });
 
@@ -811,7 +770,7 @@ describe("listCampaigns", () => {
           },
         ]);
       }),
-    ));
+  );
 });
 
 const lifecycleUpdate = (table: Table) => table.transactionRequests[0]?.TransactItems[0]?.Update;
@@ -824,36 +783,35 @@ const observed = (state: "draft" | "scheduled" | "paused", token?: string) => ({
 describe("newRun", () => {
   const nextToken = "0195f0a0-1111-4222-8333-44444444e5d3";
 
-  it("queues a tokenless draft under a new run token and the run baselines", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({});
+  it.effect("queues a tokenless draft under a new run token and the run baselines", () =>
+    Effect.gen(function* () {
+      const { table, storage } = withStorage({});
 
-        expect(yield* storage.newRun(campaignId, observed("draft"), runToken, "queued", now)).toBe(
-          "queued",
-        );
-        expect(table.transactionRequests[0]?.ClientRequestToken).toBe("token-1");
-        expect(lifecycleUpdate(table)).toStrictEqual({
-          Table: tableLogicalId,
-          Key: { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } },
-          UpdateExpression:
-            "SET #state = :target, queuedAt = :queuedAt, runToken = :run, runAccepted = accepted, runBounced = bounced, runComplained = complained REMOVE pausedReason",
-          ConditionExpression: "#state = :expectedState AND attribute_not_exists(runToken)",
-          ExpressionAttributeNames: { "#state": "state" },
-          ExpressionAttributeValues: {
-            ":target": { S: "queued" },
-            ":queuedAt": { S: now },
-            ":run": { S: runToken },
-            ":expectedState": { S: "draft" },
-          },
-        });
-        expect(table.updateItemRequests).toHaveLength(0);
-        expectAliasedReservedNames(table);
-      }),
-    ));
+      expect(yield* storage.newRun(campaignId, observed("draft"), runToken, "queued", now)).toBe(
+        "queued",
+      );
+      expect(table.transactionRequests[0]?.ClientRequestToken).toBe("token-1");
+      expect(lifecycleUpdate(table)).toStrictEqual({
+        Table: tableLogicalId,
+        Key: { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } },
+        UpdateExpression:
+          "SET #state = :target, queuedAt = :queuedAt, runToken = :run, runAccepted = accepted, runBounced = bounced, runComplained = complained REMOVE pausedReason",
+        ConditionExpression: "#state = :expectedState AND attribute_not_exists(runToken)",
+        ExpressionAttributeNames: { "#state": "state" },
+        ExpressionAttributeValues: {
+          ":target": { S: "queued" },
+          ":queuedAt": { S: now },
+          ":run": { S: runToken },
+          ":expectedState": { S: "draft" },
+        },
+      });
+      expect(table.updateItemRequests).toHaveLength(0);
+    }),
+  );
 
-  it("schedules a tokenless draft with sendAt as queuedAt, a new token and the run baselines", () =>
-    Effect.runPromise(
+  it.effect(
+    "schedules a tokenless draft with sendAt as queuedAt, a new token and the run baselines",
+    () =>
       Effect.gen(function* () {
         const { table, storage } = withStorage({});
 
@@ -874,12 +832,12 @@ describe("newRun", () => {
             ":expectedState": { S: "draft" },
           },
         });
-        expectAliasedReservedNames(table);
       }),
-    ));
+  );
 
-  it("re-queues a paused campaign under its observed token and clears the pause reason", () =>
-    Effect.runPromise(
+  it.effect(
+    "re-queues a paused campaign under its observed token and clears the pause reason",
+    () =>
       Effect.gen(function* () {
         const { table, storage } = withStorage({});
 
@@ -901,12 +859,12 @@ describe("newRun", () => {
             ":expected": { S: runToken },
           },
         });
-        expectAliasedReservedNames(table);
       }),
-    ));
+  );
 
-  it("starts a run from a draft that still holds a retired token by matching that token", () =>
-    Effect.runPromise(
+  it.effect(
+    "starts a run from a draft that still holds a retired token by matching that token",
+    () =>
       Effect.gen(function* () {
         const { table, storage } = withStorage({});
 
@@ -923,108 +881,85 @@ describe("newRun", () => {
           ":expectedState": { S: "draft" },
           ":expected": { S: runToken },
         });
-        expectAliasedReservedNames(table);
       }),
-    ));
+  );
 
-  it("reschedules by matching the observed scheduled token, not an IN-list of states", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({});
+  it.effect("reschedules by matching the observed scheduled token, not an IN-list of states", () =>
+    Effect.gen(function* () {
+      const { table, storage } = withStorage({});
 
-        expect(
-          yield* storage.newRun(
-            campaignId,
-            observed("scheduled", runToken),
-            nextToken,
-            "scheduled",
-            queuedAt,
-          ),
-        ).toBe("scheduled");
-        expect(lifecycleUpdate(table)?.ConditionExpression).toBe(
-          "#state = :expectedState AND runToken = :expected",
-        );
-        expect(lifecycleUpdate(table)?.ExpressionAttributeValues).toStrictEqual({
-          ":target": { S: "scheduled" },
-          ":queuedAt": { S: queuedAt },
-          ":run": { S: nextToken },
-          ":expectedState": { S: "scheduled" },
-          ":expected": { S: runToken },
-        });
-        expectAliasedReservedNames(table);
-      }),
-    ));
+      expect(
+        yield* storage.newRun(
+          campaignId,
+          observed("scheduled", runToken),
+          nextToken,
+          "scheduled",
+          queuedAt,
+        ),
+      ).toBe("scheduled");
+      expect(lifecycleUpdate(table)?.ConditionExpression).toBe(
+        "#state = :expectedState AND runToken = :expected",
+      );
+      expect(lifecycleUpdate(table)?.ExpressionAttributeValues).toStrictEqual({
+        ":target": { S: "scheduled" },
+        ":queuedAt": { S: queuedAt },
+        ":run": { S: nextToken },
+        ":expectedState": { S: "scheduled" },
+        ":expected": { S: runToken },
+      });
+    }),
+  );
 
-  it("reports conflict when the observed source no longer holds", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({
-          transactWriteItems: [cancelled("ConditionalCheckFailed")],
-        });
-
-        expect(yield* storage.newRun(campaignId, observed("draft"), runToken, "queued", now)).toBe(
-          "conflict",
-        );
-        expectAliasedReservedNames(table);
-      }),
-    ));
-
-  it.each([
+  it.effect.each([
     ["draft", "queued", "enqueueCampaign"],
     ["draft", "scheduled", "scheduleCampaign"],
     ["paused", "queued", "resumeCampaign"],
   ] as const)(
     "keeps a server error from %s to %s unavailable under %s",
-    (source, target, operationId) =>
-      Effect.runPromise(
-        Effect.gen(function* () {
-          const { table, storage } = withStorage({
-            transactWriteItems: [Effect.fail(serverError)],
-          });
+    ([source, target, operationId]) =>
+      Effect.gen(function* () {
+        const { storage } = withStorage({
+          transactWriteItems: [Effect.fail(serverError)],
+        });
 
-          const attempt = yield* Effect.result(
-            storage.newRun(campaignId, observed(source, runToken), nextToken, target, now),
-          );
+        const attempt = yield* Effect.result(
+          storage.newRun(campaignId, observed(source, runToken), nextToken, target, now),
+        );
 
-          expect(failureOf(attempt).reason).toBe("unavailable");
-          expect(failureOf(attempt).operationId).toBe(operationId);
-          expectAliasedReservedNames(table);
-        }),
-      ),
+        expect(failureOf(attempt).reason).toBe("unavailable");
+        expect(failureOf(attempt).operationId).toBe(operationId);
+      }),
   );
 });
 
 describe("cancelCampaign", () => {
-  it("returns a scheduled generation to draft, retains the token and removes queuedAt", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({});
+  it.effect("returns a scheduled generation to draft, retains the token and removes queuedAt", () =>
+    Effect.gen(function* () {
+      const { table, storage } = withStorage({});
 
-        expect(yield* storage.cancelCampaign(campaignId, { state: "scheduled", runToken })).toBe(
-          "applied",
-        );
-        expect(table.transactionRequests[0]?.ClientRequestToken).toBe("token-1");
-        expect(lifecycleUpdate(table)).toStrictEqual({
-          Table: tableLogicalId,
-          Key: { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } },
-          UpdateExpression: "SET #state = :draft REMOVE queuedAt",
-          ConditionExpression: "#state = :scheduled AND runToken = :expected",
-          ExpressionAttributeNames: { "#state": "state" },
-          ExpressionAttributeValues: {
-            ":draft": { S: "draft" },
-            ":scheduled": { S: "scheduled" },
-            ":expected": { S: runToken },
-          },
-        });
-        expect(lifecycleUpdate(table)?.UpdateExpression).not.toContain("runToken");
-        expect(lifecycleUpdate(table)?.ConditionExpression).not.toContain(" IN ");
-        expect(table.updateItemRequests).toHaveLength(0);
-        expectAliasedReservedNames(table);
-      }),
-    ));
+      expect(yield* storage.cancelCampaign(campaignId, { state: "scheduled", runToken })).toBe(
+        "applied",
+      );
+      expect(table.transactionRequests[0]?.ClientRequestToken).toBe("token-1");
+      expect(lifecycleUpdate(table)).toStrictEqual({
+        Table: tableLogicalId,
+        Key: { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } },
+        UpdateExpression: "SET #state = :draft REMOVE queuedAt",
+        ConditionExpression: "#state = :scheduled AND runToken = :expected",
+        ExpressionAttributeNames: { "#state": "state" },
+        ExpressionAttributeValues: {
+          ":draft": { S: "draft" },
+          ":scheduled": { S: "scheduled" },
+          ":expected": { S: runToken },
+        },
+      });
+      expect(table.updateItemRequests).toHaveLength(0);
+    }),
+  );
 
-  it("returns a never-started queued generation to draft and requires startedAt to be absent", () =>
-    Effect.runPromise(
+  it.effect(
+    "returns a never-started queued generation to draft and requires startedAt to be absent",
+    () =>
       Effect.gen(function* () {
         const { table, storage } = withStorage({});
 
@@ -1048,59 +983,36 @@ describe("cancelCampaign", () => {
             ":expected": { S: runToken },
           },
         });
-        expect(lifecycleUpdate(table)?.UpdateExpression).not.toContain("runToken");
-        expectAliasedReservedNames(table);
       }),
-    ));
+  );
 
-  it("pauses a queued resume as manual without resetting history fields", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({});
+  it.effect("pauses a queued resume as manual without resetting history fields", () =>
+    Effect.gen(function* () {
+      const { table, storage } = withStorage({});
 
-        expect(
-          yield* storage.cancelCampaign(campaignId, {
-            state: "queued",
-            runToken,
-            started: true,
-          }),
-        ).toBe("applied");
-        expect(lifecycleUpdate(table)).toStrictEqual({
-          Table: tableLogicalId,
-          Key: { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } },
-          UpdateExpression: "SET #state = :paused, pausedReason = :manual",
-          ConditionExpression:
-            "#state = :queued AND runToken = :expected AND attribute_exists(startedAt)",
-          ExpressionAttributeNames: { "#state": "state" },
-          ExpressionAttributeValues: {
-            ":paused": { S: "paused" },
-            ":manual": { S: "manual" },
-            ":queued": { S: "queued" },
-            ":expected": { S: runToken },
-          },
-        });
-        expect(lifecycleUpdate(table)?.UpdateExpression).not.toContain("REMOVE");
-        expect(lifecycleUpdate(table)?.UpdateExpression).not.toContain("runAccepted");
-        expect(lifecycleUpdate(table)?.UpdateExpression).not.toContain("queuedAt");
-        expect(lifecycleUpdate(table)?.UpdateExpression).not.toContain("startedAt");
-        expect(lifecycleUpdate(table)?.UpdateExpression).not.toContain("cursor");
-        expectAliasedReservedNames(table);
-      }),
-    ));
-
-  it("reports conflict when the expected source no longer holds", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({
-          transactWriteItems: [cancelled("ConditionalCheckFailed")],
-        });
-
-        expect(yield* storage.cancelCampaign(campaignId, { state: "scheduled", runToken })).toBe(
-          "conflict",
-        );
-        expectAliasedReservedNames(table);
-      }),
-    ));
+      expect(
+        yield* storage.cancelCampaign(campaignId, {
+          state: "queued",
+          runToken,
+          started: true,
+        }),
+      ).toBe("applied");
+      expect(lifecycleUpdate(table)).toStrictEqual({
+        Table: tableLogicalId,
+        Key: { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } },
+        UpdateExpression: "SET #state = :paused, pausedReason = :manual",
+        ConditionExpression:
+          "#state = :queued AND runToken = :expected AND attribute_exists(startedAt)",
+        ExpressionAttributeNames: { "#state": "state" },
+        ExpressionAttributeValues: {
+          ":paused": { S: "paused" },
+          ":manual": { S: "manual" },
+          ":queued": { S: "queued" },
+          ":expected": { S: runToken },
+        },
+      });
+    }),
+  );
 });
 
 describe("beginRun", () => {
@@ -1112,613 +1024,532 @@ describe("beginRun", () => {
     cursor: contactId,
   });
 
-  it("returns the decoded meta and sets sending under the run token", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({
-          updateItem: [Effect.succeed({ Attributes: runningItem })],
-        });
+  it.effect("returns the decoded meta and sets sending under the run token", () =>
+    Effect.gen(function* () {
+      const { table, storage } = withStorage({
+        updateItem: [Effect.succeed({ Attributes: runningItem })],
+      });
 
-        expect(yield* storage.beginRun(campaignId, runToken, now)).toStrictEqual({
-          outcome: "running",
-          campaign: {
-            listId,
-            subject: "Release",
-            cursor: contactId,
-            filter: undefined,
-            run: { accepted: 0, bounced: 0, complained: 0 },
-          },
-        });
-        expect(table.updateItemRequests[0]).toStrictEqual({
-          Key: { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } },
-          UpdateExpression: "SET #state = :sending, startedAt = if_not_exists(startedAt, :now)",
-          ConditionExpression: "runToken = :run AND #state IN (:queued, :sending, :scheduled)",
-          ExpressionAttributeNames: { "#state": "state" },
-          ExpressionAttributeValues: {
-            ":sending": { S: "sending" },
-            ":now": { S: now },
-            ":run": { S: runToken },
-            ":queued": { S: "queued" },
-            ":scheduled": { S: "scheduled" },
-          },
-          ReturnValues: "ALL_NEW",
-        });
-        expectAliasedReservedNames(table);
-      }),
-    ));
+      expect(yield* storage.beginRun(campaignId, runToken, now)).toStrictEqual({
+        outcome: "running",
+        campaign: {
+          listId,
+          subject: "Release",
+          cursor: contactId,
+          filter: undefined,
+          run: { accepted: 0, bounced: 0, complained: 0 },
+        },
+      });
+      expect(table.updateItemRequests[0]).toStrictEqual({
+        Key: { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } },
+        UpdateExpression: "SET #state = :sending, startedAt = if_not_exists(startedAt, :now)",
+        ConditionExpression: "runToken = :run AND #state IN (:queued, :sending, :scheduled)",
+        ExpressionAttributeNames: { "#state": "state" },
+        ExpressionAttributeValues: {
+          ":sending": { S: "sending" },
+          ":now": { S: now },
+          ":run": { S: runToken },
+          ":queued": { S: "queued" },
+          ":scheduled": { S: "scheduled" },
+        },
+        ReturnValues: "ALL_NEW",
+      });
+    }),
+  );
 
-  it("omits the cursor when the meta has none", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({
-          updateItem: [
-            Effect.succeed({
-              Attributes: meta({
-                state: "sending",
-                queuedAt,
-                startedAt,
-                runToken,
-              }),
+  it.effect("omits the cursor when the meta has none", () =>
+    Effect.gen(function* () {
+      const { storage } = withStorage({
+        updateItem: [
+          Effect.succeed({
+            Attributes: meta({
+              state: "sending",
+              queuedAt,
+              startedAt,
+              runToken,
             }),
-          ],
-        });
+          }),
+        ],
+      });
 
-        expect(yield* storage.beginRun(campaignId, runToken, now)).toStrictEqual({
-          outcome: "running",
-          campaign: {
-            listId,
-            subject: "Release",
-            cursor: undefined,
-            filter: undefined,
-            run: { accepted: 0, bounced: 0, complained: 0 },
-          },
-        });
-        expectAliasedReservedNames(table);
-      }),
-    ));
+      expect(yield* storage.beginRun(campaignId, runToken, now)).toStrictEqual({
+        outcome: "running",
+        campaign: {
+          listId,
+          subject: "Release",
+          cursor: undefined,
+          filter: undefined,
+          run: { accepted: 0, bounced: 0, complained: 0 },
+        },
+      });
+    }),
+  );
 
-  it("projects run deltas from the counters minus the run baselines", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({
-          updateItem: [
-            Effect.succeed({
-              Attributes: meta({
-                state: "sending",
-                queuedAt,
-                startedAt,
-                runToken,
-                accepted: 10,
-                bounced: 4,
-                complained: 2,
-                runAccepted: 3,
-                runBounced: 1,
-                runComplained: 0,
-              }),
+  it.effect("projects run deltas from the counters minus the run baselines", () =>
+    Effect.gen(function* () {
+      const { storage } = withStorage({
+        updateItem: [
+          Effect.succeed({
+            Attributes: meta({
+              state: "sending",
+              queuedAt,
+              startedAt,
+              runToken,
+              accepted: 10,
+              bounced: 4,
+              complained: 2,
+              runAccepted: 3,
+              runBounced: 1,
+              runComplained: 0,
             }),
-          ],
-        });
+          }),
+        ],
+      });
 
-        expect(yield* storage.beginRun(campaignId, runToken, now)).toStrictEqual({
-          outcome: "running",
-          campaign: {
-            listId,
-            subject: "Release",
-            cursor: undefined,
-            filter: undefined,
-            run: { accepted: 7, bounced: 3, complained: 2 },
-          },
-        });
-        expectAliasedReservedNames(table);
-      }),
-    ));
+      expect(yield* storage.beginRun(campaignId, runToken, now)).toStrictEqual({
+        outcome: "running",
+        campaign: {
+          listId,
+          subject: "Release",
+          cursor: undefined,
+          filter: undefined,
+          run: { accepted: 7, bounced: 3, complained: 2 },
+        },
+      });
+    }),
+  );
 
-  it("projects a stored filter from META into the run", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({
-          updateItem: [
-            Effect.succeed({
-              Attributes: meta({
-                state: "sending",
-                queuedAt,
-                startedAt,
-                runToken,
-                filter: { plan: "pro" },
-              }),
+  it.effect("projects a stored filter from META into the run", () =>
+    Effect.gen(function* () {
+      const { storage } = withStorage({
+        updateItem: [
+          Effect.succeed({
+            Attributes: meta({
+              state: "sending",
+              queuedAt,
+              startedAt,
+              runToken,
+              filter: { plan: "pro" },
             }),
-          ],
-        });
+          }),
+        ],
+      });
 
-        expect(yield* storage.beginRun(campaignId, runToken, now)).toStrictEqual({
-          outcome: "running",
-          campaign: {
-            listId,
-            subject: "Release",
-            cursor: undefined,
-            filter: { plan: "pro" },
-            run: { accepted: 0, bounced: 0, complained: 0 },
-          },
-        });
-        expectAliasedReservedNames(table);
-      }),
-    ));
-
-  it("reports a stale run token as stale, not unavailable", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({ updateItem: [conditionFailed] });
-
-        expect(yield* storage.beginRun(campaignId, runToken, now)).toBe("stale");
-        expectAliasedReservedNames(table);
-      }),
-    ));
+      expect(yield* storage.beginRun(campaignId, runToken, now)).toStrictEqual({
+        outcome: "running",
+        campaign: {
+          listId,
+          subject: "Release",
+          cursor: undefined,
+          filter: { plan: "pro" },
+          run: { accepted: 0, bounced: 0, complained: 0 },
+        },
+      });
+    }),
+  );
 });
 
 describe("claimRecipient", () => {
-  it("checks the run then puts an unconfirmed send row", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({});
+  it.effect("checks the run then puts an unconfirmed send row", () =>
+    Effect.gen(function* () {
+      const { table, storage } = withStorage({});
 
-        expect(
-          yield* storage.claimRecipient(campaignId, runToken, contactId, recipient, sendId, now),
-        ).toBe("claimed");
+      expect(
+        yield* storage.claimRecipient(campaignId, runToken, contactId, recipient, sendId, now),
+      ).toBe("claimed");
 
-        const items = table.transactionRequests[0]?.TransactItems ?? [];
+      const items = table.transactionRequests[0]?.TransactItems ?? [];
 
-        expect(items).toHaveLength(2);
-        expect(items[0]?.ConditionCheck).toStrictEqual({
-          Table: tableLogicalId,
-          Key: { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } },
-          ConditionExpression: "#state = :sending AND runToken = :run",
-          ExpressionAttributeNames: { "#state": "state" },
-          ExpressionAttributeValues: {
-            ":sending": { S: "sending" },
-            ":run": { S: runToken },
-          },
-        });
-        expect(items[1]?.Put?.ConditionExpression).toBe("attribute_not_exists(pk)");
-        expect(items[1]?.Put?.Item).toStrictEqual({
-          pk: { S: `CAMPAIGN#${campaignId}` },
-          sk: { S: `SEND#${contactId}` },
-          v: { N: "1" },
-          sendId: { S: sendId },
-          contactId: { S: contactId },
-          recipient: { S: recipient },
-          state: { S: "unconfirmed" },
-          startedAt: { S: now },
-        });
-        expect(items[1]?.Put?.Item).not.toHaveProperty("sender");
-        expect(items[1]?.Put?.Item).not.toHaveProperty("subject");
-        expect(items[1]?.Put?.Item).not.toHaveProperty("text");
-        expectAliasedReservedNames(table);
-      }),
-    ));
+      expect(items).toHaveLength(2);
+      expect(items[0]?.ConditionCheck).toStrictEqual({
+        Table: tableLogicalId,
+        Key: { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } },
+        ConditionExpression: "#state = :sending AND runToken = :run",
+        ExpressionAttributeNames: { "#state": "state" },
+        ExpressionAttributeValues: {
+          ":sending": { S: "sending" },
+          ":run": { S: runToken },
+        },
+      });
+      expect(items[1]?.Put?.ConditionExpression).toBe("attribute_not_exists(pk)");
+      expect(items[1]?.Put?.Item).toStrictEqual({
+        pk: { S: `CAMPAIGN#${campaignId}` },
+        sk: { S: `SEND#${contactId}` },
+        v: { N: "1" },
+        sendId: { S: sendId },
+        contactId: { S: contactId },
+        recipient: { S: recipient },
+        state: { S: "unconfirmed" },
+        startedAt: { S: now },
+      });
+    }),
+  );
 
-  it("reports a stale run when the meta condition fails", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({
-          transactWriteItems: [cancelled("ConditionalCheckFailed", "None")],
-        });
+  it.effect("keeps an unknown transaction outcome unavailable", () =>
+    Effect.gen(function* () {
+      const { storage } = withStorage({
+        transactWriteItems: [Effect.fail(serverError)],
+      });
 
-        expect(
-          yield* storage.claimRecipient(campaignId, runToken, contactId, recipient, sendId, now),
-        ).toBe("stale");
-        expectAliasedReservedNames(table);
-      }),
-    ));
+      const attempt = yield* Effect.result(
+        storage.claimRecipient(campaignId, runToken, contactId, recipient, sendId, now),
+      );
 
-  it("reports an existing row as already claimed", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({
-          transactWriteItems: [cancelled("None", "ConditionalCheckFailed")],
-        });
-
-        expect(
-          yield* storage.claimRecipient(campaignId, runToken, contactId, recipient, sendId, now),
-        ).toBe("already-claimed");
-        expectAliasedReservedNames(table);
-      }),
-    ));
-
-  it("prefers stale when both conditions fail", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({
-          transactWriteItems: [cancelled("ConditionalCheckFailed", "ConditionalCheckFailed")],
-        });
-
-        expect(
-          yield* storage.claimRecipient(campaignId, runToken, contactId, recipient, sendId, now),
-        ).toBe("stale");
-        expectAliasedReservedNames(table);
-      }),
-    ));
-
-  it("keeps an unknown transaction outcome unavailable", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({
-          transactWriteItems: [Effect.fail(serverError)],
-        });
-
-        const attempt = yield* Effect.result(
-          storage.claimRecipient(campaignId, runToken, contactId, recipient, sendId, now),
-        );
-
-        expect(failureOf(attempt).reason).toBe("unavailable");
-        expectAliasedReservedNames(table);
-      }),
-    ));
+      expect(failureOf(attempt).reason).toBe("unavailable");
+    }),
+  );
 });
 
 describe("skipRecipient", () => {
-  it("puts a skipped row then increments the skipped counter", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({});
+  it.effect("puts a skipped row then increments the skipped counter", () =>
+    Effect.gen(function* () {
+      const { table, storage } = withStorage({});
 
-        expect(
-          yield* storage.skipRecipient(
-            campaignId,
-            runToken,
-            contactId,
-            recipient,
-            "unsubscribed",
-            now,
-          ),
-        ).toBe("skipped");
+      expect(
+        yield* storage.skipRecipient(
+          campaignId,
+          runToken,
+          contactId,
+          recipient,
+          "unsubscribed",
+          now,
+        ),
+      ).toBe("skipped");
 
-        const items = table.transactionRequests[0]?.TransactItems ?? [];
+      const items = table.transactionRequests[0]?.TransactItems ?? [];
 
-        expect(items).toHaveLength(2);
-        expect(items[0]?.Put?.ConditionExpression).toBe("attribute_not_exists(pk)");
-        expect(items[0]?.Put?.Item).toStrictEqual({
-          pk: { S: `CAMPAIGN#${campaignId}` },
-          sk: { S: `SEND#${contactId}` },
-          v: { N: "1" },
-          contactId: { S: contactId },
-          recipient: { S: recipient },
-          state: { S: "skipped" },
-          skipReason: { S: "unsubscribed" },
-          startedAt: { S: now },
-          finishedAt: { S: now },
-        });
-        expect(items[1]?.Update).toStrictEqual({
-          Table: tableLogicalId,
-          Key: { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } },
-          UpdateExpression: "ADD skipped :one",
-          ConditionExpression: "#state = :sending AND runToken = :run",
-          ExpressionAttributeNames: { "#state": "state" },
-          ExpressionAttributeValues: {
-            ":one": { N: "1" },
-            ":sending": { S: "sending" },
-            ":run": { S: runToken },
-          },
-        });
-        expectAliasedReservedNames(table);
-      }),
-    ));
-
-  it("reports an existing row as already claimed", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({
-          transactWriteItems: [cancelled("ConditionalCheckFailed", "None")],
-        });
-
-        expect(
-          yield* storage.skipRecipient(
-            campaignId,
-            runToken,
-            contactId,
-            recipient,
-            "suppressed",
-            now,
-          ),
-        ).toBe("already-claimed");
-        expectAliasedReservedNames(table);
-      }),
-    ));
-
-  it("reports a stale run when the meta condition fails", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({
-          transactWriteItems: [cancelled("None", "ConditionalCheckFailed")],
-        });
-
-        expect(
-          yield* storage.skipRecipient(
-            campaignId,
-            runToken,
-            contactId,
-            recipient,
-            "suppressed",
-            now,
-          ),
-        ).toBe("stale");
-        expectAliasedReservedNames(table);
-      }),
-    ));
+      expect(items).toHaveLength(2);
+      expect(items[0]?.Put?.ConditionExpression).toBe("attribute_not_exists(pk)");
+      expect(items[0]?.Put?.Item).toStrictEqual({
+        pk: { S: `CAMPAIGN#${campaignId}` },
+        sk: { S: `SEND#${contactId}` },
+        v: { N: "1" },
+        contactId: { S: contactId },
+        recipient: { S: recipient },
+        state: { S: "skipped" },
+        skipReason: { S: "unsubscribed" },
+        startedAt: { S: now },
+        finishedAt: { S: now },
+      });
+      expect(items[1]?.Update).toStrictEqual({
+        Table: tableLogicalId,
+        Key: { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } },
+        UpdateExpression: "ADD skipped :one",
+        ConditionExpression: "#state = :sending AND runToken = :run",
+        ExpressionAttributeNames: { "#state": "state" },
+        ExpressionAttributeValues: {
+          ":one": { N: "1" },
+          ":sending": { S: "sending" },
+          ":run": { S: runToken },
+        },
+      });
+    }),
+  );
 });
 
 describe("settleRecipient", () => {
-  it("writes acceptance on the send row and adds the accepted counter", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({});
+  it.effect("writes acceptance on the send row and adds the accepted counter", () =>
+    Effect.gen(function* () {
+      const { table, storage } = withStorage({});
 
-        expect(
-          yield* storage.settleRecipient(
-            campaignId,
-            sendId,
-            contactId,
-            {
-              outcome: "accepted",
-              messageId: "0100019",
-            },
-            now,
-          ),
-        ).toBe("settled");
-
-        const items = table.transactionRequests[0]?.TransactItems ?? [];
-
-        expect(items).toHaveLength(2);
-        expect(items[0]?.Update?.Key).toStrictEqual({
-          pk: { S: `CAMPAIGN#${campaignId}` },
-          sk: { S: `SEND#${contactId}` },
-        });
-        expect(items[0]?.Update?.ConditionExpression).toBe(
-          "#state = :unconfirmed AND sendId = :sendId",
-        );
-        expect(items[0]?.Update?.UpdateExpression).toBe(
-          "SET #state = :state, finishedAt = :finishedAt, messageId = :messageId",
-        );
-        expect(items[0]?.Update?.ExpressionAttributeValues?.[":messageId"]).toStrictEqual({
-          S: "0100019",
-        });
-        expect(items[1]?.Update).toStrictEqual({
-          Table: tableLogicalId,
-          Key: { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } },
-          UpdateExpression: "ADD accepted :one",
-          ConditionExpression: "attribute_exists(pk)",
-          ExpressionAttributeValues: { ":one": { N: "1" } },
-        });
-        expectAliasedReservedNames(table);
-      }),
-    ));
-
-  it("writes a rejection code and adds the rejected counter", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({});
-
+      expect(
         yield* storage.settleRecipient(
           campaignId,
           sendId,
           contactId,
           {
-            outcome: "rejected",
-            rejectionCode: "message-rejected",
+            outcome: "accepted",
+            messageId: "0100019",
           },
           now,
-        );
+        ),
+      ).toBe("settled");
 
-        const items = table.transactionRequests[0]?.TransactItems ?? [];
+      const items = table.transactionRequests[0]?.TransactItems ?? [];
 
-        expect(items[0]?.Update?.UpdateExpression).toBe(
-          "SET #state = :state, finishedAt = :finishedAt, rejectionCode = :rejectionCode",
-        );
-        expect(items[0]?.Update?.ExpressionAttributeValues?.[":rejectionCode"]).toStrictEqual({
-          S: "message-rejected",
-        });
-        expect(items[0]?.Update?.ExpressionAttributeValues).not.toHaveProperty(":messageId");
-        expect(items[1]?.Update?.UpdateExpression).toBe("ADD rejected :one");
-        expectAliasedReservedNames(table);
-      }),
-    ));
+      expect(items).toHaveLength(2);
+      expect(items[0]?.Update?.Key).toStrictEqual({
+        pk: { S: `CAMPAIGN#${campaignId}` },
+        sk: { S: `SEND#${contactId}` },
+      });
+      expect(items[0]?.Update?.ConditionExpression).toBe(
+        "#state = :unconfirmed AND sendId = :sendId",
+      );
+      expect(items[0]?.Update?.UpdateExpression).toBe(
+        "SET #state = :state, finishedAt = :finishedAt, messageId = :messageId",
+      );
+      expect(items[0]?.Update?.ExpressionAttributeValues?.[":messageId"]).toStrictEqual({
+        S: "0100019",
+      });
+      expect(items[1]?.Update).toStrictEqual({
+        Table: tableLogicalId,
+        Key: { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } },
+        UpdateExpression: "ADD accepted :one",
+        ConditionExpression: "attribute_exists(pk)",
+        ExpressionAttributeValues: { ":one": { N: "1" } },
+      });
+    }),
+  );
 
-  it("writes an uncertain settlement without a message id or rejection code", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({});
+  it.effect("writes a rejection code and adds the rejected counter", () =>
+    Effect.gen(function* () {
+      const { table, storage } = withStorage({});
 
-        yield* storage.settleRecipient(
-          campaignId,
-          sendId,
-          contactId,
-          { outcome: "uncertain" },
-          now,
-        );
+      yield* storage.settleRecipient(
+        campaignId,
+        sendId,
+        contactId,
+        {
+          outcome: "rejected",
+          rejectionCode: "message-rejected",
+        },
+        now,
+      );
 
-        const update = table.transactionRequests[0]?.TransactItems[0]?.Update;
+      const items = table.transactionRequests[0]?.TransactItems ?? [];
 
-        expect(update?.UpdateExpression).toBe("SET #state = :state, finishedAt = :finishedAt");
-        expect(update?.ExpressionAttributeValues).not.toHaveProperty(":messageId");
-        expect(update?.ExpressionAttributeValues).not.toHaveProperty(":rejectionCode");
-        expect(table.transactionRequests[0]?.TransactItems[1]?.Update?.UpdateExpression).toBe(
-          "ADD uncertain :one",
-        );
-        expectAliasedReservedNames(table);
-      }),
-    ));
+      expect(items[0]?.Update?.UpdateExpression).toBe(
+        "SET #state = :state, finishedAt = :finishedAt, rejectionCode = :rejectionCode",
+      );
+      expect(items[0]?.Update?.ExpressionAttributeValues?.[":rejectionCode"]).toStrictEqual({
+        S: "message-rejected",
+      });
+      expect(items[0]?.Update?.ExpressionAttributeValues).not.toHaveProperty(":messageId");
+      expect(items[1]?.Update?.UpdateExpression).toBe("ADD rejected :one");
+    }),
+  );
 
-  it("reports that the row is no longer the current attempt", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({
-          transactWriteItems: [cancelled("ConditionalCheckFailed", "None")],
-        });
+  it.effect("writes an uncertain settlement without a message id or rejection code", () =>
+    Effect.gen(function* () {
+      const { table, storage } = withStorage({});
 
-        expect(
-          yield* storage.settleRecipient(
-            campaignId,
-            sendId,
-            contactId,
-            {
-              outcome: "accepted",
-              messageId: "0100019",
-            },
-            now,
-          ),
-        ).toBe("not-current");
-        expectAliasedReservedNames(table);
-      }),
-    ));
+      yield* storage.settleRecipient(campaignId, sendId, contactId, { outcome: "uncertain" }, now);
+
+      const update = table.transactionRequests[0]?.TransactItems[0]?.Update;
+
+      expect(update?.UpdateExpression).toBe("SET #state = :state, finishedAt = :finishedAt");
+      expect(update?.ExpressionAttributeValues).not.toHaveProperty(":messageId");
+      expect(update?.ExpressionAttributeValues).not.toHaveProperty(":rejectionCode");
+      expect(table.transactionRequests[0]?.TransactItems[1]?.Update?.UpdateExpression).toBe(
+        "ADD uncertain :one",
+      );
+    }),
+  );
 });
 
 describe("checkpoint", () => {
-  it("advances from an absent cursor on the first page", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({});
+  it.effect("advances from an absent cursor on the first page", () =>
+    Effect.gen(function* () {
+      const { table, storage } = withStorage({});
 
-        expect(yield* storage.checkpoint(campaignId, runToken, sliceId, undefined, contactId)).toBe(
-          "updated",
-        );
-        expect(table.updateItemRequests[0]).toStrictEqual({
-          Key: { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } },
-          UpdateExpression: "SET #cursor = :next, sliceId = :slice",
-          ConditionExpression:
-            "#state = :sending AND runToken = :run AND (attribute_not_exists(#cursor) OR (#cursor = :next AND sliceId = :slice))",
-          ExpressionAttributeNames: { "#state": "state", "#cursor": "cursor" },
-          ExpressionAttributeValues: {
-            ":sending": { S: "sending" },
-            ":run": { S: runToken },
-            ":next": { S: contactId },
-            ":slice": { S: sliceId },
-          },
-        });
-        expectAliasedReservedNames(table);
-      }),
-    ));
-
-  it("advances from the previous cursor on a later page", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({});
-
-        expect(
-          yield* storage.checkpoint(campaignId, runToken, sliceId, contactId, nextContactId),
-        ).toBe("updated");
-        expect(table.updateItemRequests[0]?.ConditionExpression).toBe(
-          "#state = :sending AND runToken = :run AND (#cursor = :previous OR (#cursor = :next AND sliceId = :slice))",
-        );
-        expect(table.updateItemRequests[0]?.ExpressionAttributeValues).toStrictEqual({
+      expect(yield* storage.checkpoint(campaignId, runToken, sliceId, undefined, contactId)).toBe(
+        "updated",
+      );
+      expect(table.updateItemRequests[0]).toStrictEqual({
+        Key: { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } },
+        UpdateExpression: "SET #cursor = :next, sliceId = :slice",
+        ConditionExpression:
+          "#state = :sending AND runToken = :run AND (attribute_not_exists(#cursor) OR (#cursor = :next AND sliceId = :slice))",
+        ExpressionAttributeNames: { "#state": "state", "#cursor": "cursor" },
+        ExpressionAttributeValues: {
           ":sending": { S: "sending" },
           ":run": { S: runToken },
-          ":next": { S: nextContactId },
+          ":next": { S: contactId },
           ":slice": { S: sliceId },
-          ":previous": { S: contactId },
-        });
-        expectAliasedReservedNames(table);
-      }),
-    ));
+        },
+      });
+    }),
+  );
 
-  it("reports a lost checkpoint as condition-failed, not unavailable", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({ updateItem: [conditionFailed] });
+  it.effect("advances from the previous cursor on a later page", () =>
+    Effect.gen(function* () {
+      const { table, storage } = withStorage({});
 
-        expect(yield* storage.checkpoint(campaignId, runToken, sliceId, undefined, contactId)).toBe(
-          "condition-failed",
-        );
-        expectAliasedReservedNames(table);
-      }),
-    ));
+      expect(
+        yield* storage.checkpoint(campaignId, runToken, sliceId, contactId, nextContactId),
+      ).toBe("updated");
+      expect(table.updateItemRequests[0]?.ConditionExpression).toBe(
+        "#state = :sending AND runToken = :run AND (#cursor = :previous OR (#cursor = :next AND sliceId = :slice))",
+      );
+      expect(table.updateItemRequests[0]?.ExpressionAttributeValues).toStrictEqual({
+        ":sending": { S: "sending" },
+        ":run": { S: runToken },
+        ":next": { S: nextContactId },
+        ":slice": { S: sliceId },
+        ":previous": { S: contactId },
+      });
+    }),
+  );
 });
 
 describe("completeRun", () => {
-  it("marks the campaign completed and removes the cursor", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({});
+  it.effect("marks the campaign completed and removes the cursor", () =>
+    Effect.gen(function* () {
+      const { table, storage } = withStorage({});
 
-        expect(yield* storage.completeRun(campaignId, runToken, now)).toBe("completed");
-        expect(table.updateItemRequests[0]).toStrictEqual({
-          Key: { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } },
-          UpdateExpression: "SET #state = :completed, finishedAt = :now REMOVE #cursor, sliceId",
-          ConditionExpression: "#state = :sending AND runToken = :run",
-          ExpressionAttributeNames: { "#state": "state", "#cursor": "cursor" },
-          ExpressionAttributeValues: {
-            ":completed": { S: "completed" },
-            ":now": { S: now },
-            ":sending": { S: "sending" },
-            ":run": { S: runToken },
-          },
-        });
-        expectAliasedReservedNames(table);
-      }),
-    ));
-
-  it("reports a stale run as stale, not unavailable", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({ updateItem: [conditionFailed] });
-
-        expect(yield* storage.completeRun(campaignId, runToken, now)).toBe("stale");
-        expectAliasedReservedNames(table);
-      }),
-    ));
+      expect(yield* storage.completeRun(campaignId, runToken, now)).toBe("completed");
+      expect(table.updateItemRequests[0]).toStrictEqual({
+        Key: { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } },
+        UpdateExpression: "SET #state = :completed, finishedAt = :now REMOVE #cursor, sliceId",
+        ConditionExpression: "#state = :sending AND runToken = :run",
+        ExpressionAttributeNames: { "#state": "state", "#cursor": "cursor" },
+        ExpressionAttributeValues: {
+          ":completed": { S: "completed" },
+          ":now": { S: now },
+          ":sending": { S: "sending" },
+          ":run": { S: runToken },
+        },
+      });
+    }),
+  );
 });
 
 describe("pauseRun", () => {
-  it("pauses the campaign at the resume cursor", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({});
+  it.effect("pauses the campaign at the resume cursor", () =>
+    Effect.gen(function* () {
+      const { table, storage } = withStorage({});
 
-        expect(yield* storage.pauseRun(campaignId, runToken, "daily-quota", contactId)).toBe(
-          "paused",
-        );
-        expect(table.updateItemRequests[0]).toStrictEqual({
-          Key: { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } },
-          UpdateExpression: "SET #state = :paused, pausedReason = :reason, #cursor = :cursor",
-          ConditionExpression: "#state = :sending AND runToken = :run",
-          ExpressionAttributeNames: { "#state": "state", "#cursor": "cursor" },
-          ExpressionAttributeValues: {
-            ":paused": { S: "paused" },
-            ":reason": { S: "daily-quota" },
-            ":cursor": { S: contactId },
-            ":sending": { S: "sending" },
-            ":run": { S: runToken },
-          },
-        });
-        expectAliasedReservedNames(table);
-      }),
-    ));
+      expect(yield* storage.pauseRun(campaignId, runToken, "daily-quota", contactId)).toBe(
+        "paused",
+      );
+      expect(table.updateItemRequests[0]).toStrictEqual({
+        Key: { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } },
+        UpdateExpression: "SET #state = :paused, pausedReason = :reason, #cursor = :cursor",
+        ConditionExpression: "#state = :sending AND runToken = :run",
+        ExpressionAttributeNames: { "#state": "state", "#cursor": "cursor" },
+        ExpressionAttributeValues: {
+          ":paused": { S: "paused" },
+          ":reason": { S: "daily-quota" },
+          ":cursor": { S: contactId },
+          ":sending": { S: "sending" },
+          ":run": { S: runToken },
+        },
+      });
+    }),
+  );
 
-  it("removes the cursor when pausing at the start of the list", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({});
+  it.effect("removes the cursor when pausing at the start of the list", () =>
+    Effect.gen(function* () {
+      const { table, storage } = withStorage({});
 
-        expect(yield* storage.pauseRun(campaignId, runToken, "sending-paused", undefined)).toBe(
-          "paused",
-        );
-        expect(table.updateItemRequests[0]?.UpdateExpression).toBe(
-          "SET #state = :paused, pausedReason = :reason REMOVE #cursor",
-        );
-        expect(table.updateItemRequests[0]?.ExpressionAttributeValues).not.toHaveProperty(
-          ":cursor",
-        );
-        expectAliasedReservedNames(table);
-      }),
-    ));
+      expect(yield* storage.pauseRun(campaignId, runToken, "sending-paused", undefined)).toBe(
+        "paused",
+      );
+      expect(table.updateItemRequests[0]?.UpdateExpression).toBe(
+        "SET #state = :paused, pausedReason = :reason REMOVE #cursor",
+      );
+      expect(table.updateItemRequests[0]?.ExpressionAttributeValues).not.toHaveProperty(":cursor");
+    }),
+  );
+});
 
-  it("reports a stale run as stale, not unavailable", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({ updateItem: [conditionFailed] });
+describe("condition failures", () => {
+  it.effect.each<
+    readonly [
+      string,
+      ScriptedReplies,
+      (storage: CampaignStorage) => Effect.Effect<string | object, StorageFailure>,
+      string,
+    ]
+  >([
+    [
+      "updateDraft reports conflict when the campaign is no longer a draft",
+      { transactWriteItems: [cancelled("ConditionalCheckFailed", "None")] },
+      (storage) => storage.updateDraft(draft),
+      "conflict",
+    ],
+    [
+      "deleteDraft reports conflict when the campaign is no longer a draft",
+      { transactWriteItems: [cancelled("ConditionalCheckFailed", "None")] },
+      (storage) => storage.deleteDraft(campaignId),
+      "conflict",
+    ],
+    [
+      "newRun reports conflict when the observed source no longer holds",
+      { transactWriteItems: [cancelled("ConditionalCheckFailed")] },
+      (storage) => storage.newRun(campaignId, observed("draft"), runToken, "queued", now),
+      "conflict",
+    ],
+    [
+      "cancelCampaign reports conflict when the expected source no longer holds",
+      { transactWriteItems: [cancelled("ConditionalCheckFailed")] },
+      (storage) => storage.cancelCampaign(campaignId, { state: "scheduled", runToken }),
+      "conflict",
+    ],
+    [
+      "beginRun reports a stale run token as stale, not unavailable",
+      { updateItem: [conditionFailed] },
+      (storage) => storage.beginRun(campaignId, runToken, now),
+      "stale",
+    ],
+    [
+      "claimRecipient reports a stale run when the meta condition fails",
+      { transactWriteItems: [cancelled("ConditionalCheckFailed", "None")] },
+      (storage) => storage.claimRecipient(campaignId, runToken, contactId, recipient, sendId, now),
+      "stale",
+    ],
+    [
+      "claimRecipient reports an existing row as already claimed",
+      { transactWriteItems: [cancelled("None", "ConditionalCheckFailed")] },
+      (storage) => storage.claimRecipient(campaignId, runToken, contactId, recipient, sendId, now),
+      "already-claimed",
+    ],
+    [
+      "claimRecipient prefers stale when both conditions fail",
+      { transactWriteItems: [cancelled("ConditionalCheckFailed", "ConditionalCheckFailed")] },
+      (storage) => storage.claimRecipient(campaignId, runToken, contactId, recipient, sendId, now),
+      "stale",
+    ],
+    [
+      "skipRecipient reports an existing row as already claimed",
+      { transactWriteItems: [cancelled("ConditionalCheckFailed", "None")] },
+      (storage) =>
+        storage.skipRecipient(campaignId, runToken, contactId, recipient, "suppressed", now),
+      "already-claimed",
+    ],
+    [
+      "skipRecipient reports a stale run when the meta condition fails",
+      { transactWriteItems: [cancelled("None", "ConditionalCheckFailed")] },
+      (storage) =>
+        storage.skipRecipient(campaignId, runToken, contactId, recipient, "suppressed", now),
+      "stale",
+    ],
+    [
+      "settleRecipient reports that the row is no longer the current attempt",
+      { transactWriteItems: [cancelled("ConditionalCheckFailed", "None")] },
+      (storage) =>
+        storage.settleRecipient(
+          campaignId,
+          sendId,
+          contactId,
+          { outcome: "accepted", messageId: "0100019" },
+          now,
+        ),
+      "not-current",
+    ],
+    [
+      "checkpoint reports a lost checkpoint as condition-failed, not unavailable",
+      { updateItem: [conditionFailed] },
+      (storage) => storage.checkpoint(campaignId, runToken, sliceId, undefined, contactId),
+      "condition-failed",
+    ],
+    [
+      "completeRun reports a stale run as stale, not unavailable",
+      { updateItem: [conditionFailed] },
+      (storage) => storage.completeRun(campaignId, runToken, now),
+      "stale",
+    ],
+    [
+      "pauseRun reports a stale run as stale, not unavailable",
+      { updateItem: [conditionFailed] },
+      (storage) => storage.pauseRun(campaignId, runToken, "rate-limited", contactId),
+      "stale",
+    ],
+  ])("%s", ([_name, replies, run, expected]) =>
+    Effect.gen(function* () {
+      const { storage } = withStorage(replies);
 
-        expect(yield* storage.pauseRun(campaignId, runToken, "rate-limited", contactId)).toBe(
-          "stale",
-        );
-        expectAliasedReservedNames(table);
-      }),
-    ));
+      expect(yield* run(storage)).toBe(expected);
+    }),
+  );
 });
