@@ -91,8 +91,16 @@ const tokenOf = Effect.map(HttpRouter.params, (params) => params["token"] ?? "")
 
 interface PreviewSender {
   readonly sender: string;
+  readonly senderName: Option.Option<string>;
   readonly postalAddress: string;
 }
+
+/** The From line as a mail client shows it, not in the encoded form SES is sent. */
+const displayedFrom = (settings: PreviewSender): string =>
+  Option.match(settings.senderName, {
+    onNone: () => settings.sender,
+    onSome: (name) => `${name} <${settings.sender}>`,
+  });
 
 /**
  * Verifies before it reads: a forged or expired token costs no storage read. The campaign is read
@@ -126,7 +134,7 @@ const showPreview = (settings: PreviewSender) =>
         document(
           `Preview: ${message.subject}`,
           `<header><dl>
-<dt>From</dt><dd>${escapeHtml(settings.sender)}</dd>
+<dt>From</dt><dd>${escapeHtml(displayedFrom(settings))}</dd>
 <dt>Subject</dt><dd>${escapeHtml(message.subject)}</dd>
 </dl></header>
 <section><h2>HTML</h2>${htmlPart(message.html)}</section>
