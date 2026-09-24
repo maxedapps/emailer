@@ -1,6 +1,6 @@
+import { describe, expect, it } from "@effect/vitest";
 // oxlint-disable-next-line effecttsgo/node-builtin-import
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
 
 import { renderMarkdown, styles } from "./Markdown.ts";
 

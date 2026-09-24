@@ -1,152 +1,134 @@
 import { NodeServices } from "@effect/platform-node";
+import { describe, expect, it } from "@effect/vitest";
 import { Effect } from "effect";
-// oxlint-disable-next-line effecttsgo/node-builtin-import
-import { randomUUID } from "node:crypto";
-// oxlint-disable-next-line effecttsgo/node-builtin-import
-import { writeFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { describe, expect, it } from "vitest";
 
 import {
   inMemoryService,
   listId,
   parseJson,
   runCli,
+  tempFile,
   toJson,
   token,
   withService,
-  withTempFile,
 } from "../../test/CliHarness.ts";
 
 describe("list management from the command line", () => {
-  it("rejects a malformed import file before issuing any request", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const service = inMemoryService(token);
+  it.live("rejects a malformed import file before issuing any request", () =>
+    Effect.gen(function* () {
+      const service = inMemoryService(token);
 
-        const file = `${tmpdir()}/emailer-import-${randomUUID()}.json`;
+      const contents = yield* toJson({ contacts: [{ email: "not-an-address" }] });
 
-        const contents = yield* toJson({ contacts: [{ email: "not-an-address" }] });
+      const file = yield* tempFile("json", contents);
 
-        yield* Effect.promise(() => writeFile(file, contents));
+      const result = yield* withService(service, (baseUrl) =>
+        runCli(baseUrl, token, ["lists", "import", listId, "--file", file]),
+      );
 
-        const result = yield* withService(service, (baseUrl) =>
-          runCli(baseUrl, token, ["lists", "import", listId, "--file", file]),
-        );
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stdout.startsWith("{")).toBe(false);
+      expect(service.authorizations).toHaveLength(0);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
 
-        yield* Effect.promise(() => rm(file, { force: true }));
+  it.live("rejects an import file naming one address twice, before issuing any request", () =>
+    Effect.gen(function* () {
+      const service = inMemoryService(token);
 
-        expect(result.exitCode).not.toBe(0);
-        expect(result.stdout.startsWith("{")).toBe(false);
-        expect(service.authorizations).toHaveLength(0);
-      }).pipe(Effect.provide(NodeServices.layer)),
-    ));
+      const contents = yield* toJson({
+        contacts: [{ email: "Sam@example.com" }, { email: "sam@EXAMPLE.com" }],
+      });
 
-  it("rejects an import file naming one address twice, before issuing any request", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const service = inMemoryService(token);
+      const file = yield* tempFile("json", contents);
 
-        const file = `${tmpdir()}/emailer-import-${randomUUID()}.json`;
+      const result = yield* withService(service, (baseUrl) =>
+        runCli(baseUrl, token, ["lists", "import", listId, "--file", file]),
+      );
 
-        const contents = yield* toJson({
-          contacts: [{ email: "Sam@example.com" }, { email: "sam@EXAMPLE.com" }],
-        });
+      expect(result.exitCode).not.toBe(0);
+      expect(service.authorizations).toHaveLength(0);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
 
-        yield* Effect.promise(() => writeFile(file, contents));
+  it.live("imports the contacts a well-formed file names", () =>
+    Effect.gen(function* () {
+      const service = inMemoryService(token);
 
-        const result = yield* withService(service, (baseUrl) =>
-          runCli(baseUrl, token, ["lists", "import", listId, "--file", file]),
-        );
+      const contents = yield* toJson({
+        contacts: [{ email: "sam@example.com", attributes: { plan: "pro" } }],
+      });
 
-        yield* Effect.promise(() => rm(file, { force: true }));
+      const file = yield* tempFile("json", contents);
 
-        expect(result.exitCode).not.toBe(0);
-        expect(service.authorizations).toHaveLength(0);
-      }).pipe(Effect.provide(NodeServices.layer)),
-    ));
+      const result = yield* withService(service, (baseUrl) =>
+        Effect.gen(function* () {
+          yield* runCli(baseUrl, token, ["lists", "create", "--name", "Readers"]);
 
-  it("imports the contacts a well-formed file names", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const service = inMemoryService(token);
+          return yield* runCli(baseUrl, token, ["lists", "import", listId, "--file", file]);
+        }),
+      );
 
-        const contents = yield* toJson({
-          contacts: [{ email: "sam@example.com", attributes: { plan: "pro" } }],
-        });
+      expect(result.exitCode).toBe(0);
+      expect(yield* parseJson(result.stdout)).toMatchObject({
+        contacts: [{ email: "sam@example.com", member: true }],
+      });
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
 
-        const result = yield* withService(service, (baseUrl) =>
-          Effect.gen(function* () {
-            yield* runCli(baseUrl, token, ["lists", "create", "--name", "Readers"]);
+  it.live("rejects an import file with a misspelled entry key, naming it, before any request", () =>
+    Effect.gen(function* () {
+      const service = inMemoryService(token);
 
-            return yield* withTempFile("json", contents, (file) =>
-              runCli(baseUrl, token, ["lists", "import", listId, "--file", file]),
-            );
-          }),
-        );
+      const contents = yield* toJson({
+        contacts: [{ email: "sam@example.com", attributs: { plan: "pro" } }],
+      });
 
-        expect(result.exitCode).toBe(0);
-        expect(yield* parseJson(result.stdout)).toMatchObject({
-          contacts: [{ email: "sam@example.com", member: true }],
-        });
-      }).pipe(Effect.provide(NodeServices.layer)),
-    ));
+      const file = yield* tempFile("json", contents);
 
-  it("rejects an import file with a misspelled entry key, naming it, before any request", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const service = inMemoryService(token);
+      const result = yield* withService(service, (baseUrl) =>
+        runCli(baseUrl, token, ["lists", "import", listId, "--file", file]),
+      );
 
-        const contents = yield* toJson({
-          contacts: [{ email: "sam@example.com", attributs: { plan: "pro" } }],
-        });
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain("Invalid value for flag --file");
+      expect(result.stderr).toContain(
+        'Expected no excess property\n  at ["contacts"][0]["attributs"]',
+      );
+      expect(result.stdout.startsWith("{")).toBe(false);
+      expect(service.authorizations).toHaveLength(0);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
 
-        const result = yield* withTempFile("json", contents, (file) =>
-          withService(service, (baseUrl) =>
-            runCli(baseUrl, token, ["lists", "import", listId, "--file", file]),
-          ),
-        );
+  it.live("lists, renames and deletes a list from the command line", () =>
+    Effect.gen(function* () {
+      const service = inMemoryService(token);
 
-        expect(result.exitCode).not.toBe(0);
-        expect(result.stderr).toContain("Invalid value for flag --file");
-        expect(result.stderr).toContain(
-          'Expected no excess property\n  at ["contacts"][0]["attributs"]',
-        );
-        expect(result.stdout.startsWith("{")).toBe(false);
-        expect(service.authorizations).toHaveLength(0);
-      }).pipe(Effect.provide(NodeServices.layer)),
-    ));
+      const outcome = yield* withService(service, (baseUrl) =>
+        Effect.gen(function* () {
+          yield* runCli(baseUrl, token, ["lists", "create", "--name", "Weekly"]);
 
-  it("lists, renames and deletes a list from the command line", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const service = inMemoryService(token);
+          const renamed = yield* runCli(baseUrl, token, [
+            "lists",
+            "rename",
+            listId,
+            "--name",
+            "Monthly",
+          ]);
 
-        const outcome = yield* withService(service, (baseUrl) =>
-          Effect.gen(function* () {
-            yield* runCli(baseUrl, token, ["lists", "create", "--name", "Weekly"]);
+          const listed = yield* runCli(baseUrl, token, ["lists", "list"]);
+          const deleted = yield* runCli(baseUrl, token, ["lists", "delete", listId]);
+          const after = yield* runCli(baseUrl, token, ["lists", "get", listId]);
 
-            const renamed = yield* runCli(baseUrl, token, [
-              "lists",
-              "rename",
-              listId,
-              "--name",
-              "Monthly",
-            ]);
+          return { renamed, listed, deleted, after };
+        }),
+      );
 
-            const listed = yield* runCli(baseUrl, token, ["lists", "list"]);
-            const deleted = yield* runCli(baseUrl, token, ["lists", "delete", listId]);
-            const after = yield* runCli(baseUrl, token, ["lists", "get", listId]);
-
-            return { renamed, listed, deleted, after };
-          }),
-        );
-
-        expect(outcome.renamed.stdout).toContain("Monthly");
-        expect(outcome.listed.stdout).toContain("Monthly");
-        expect(outcome.deleted.exitCode).toBe(0);
-        expect(outcome.after.exitCode).not.toBe(0);
-        expect(outcome.after.stderr).toContain("NotFound");
-      }).pipe(Effect.provide(NodeServices.layer)),
-    ));
+      expect(outcome.renamed.stdout).toContain("Monthly");
+      expect(outcome.listed.stdout).toContain("Monthly");
+      expect(outcome.deleted.exitCode).toBe(0);
+      expect(outcome.after.exitCode).not.toBe(0);
+      expect(outcome.after.stderr).toContain("NotFound");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
 });
