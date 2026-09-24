@@ -327,26 +327,13 @@ const pagePrimitives = (primitives: QueryPrimitives & BatchPrimitives) => {
       }
 
       const hydrated = yield* readItems(operationId, keys);
-      const byPk = new Map<string, dynamodb.AttributeMap>();
+      const byPk = new Map(hydrated.map((item) => [item.pk?.S, item] as const));
 
-      for (const item of hydrated) {
-        const pk = item.pk?.S;
+      const items = keys.flatMap((key): Array<dynamodb.AttributeMap> => {
+        const item = byPk.get(key.pk?.S);
 
-        if (pk !== undefined) {
-          byPk.set(pk, item);
-        }
-      }
-
-      const items: Array<dynamodb.AttributeMap> = [];
-
-      for (const key of keys) {
-        const pk = key.pk?.S;
-        const item = pk === undefined ? undefined : byPk.get(pk);
-
-        if (item !== undefined) {
-          items.push(item);
-        }
-      }
+        return item === undefined ? [] : [item];
+      });
 
       return {
         items,

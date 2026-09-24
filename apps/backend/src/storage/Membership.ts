@@ -223,28 +223,32 @@ export const membershipOperations = (
       cursor === undefined ? request : { ...request, ExclusiveStartKey: memberKey(listId, cursor) },
     );
 
-    const keys: Array<dynamodb.AttributeMap> = [];
+    const memberIds: Array<string> = [];
 
     for (const item of page.Items ?? []) {
       const { contactId: memberId } = yield* decodeMemberEntry(item).pipe(
         Effect.mapError(corrupt("listMembers")),
       );
 
-      keys.push(contactKey(memberId));
+      memberIds.push(memberId);
     }
 
-    const contacts: Array<Schemas.Contact> = [];
+    const byId = new Map<string, Schemas.Contact>();
 
-    for (const item of yield* readItems("listMembers", keys)) {
+    for (const item of yield* readItems("listMembers", memberIds.map(contactKey))) {
       const stored = yield* decodeContactItem(item).pipe(Effect.mapError(corrupt("listMembers")));
 
-      contacts.push(
+      byId.set(
+        stored.id,
         contactOf(stored.id, stored.email, stored.name, stored.attributes, stored.createdAt),
       );
     }
 
-    // Members sort by contact id under the list partition; a batch read does not preserve that.
-    contacts.sort((left, right) => left.id.localeCompare(right.id));
+    const contacts = memberIds.flatMap((memberId): Array<Schemas.Contact> => {
+      const contact = byId.get(memberId);
+
+      return contact === undefined ? [] : [contact];
+    });
 
     const last = page.LastEvaluatedKey;
 
