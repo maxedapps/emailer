@@ -395,7 +395,7 @@ Status: Done on 2026-09-24, on the ephemeral stage `test`, which was then destro
 - **Rehearsal:** `main` was deployed from a separate worktree. Through the old code, one simulator address opted out through its real link and one bounce-simulator test send was suppressed. One transient row with three recent bounces was seeded in the old shape. `addresses status` showed `unsubscribed`, `suppressed` and `bouncing`.
   - Pass 1 merged 3 of 3 rows. A second opt-out then went through the old code, between the passes.
   - The branch was deployed with `--force`; all five functions were redeployed. The event destination matches `BOUNCE` and `COMPLAINT` only, and the rule no longer routes delays (T8). With `--force` every resource reports "updated", so the check read the deployed configuration rather than the deploy log.
-  - Before pass 2 the new code reported the late opt-out as `mailable`, the gap the second pass exists for. Pass 2 merged 4 of 4, `--verify` found none unmerged, and `--delete-old` deleted 4. Only `ADDRESS#` items remained.
+  - Before pass 2 the new code reported the late opt-out as `mailable`, the gap the second pass exists for. Pass 2 ran right after the deploy, without the five-minute wait, because nothing else used the stage. It merged 4 of 4, `--verify` found none unmerged, and `--delete-old` deleted 4. Only `ADDRESS#` items remained.
   - `addresses status` showed the same states, including the late opt-out. A campaign to six members completed with 2 accepted and 4 skipped.
 - **Full suite:** 5 files, 41 cases passed on the branch deployment.
 - **Privacy:** a contact with a marker address and a malformed `createdAt` answered 500 with an empty body. The API's log group held `operation failed { error: 'CorruptItem', operation: 'getContact' }` and no occurrence of the marker.
@@ -425,10 +425,11 @@ Status: Not started
   - no campaign is `sending`, `queued` or `scheduled`;
   - no API use during the switch: no test sends and no contact updates;
   - `FeedbackFailures` and `DispatchFailures` are empty.
-- **Migrate first:** run the migration against prod.
+- **Migrate first:** run the migration against prod, with credentials and the Region exported as the README's upgrade section shows.
 - **Deploy** with `--force`, and confirm every function's `CodeSha256` changed.
+- **Wait** at least five minutes, the dispatcher's longest invocation, so no old code is still writing.
 - **Migrate again:** run the migration, then `--verify`, then `--delete-old`. Spot-check `addresses status` for a known opted-out and a known suppressed address.
-- **Clean up:** delete the migration script and its knip entry in a follow-up commit.
+- **Clean up** in a follow-up commit: delete the migration script, its test and its knip entry, and the README's "Upgrading a stage deployed before ADR-0024" section, which points at the script.
 
 ## Open questions
 
