@@ -27,7 +27,7 @@
   - **`packages/api`:** also checks entry exports. Its `./*` exports map makes every file an entry, and only this repository imports the package, so an export nothing here imports is dead rather than public.
 
   Test files count as entries, so an export a test imports is a use.
-- **Lint reports unused disable directives,** and `--deny-warnings` turns them into failures. A suppression is removed when the code it excused no longer needs it.
+- **Lint fails on unused disable directives.** `oxlint.config.ts` sets `reportUnusedDisableDirectives: "error"` and `denyWarnings`, so `pnpm lint` needs no flags. A suppression is removed when the code it excused no longer needs it.
 - **Findings are fixed, not ignored.** Dead code is deleted and module-private names lose their `export`. A new ignore entry needs the same justification as those above.
 
 ## Alternatives considered

@@ -59,6 +59,12 @@ export const normalizeEmailAddress = (value: string): string => {
  */
 export const mailboxKey = (email: string): string => email.trim().toLowerCase();
 
+/** Addresses that name one mailbox twice are one recipient named twice. */
+const distinctMailboxes = (emails: ReadonlyArray<string>) =>
+  new Set(emails.map(mailboxKey)).size === emails.length
+    ? undefined
+    : "Expected each address to appear at most once";
+
 const mailboxPattern =
   /^[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+$/;
 
@@ -405,19 +411,16 @@ const isEntityId = Schema.is(EntityId);
  * parsed into a pair — the value a page reports is then exactly the value the next request
  * accepts, at every layer, and a database key is still never taken from a caller.
  */
-export const EntityCursor = Schema.String.pipe(
-  Schema.refine(
-    (value: string): value is string => {
-      const separator = value.indexOf("#");
+export const EntityCursor = Schema.String.check(
+  Schema.makeFilter((value: string) => {
+    const separator = value.indexOf("#");
 
-      return (
-        separator > 0 &&
-        isTimestamp(value.slice(0, separator)) &&
-        isEntityId(value.slice(separator + 1))
-      );
-    },
-    { message: "Expected a <createdAt>#<id> cursor" },
-  ),
+    return separator > 0 &&
+      isTimestamp(value.slice(0, separator)) &&
+      isEntityId(value.slice(separator + 1))
+      ? undefined
+      : "Expected a <createdAt>#<id> cursor";
+  }),
 );
 
 export type EntityCursor = typeof EntityCursor.Type;
@@ -433,24 +436,17 @@ const ImportContactEntry = Schema.Struct({
   attributes: Schema.optional(ContactAttributes),
 });
 
-const ImportContactEntries = Schema.Struct({
-  contacts: Schema.Array(ImportContactEntry).check(
-    Schema.isNonEmpty(),
-    Schema.isMaxLength(maxImportEntries),
-  ),
-});
-
 /**
  * Two entries sharing a mailbox key are rejected here rather than at the database: they would
  * become two actions against one item, which `TransactWriteItems` refuses outright.
  */
-export const ImportContactsPayload = ImportContactEntries.pipe(
-  Schema.refine(
-    (payload: typeof ImportContactEntries.Type): payload is typeof ImportContactEntries.Type =>
-      new Set(payload.contacts.map((entry) => mailboxKey(entry.email))).size ===
-      payload.contacts.length,
-    { message: "Expected each address to appear at most once" },
+export const ImportContactsPayload = Schema.Struct({
+  contacts: Schema.Array(ImportContactEntry).check(
+    Schema.isNonEmpty(),
+    Schema.isMaxLength(maxImportEntries),
   ),
+}).check(
+  Schema.makeFilter((payload) => distinctMailboxes(payload.contacts.map((entry) => entry.email))),
 );
 
 export type ImportContactsPayload = typeof ImportContactsPayload.Type;
@@ -467,20 +463,13 @@ export const ImportContactsResult = Schema.Struct({
 
 export type ImportContactsResult = typeof ImportContactsResult.Type;
 
-const TestRecipients = Schema.Array(EmailAddress).check(
-  Schema.isNonEmpty(),
-  Schema.isMaxLength(maxTestRecipients),
-);
-
 /** Explicit addresses, each at most once, or one list whose every member is a recipient. */
 export const TestSendPayload = Schema.Union([
   Schema.Struct({
-    to: TestRecipients.pipe(
-      Schema.refine(
-        (to: typeof TestRecipients.Type): to is typeof TestRecipients.Type =>
-          new Set(to.map(mailboxKey)).size === to.length,
-        { message: "Expected each address to appear at most once" },
-      ),
+    to: Schema.Array(EmailAddress).check(
+      Schema.isNonEmpty(),
+      Schema.isMaxLength(maxTestRecipients),
+      Schema.makeFilter(distinctMailboxes),
     ),
   }),
   Schema.Struct({ listId: EntityId }),
