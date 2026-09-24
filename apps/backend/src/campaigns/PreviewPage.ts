@@ -122,12 +122,7 @@ const showPreview = (settings: PreviewSender) =>
 
       const reader = yield* CampaignReader;
       const campaign = yield* reader.getCampaign(campaignId.value);
-
-      if (Option.isNone(campaign)) {
-        return notFound;
-      }
-
-      const message = compose(campaign.value, placeholderUnsubscribeUrl, settings.postalAddress);
+      const message = compose(campaign, placeholderUnsubscribeUrl, settings.postalAddress);
 
       return respond(
         200,
@@ -141,7 +136,11 @@ const showPreview = (settings: PreviewSender) =>
 <section><h2>Plain text</h2><pre>${escapeHtml(message.text)}</pre></section>`,
         ),
       );
-    }).pipe(reportedAndFatal),
+    }).pipe(
+      // A campaign deleted since the link was signed.
+      Effect.catchTag("NotFound", () => Effect.succeed(notFound)),
+      reportedAndFatal,
+    ),
   );
 
 // The token is longer than the router's default parameter cap of 100 characters.

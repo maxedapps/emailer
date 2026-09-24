@@ -1,4 +1,5 @@
-import { Effect, Option, Struct } from "effect";
+import * as Schemas from "@emailer/api/Schemas";
+import { Effect, Struct } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { tableLogicalId } from "./Items.ts";
@@ -55,7 +56,7 @@ describe("createContact", () => {
       Effect.gen(function* () {
         const { table, run } = create({});
 
-        expect(yield* run).toBe("created");
+        expect(yield* run).toBeUndefined();
 
         const request = table.transactionRequests[0];
 
@@ -132,14 +133,14 @@ describe("createContact", () => {
       }),
     ));
 
-  it("reports a taken address as an outcome rather than a failure", () =>
+  it("answers a taken address with the contract's conflict, naming it", () =>
     Effect.runPromise(
       Effect.gen(function* () {
         const { run } = create({
           transactWriteItems: [cancelled("None", "ConditionalCheckFailed")],
         });
 
-        expect(yield* run).toBe("email-taken");
+        expect(yield* Effect.flip(run)).toStrictEqual(new Schemas.EmailAlreadyUsed({ email }));
       }),
     ));
 
@@ -181,12 +182,7 @@ describe("getContact", () => {
         expect(table.getItemRequests).toStrictEqual([
           { Key: { pk: { S: `CONTACT#${contactId}` }, sk: { S: "META" } }, ConsistentRead: true },
         ]);
-        expect(Option.getOrUndefined(contact)).toStrictEqual({
-          id: contactId,
-          email,
-          name: "Sam",
-          createdAt,
-        });
+        expect(contact).toStrictEqual({ id: contactId, email, name: "Sam", createdAt });
       }),
     ));
 
@@ -203,16 +199,18 @@ describe("getContact", () => {
 
         const contact = yield* operationsFor(table).getContact(contactId);
 
-        expect(Option.getOrUndefined(contact)?.attributes).toStrictEqual({ plan: "pro" });
+        expect(contact.attributes).toStrictEqual({ plan: "pro" });
       }),
     ));
 
-  it("returns none for a missing record", () =>
+  it("answers NotFound for a missing record", () =>
     Effect.runPromise(
       Effect.gen(function* () {
         const storage = operationsFor(scriptedTable({}));
 
-        expect(Option.isNone(yield* storage.getContact(contactId))).toBe(true);
+        expect(yield* Effect.flip(storage.getContact(contactId))).toStrictEqual(
+          new Schemas.NotFound({ entity: "contact" }),
+        );
       }),
     ));
 
@@ -268,32 +266,32 @@ describe("getContactByEmail", () => {
           pk: { S: `CONTACT#${contactId}` },
           sk: { S: "META" },
         });
-        expect(Option.getOrUndefined(found)?.id).toBe(contactId);
+        expect(found.id).toBe(contactId);
       }),
     ));
 
-  it("returns none when no reservation holds the address, without a second read", () =>
+  it("answers NotFound when no reservation holds the address, without a second read", () =>
     Effect.runPromise(
       Effect.gen(function* () {
         const table = scriptedTable({});
 
-        const found = yield* operationsFor(table).getContactByEmail(email);
-
-        expect(Option.isNone(found)).toBe(true);
+        expect(yield* Effect.flip(operationsFor(table).getContactByEmail(email))).toStrictEqual(
+          new Schemas.NotFound({ entity: "contact" }),
+        );
         expect(table.getItemRequests).toHaveLength(1);
       }),
     ));
 
-  it("returns none when the reservation names a contact that is not there", () =>
+  it("answers NotFound when the reservation names a contact that is not there", () =>
     Effect.runPromise(
       Effect.gen(function* () {
         const table = scriptedTable({
           getItem: [Effect.succeed({ Item: reservationItem }), Effect.succeed({})],
         });
 
-        const found = yield* operationsFor(table).getContactByEmail(email);
-
-        expect(Option.isNone(found)).toBe(true);
+        expect(yield* Effect.flip(operationsFor(table).getContactByEmail(email))).toStrictEqual(
+          new Schemas.NotFound({ entity: "contact" }),
+        );
       }),
     ));
 
@@ -307,9 +305,9 @@ describe("getContactByEmail", () => {
           ],
         });
 
-        const found = yield* operationsFor(table).getContactByEmail(email);
-
-        expect(Option.isNone(found)).toBe(true);
+        expect(yield* Effect.flip(operationsFor(table).getContactByEmail(email))).toStrictEqual(
+          new Schemas.NotFound({ entity: "contact" }),
+        );
       }),
     ));
 
@@ -351,7 +349,7 @@ describe("updateContact", () => {
       Effect.gen(function* () {
         const { table, run } = update({}, { name: "Maxi" });
 
-        expect(yield* run).toStrictEqual({ outcome: "contact-missing" });
+        expect(yield* Effect.flip(run)).toStrictEqual(new Schemas.NotFound({ entity: "contact" }));
         expect(table.transactionRequests).toStrictEqual([]);
       }),
     ));
@@ -382,8 +380,11 @@ describe("updateContact", () => {
         );
 
         expect(yield* run).toStrictEqual({
-          outcome: "updated",
-          contact: { id: contactId, email, name: "Sam", attributes: { city: "Berlin" }, createdAt },
+          id: contactId,
+          email,
+          name: "Sam",
+          attributes: { city: "Berlin" },
+          createdAt,
         });
         expect(contactPut(table)?.Item).toStrictEqual({
           ...contactItem,
@@ -401,8 +402,10 @@ describe("updateContact", () => {
         );
 
         expect(yield* run).toStrictEqual({
-          outcome: "updated",
-          contact: { id: contactId, email, attributes: { plan: "pro" }, createdAt },
+          id: contactId,
+          email,
+          attributes: { plan: "pro" },
+          createdAt,
         });
         expect(contactPut(table)?.Item).toStrictEqual(Struct.omit(withAttributes, ["name"]));
       }),
@@ -414,8 +417,10 @@ describe("updateContact", () => {
         const { table, run } = update(found, { email: "SAM@example.com" });
 
         expect(yield* run).toStrictEqual({
-          outcome: "updated",
-          contact: { id: contactId, email: "SAM@example.com", name: "Sam", createdAt },
+          id: contactId,
+          email: "SAM@example.com",
+          name: "Sam",
+          createdAt,
         });
 
         // One reservation item holds both spellings, so there is nothing to move and no opt-out to
@@ -449,8 +454,10 @@ describe("updateContact", () => {
         const { table, run } = update(found, { email: "new@example.com" });
 
         expect(yield* run).toStrictEqual({
-          outcome: "updated",
-          contact: { id: contactId, email: "new@example.com", name: "Sam", createdAt },
+          id: contactId,
+          email: "new@example.com",
+          name: "Sam",
+          createdAt,
         });
 
         expect(table.transactionRequests).toStrictEqual([
@@ -513,7 +520,7 @@ describe("updateContact", () => {
       }),
     ));
 
-  it("reports an address another contact already holds", () =>
+  it("answers an address another contact already holds with a conflict naming it", () =>
     Effect.runPromise(
       Effect.gen(function* () {
         const { run } = update(
@@ -524,11 +531,13 @@ describe("updateContact", () => {
           { email: "new@example.com" },
         );
 
-        expect(yield* run).toStrictEqual({ outcome: "email-taken", email: "new@example.com" });
+        expect(yield* Effect.flip(run)).toStrictEqual(
+          new Schemas.EmailAlreadyUsed({ email: "new@example.com" }),
+        );
       }),
     ));
 
-  it("refuses to move a contact off an address that opted out", () =>
+  it("refuses to move a contact off an address that opted out, naming the address left", () =>
     Effect.runPromise(
       Effect.gen(function* () {
         const { run } = update(
@@ -539,7 +548,7 @@ describe("updateContact", () => {
           { email: "new@example.com" },
         );
 
-        expect(yield* run).toStrictEqual({ outcome: "opted-out", email });
+        expect(yield* Effect.flip(run)).toStrictEqual(new Schemas.AddressOptedOut({ email }));
       }),
     ));
 
@@ -556,7 +565,7 @@ describe("updateContact", () => {
           { email: "new@example.com" },
         );
 
-        expect(yield* run).toStrictEqual({ outcome: "opted-out", email });
+        expect(yield* Effect.flip(run)).toStrictEqual(new Schemas.AddressOptedOut({ email }));
       }),
     ));
 

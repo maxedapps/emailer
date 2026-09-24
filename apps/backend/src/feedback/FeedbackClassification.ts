@@ -1,6 +1,7 @@
+import type * as Schemas from "@emailer/api/Schemas";
 import { Schema } from "effect";
 
-import type { FeedbackKind, FeedbackOutcome, FeedbackWrite } from "../storage/Feedback.ts";
+import type { FeedbackOutcome, FeedbackWrite } from "../storage/Feedback.ts";
 
 /**
  * What an SES feedback event means for this system, decided once. Everything downstream — the
@@ -122,7 +123,7 @@ const decisions: Record<FeedbackClassification, Decision> = {
 };
 
 interface ClassifiedFeedback extends Decision {
-  readonly kind: FeedbackKind;
+  readonly kind: Schemas.SuppressionReason;
   readonly feedbackId: string;
   readonly recipients: ReadonlyArray<string>;
   readonly bounceType?: string | undefined;

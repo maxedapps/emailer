@@ -4,6 +4,7 @@
 - Date: 2026-09-13
 - Accepted: 2026-09-15, by the user, the implementation having been complete since 2026-09-13
 - Superseded in part: [ADR-0007](0007-immutable-recipient-unsubscribe-links.md) retires the known residual below by removing the contact read from the opt-out path entirely. The policy this record decides — consent keyed on the mailbox, and an opted-out contact frozen at its address — remains in effect.
+- Amended: 2026-09-24, on the user's decision in the simplification plan (`work/simplify.md` T3) — storage answers the refused move with `AddressOptedOut` itself, where it answered an `opted-out` outcome for the domain to map.
 - Authority: Reviewing the trunk after the [contact-management](work/contact-list.md) and [consent](work/consent-and-unsubscribe.md) slices merged found that together they let an opt-out be escaped. The user asked for it fixed in the cleanest way, with the alternatives weighed in [the follow-up](work/consent-identity-and-storage-cleanup.md) (I1), and approved this design for implementation. Acceptance follows the live confirmation below, as it did for ADR-0004 and ADR-0005.
 
 ## Context
@@ -40,5 +41,5 @@ Suppression deliberately does not block the change. Correcting a hard-bounced ad
 
 ## Confirmation
 
-- Unit: the address-change transaction is asserted whole, including the `ConditionCheck` on the address being left. Cancellation at that slot answers `opted-out`, and a cancellation at both slots answers `opted-out` too. Each of those properties was mutation-checked: removing it fails the suite.
+- Unit: the address-change transaction is asserted whole, including the `ConditionCheck` on the address being left. Cancellation at that slot answers `AddressOptedOut`, and a cancellation at both slots answers `AddressOptedOut` too. Each of those properties was mutation-checked: removing it fails the suite.
 - Live: the unsubscribe integration test, having opted an address out, asserts that moving its contact to another address is refused with `AddressOptedOut`.

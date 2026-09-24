@@ -258,11 +258,7 @@ export const contactFor = (storage: LiveStorage, email: string) =>
     const id = yield* newIdentifier;
     const createdAt = yield* nowIso;
 
-    const outcome = yield* storage.createContact({ id, email, createdAt });
-
-    if (outcome !== "created") {
-      throw new Error(`${email} could not be created (${outcome})`);
-    }
+    yield* storage.createContact({ id, email, createdAt });
 
     return id;
   });

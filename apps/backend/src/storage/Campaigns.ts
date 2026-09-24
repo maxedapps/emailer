@@ -1,15 +1,6 @@
 import * as Schemas from "@emailer/api/Schemas";
 import * as AWS from "alchemy/AWS";
-import {
-  Context,
-  Crypto,
-  Effect,
-  Layer,
-  Option,
-  Schema,
-  SchemaTransformation,
-  Struct,
-} from "effect";
+import { Context, Crypto, Effect, Layer, Schema, SchemaTransformation, Struct } from "effect";
 
 import { corrupt } from "./Errors.ts";
 import {
@@ -247,7 +238,7 @@ const campaignReads = (primitives: ReadPrimitives) => {
     const response = yield* readItem("getCampaign", campaignKey(campaignId));
 
     if (response.Item === undefined) {
-      return Option.none<Schemas.Campaign>();
+      return yield* new Schemas.NotFound({ entity: "campaign" });
     }
 
     const stored = yield* decodeStoredCampaign(response.Item).pipe(
@@ -257,7 +248,7 @@ const campaignReads = (primitives: ReadPrimitives) => {
     const summary = yield* summaryOf(stored).pipe(Effect.mapError(corrupt("getCampaign")));
     const body = yield* getCampaignBody(campaignId);
 
-    return Option.some<Schemas.Campaign>({ ...summary, ...body });
+    return { ...summary, ...body } satisfies Schemas.Campaign;
   });
 
   return { getCampaignBody, getCampaign } as const;
@@ -322,10 +313,7 @@ export const campaignOperations = (
       ),
     );
 
-    return { items: campaigns, nextCursor: page.nextCursor } satisfies StoredPage<
-      Schemas.CampaignSummary,
-      string
-    >;
+    return { ...page, items: campaigns } satisfies StoredPage<Schemas.CampaignSummary, string>;
   });
 
   // Tokenless virgin drafts are valid here; a missing token on queued/scheduled is the command's
@@ -336,14 +324,14 @@ export const campaignOperations = (
     const response = yield* readItem("getCampaignControl", campaignKey(campaignId));
 
     if (response.Item === undefined) {
-      return Option.none<CampaignControl>();
+      return yield* new Schemas.NotFound({ entity: "campaign" });
     }
 
     const stored = yield* decodeStoredCampaign(response.Item).pipe(
       Effect.mapError(corrupt("getCampaignControl")),
     );
 
-    return Option.some(controlOf(stored));
+    return controlOf(stored);
   });
 
   const commitLifecycle = (

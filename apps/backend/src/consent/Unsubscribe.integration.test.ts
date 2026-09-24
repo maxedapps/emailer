@@ -170,7 +170,7 @@ describe("one-click unsubscribe", () => {
 
         // Edited to another address *before* the link is used. A link that resolved a contact
         // would now opt out the new address; this one still names the old one.
-        expect((yield* storage.updateContact(contactId, { email: moved })).outcome).toBe("updated");
+        expect((yield* storage.updateContact(contactId, { email: moved })).email).toBe(moved);
 
         expect((yield* optOut(HttpClientRequest.post(link))).status).toBe(200);
 
@@ -178,7 +178,7 @@ describe("one-click unsubscribe", () => {
         expect(yield* storage.addressStatus(moved)).toBe("mailable");
 
         // Deleting the contact removes neither the consent nor the link's meaning.
-        expect(yield* storage.deleteContact(contactId)).toBe("deleted");
+        yield* storage.deleteContact(contactId);
         expect(yield* storage.addressStatus(original)).toBe("unsubscribed");
         expect((yield* optOut(HttpClientRequest.post(link))).status).toBe(200);
 
@@ -207,9 +207,9 @@ describe("one-click unsubscribe", () => {
 
         expect((yield* optOut(HttpClientRequest.post(link))).status).toBe(200);
 
-        const attempt = yield* storage.updateContact(contactId, { email: elsewhere });
-
-        expect(attempt.outcome).toBe("opted-out");
+        expect(
+          yield* Effect.flip(storage.updateContact(contactId, { email: elsewhere })),
+        ).toStrictEqual(new Schemas.AddressOptedOut({ email: address }));
         expect(yield* storage.addressStatus(elsewhere)).toBe("mailable");
       }),
     ));

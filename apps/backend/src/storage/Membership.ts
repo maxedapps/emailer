@@ -1,7 +1,7 @@
 import type * as dynamodb from "@distilled.cloud/aws/dynamodb";
 import type * as AWS from "alchemy/AWS";
 import * as Schemas from "@emailer/api/Schemas";
-import { Effect, Option, Schema, Struct } from "effect";
+import { Effect, Schema, Struct } from "effect";
 
 import { corrupt, unavailable } from "./Errors.ts";
 import {
@@ -73,14 +73,6 @@ const memberOfKey = (contactId: string, listId: string) => ({
   sk: str(`LISTOF#${listId}`),
 });
 
-export type AddMemberOutcome = "added" | "already-member" | "contact-missing" | "list-missing";
-
-export type RemoveMemberOutcome = "removed" | "list-missing";
-
-type ImportContactsOutcome =
-  | { readonly outcome: "imported"; readonly contacts: Schemas.ImportContactsResult["contacts"] }
-  | { readonly outcome: "list-missing" };
-
 export const membershipOperations = (
   primitives: ReadPrimitives & QueryPrimitives & BatchPrimitives & TransactionPrimitives,
 ) => {
@@ -100,7 +92,7 @@ export const membershipOperations = (
 
   /**
    * Adding to or importing into a list that is gone must write no membership, and removing from one
-   * answers `list-missing`, so each of those transactions carries this check. It targets the list's
+   * answers `NotFound`, so each of those transactions carries this check. It targets the list's
    * `META`, never a member item, so it shares a transaction with the member writes without targeting
    * any item twice.
    */
@@ -154,11 +146,11 @@ export const membershipOperations = (
     }
 
     if (outcome.conditionFailures.has(0)) {
-      return "contact-missing" as const;
+      return yield* new Schemas.NotFound({ entity: "contact" });
     }
 
     if (outcome.conditionFailures.has(1)) {
-      return "list-missing" as const;
+      return yield* new Schemas.NotFound({ entity: "list" });
     }
 
     return "already-member" as const;
@@ -166,7 +158,7 @@ export const membershipOperations = (
 
   /**
    * Both directions go, and slot 2 checks the list, so removing from a list that is not there
-   * answers `list-missing` rather than a quiet success. Neither delete is conditioned: removing
+   * answers `NotFound` rather than a quiet success. Neither delete is conditioned: removing
    * someone who is not a member is a no-op, and repeating the request must stay harmless.
    */
   const removeMember = Effect.fn("Storage.removeMember")(function* (
@@ -177,14 +169,16 @@ export const membershipOperations = (
       TransactItems: [...removeMembership(listId, contactId), listExists(listId)],
     });
 
-    return outcome.committed ? ("removed" as const) : ("list-missing" as const);
+    if (!outcome.committed) {
+      return yield* new Schemas.NotFound({ entity: "list" });
+    }
   });
 
   /**
    * Members are read from the base table, never from the index, and hydrated into whole contacts:
    * a caller listing a list's members wants the people, and bare identifiers would only force a
-   * second round trip per member. `Option.none` means the list itself is absent, which is a
-   * different answer from a list with no members.
+   * second round trip per member. `NotFound` means the list itself is absent, which is a different
+   * answer from a list with no members.
    */
   const listMembers = Effect.fn("Storage.listMembers")(function* (
     listId: string,
@@ -194,7 +188,7 @@ export const membershipOperations = (
     const list = yield* readItem("listMembers", listKey(listId));
 
     if (list.Item === undefined) {
-      return Option.none<StoredPage<Schemas.Contact, string>>();
+      return yield* new Schemas.NotFound({ entity: "list" });
     }
 
     const request = {
@@ -235,16 +229,18 @@ export const membershipOperations = (
 
     const last = page.LastEvaluatedKey;
 
+    if (last === undefined) {
+      return { items: contacts } satisfies StoredPage<Schemas.Contact, string>;
+    }
+
     // A `LastEvaluatedKey` that cannot be turned into a cursor would silently end the listing, so
     // it is decoded rather than read: a page that is there but unreachable is corrupt, not absent.
-    const nextCursor =
-      last === undefined
-        ? undefined
-        : (yield* decodeMemberCursor(last).pipe(Effect.mapError(corrupt("listMembers")))).sk.slice(
-            "MEMBER#".length,
-          );
+    const { sk } = yield* decodeMemberCursor(last).pipe(Effect.mapError(corrupt("listMembers")));
 
-    return Option.some<StoredPage<Schemas.Contact, string>>({ items: contacts, nextCursor });
+    return { items: contacts, nextCursor: sk.slice("MEMBER#".length) } satisfies StoredPage<
+      Schemas.Contact,
+      string
+    >;
   });
 
   const joinMember = (
@@ -283,7 +279,7 @@ export const membershipOperations = (
     const stored = yield* readItem("deleteContact", contactKey(contactId));
 
     if (stored.Item === undefined) {
-      return "contact-missing" as const;
+      return yield* new Schemas.NotFound({ entity: "contact" });
     }
 
     const contact = yield* decodeContactItem(stored.Item).pipe(
@@ -347,8 +343,6 @@ export const membershipOperations = (
     if (!outcome.committed) {
       return yield* unavailable("deleteContact")(outcome.conditionFailures);
     }
-
-    return "deleted" as const;
   });
 
   /**
@@ -365,7 +359,7 @@ export const membershipOperations = (
     const stored = yield* readItem("deleteList", listKey(listId));
 
     if (stored.Item === undefined) {
-      return "list-missing" as const;
+      return yield* new Schemas.NotFound({ entity: "list" });
     }
 
     let startKey: dynamodb.AttributeMap | undefined;
@@ -411,8 +405,6 @@ export const membershipOperations = (
     if (!outcome.committed) {
       return yield* unavailable("deleteList")(outcome.conditionFailures);
     }
-
-    return "deleted" as const;
   });
 
   /**
@@ -423,7 +415,7 @@ export const membershipOperations = (
    *
    * The pre-read is advisory only — a strong read still does not make a later write atomic. The
    * transaction's own conditions are the authority: slot 0 checks the list, so a missing list is
-   * `list-missing`; every existing contact carries a `ConditionCheck`, so an import racing that
+   * `NotFound`; every existing contact carries a `ConditionCheck`, so an import racing that
    * contact's deletion fails rather than resurrecting a membership; and each new address is
    * reserved conditionally, so losing a race to a concurrent creation fails too. Both races
    * resolve on a repeat, whose pre-read then sees the new state.
@@ -513,11 +505,11 @@ export const membershipOperations = (
     });
 
     if (outcome.committed) {
-      return { outcome: "imported", contacts: imported } as const satisfies ImportContactsOutcome;
+      return { contacts: imported } satisfies Schemas.ImportContactsResult;
     }
 
     if (outcome.conditionFailures.has(0)) {
-      return { outcome: "list-missing" } as const satisfies ImportContactsOutcome;
+      return yield* new Schemas.NotFound({ entity: "list" });
     }
 
     return yield* unavailable("importContacts")(outcome.conditionFailures);

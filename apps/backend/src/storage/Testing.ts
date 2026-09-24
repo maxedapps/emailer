@@ -8,6 +8,7 @@ import * as dynamodb from "@distilled.cloud/aws/dynamodb";
 import type * as AWS from "alchemy/AWS";
 import { Effect, Result } from "effect";
 
+import { StorageFailure } from "./Errors.ts";
 import { allPrimitives } from "./Primitives.ts";
 
 import type { TransactionTokens } from "./Primitives.ts";
@@ -16,7 +17,6 @@ import type { AudienceOperations } from "./Audience.ts";
 import type { CampaignStoreOperations } from "./Campaigns.ts";
 
 import type { TableOperations } from "./Items.ts";
-import type { StorageFailure } from "./Errors.ts";
 
 type GetItemReply = Effect.Effect<dynamodb.GetItemOutput, dynamodb.GetItemError>;
 
@@ -124,9 +124,10 @@ export const conditionFailed = Effect.fail(
   new dynamodb.ConditionalCheckFailedException({ message: "the conditional request failed" }),
 );
 
-export const failureOf = <A>(attempt: Result.Result<A, StorageFailure>): StorageFailure => {
-  if (Result.isSuccess(attempt)) {
-    throw new Error("Expected the operation to fail");
+/** The storage failure an operation ended with. A success, or a contract error, fails the test. */
+export const failureOf = <A, E>(attempt: Result.Result<A, E>): StorageFailure => {
+  if (Result.isSuccess(attempt) || !(attempt.failure instanceof StorageFailure)) {
+    throw new Error("Expected the operation to fail with a storage failure");
   }
 
   return attempt.failure;

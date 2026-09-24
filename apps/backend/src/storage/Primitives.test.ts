@@ -306,7 +306,7 @@ describe("readEntityPage", () => {
       }),
     ));
 
-  it("reports no next cursor on a full page that happens to be the last", () =>
+  it("omits the next cursor on a full page that happens to be the last", () =>
     Effect.runPromise(
       Effect.gen(function* () {
         const { primitives } = withTable({
@@ -316,7 +316,8 @@ describe("readEntityPage", () => {
 
         const page = yield* primitives.readEntityPage("listContacts", kind, keyOf, 1, undefined);
 
-        expect(page.nextCursor).toBeUndefined();
+        // Absent rather than `undefined`, which the API would encode as `null`.
+        expect(page).not.toHaveProperty("nextCursor");
       }),
     ));
 

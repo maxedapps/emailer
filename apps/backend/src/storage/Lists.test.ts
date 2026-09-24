@@ -1,4 +1,5 @@
-import { Effect, Option } from "effect";
+import * as Schemas from "@emailer/api/Schemas";
+import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { str } from "./Items.ts";
@@ -58,7 +59,7 @@ describe("getList", () => {
           getItem: [Effect.succeed({ Item: listItem(listId, "Subscribers", createdAt) })],
         });
 
-        expect(Option.getOrUndefined(yield* operations.getList(listId))).toStrictEqual({
+        expect(yield* operations.getList(listId)).toStrictEqual({
           id: listId,
           name: "Subscribers",
           createdAt,
@@ -98,9 +99,11 @@ describe("renameList", () => {
           updateItem: [Effect.succeed({ Attributes: listItem(listId, "Members", createdAt) })],
         });
 
-        expect(
-          Option.getOrUndefined(yield* operations.renameList(listId, "Members")),
-        ).toStrictEqual({ id: listId, name: "Members", createdAt });
+        expect(yield* operations.renameList(listId, "Members")).toStrictEqual({
+          id: listId,
+          name: "Members",
+          createdAt,
+        });
 
         // Asserted whole: an added `gsi1sk` clause would keep the index out of step with the item,
         // and a dropped condition would let a rename resurrect a list deleted underneath it.
@@ -118,12 +121,14 @@ describe("renameList", () => {
       }),
     ));
 
-  it("reports a missing list when the write's condition fails", () =>
+  it("answers NotFound when the write's condition fails", () =>
     Effect.runPromise(
       Effect.gen(function* () {
         const { operations } = withTable({ updateItem: [conditionFailed] });
 
-        expect(Option.isNone(yield* operations.renameList(listId, "Members"))).toBe(true);
+        expect(yield* Effect.flip(operations.renameList(listId, "Members"))).toStrictEqual(
+          new Schemas.NotFound({ entity: "list" }),
+        );
       }),
     ));
 });

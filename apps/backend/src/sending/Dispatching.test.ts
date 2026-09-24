@@ -9,7 +9,6 @@ import {
   Fiber,
   Layer,
   Logger,
-  Option,
   Result,
 } from "effect";
 import { TestClock } from "effect/testing";
@@ -159,14 +158,18 @@ const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> 
     Layer.succeed(AudienceStore)({
       ...unusedAudience,
       listMembers: (id, limit, cursor) =>
-        Effect.sync(() => {
+        Effect.gen(function* () {
           world.listCalls.push({ listId: id, limit, cursor });
 
           if (world.listMissing) {
-            return Option.none();
+            return yield* new Schemas.NotFound({ entity: "list" });
           }
 
-          return Option.some({ items: world.members, nextCursor: world.nextCursor });
+          const items = [...world.members];
+
+          return world.nextCursor === undefined
+            ? { items }
+            : { items, nextCursor: world.nextCursor };
         }),
       addressStatus: (email) =>
         Effect.sync(() => {

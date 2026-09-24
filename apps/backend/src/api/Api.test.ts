@@ -75,6 +75,10 @@ interface Store {
   readonly failSesDelete: (error: sesv2.DeleteSuppressedDestinationError) => void;
 }
 
+/** A stored entity, or the store's answer for one that is not there. */
+const found = <A>(value: A | undefined, entity: Schemas.NotFound["entity"]) =>
+  value === undefined ? Effect.fail(new Schemas.NotFound({ entity })) : Effect.succeed(value);
+
 const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store => {
   const reads: Array<string> = [];
   const writes: Array<string> = [];
@@ -125,82 +129,74 @@ const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store 
   const audience = Layer.succeed(AudienceStore)({
     ...unusedAudience,
     createContact: (contact) =>
-      Effect.suspend(() => {
+      Effect.gen(function* () {
         writes.push("createContact");
 
         for (const existing of contacts.values()) {
           if (Schemas.mailboxKey(existing.email) === Schemas.mailboxKey(contact.email)) {
-            return Effect.succeed("email-taken" as const);
+            return yield* new Schemas.EmailAlreadyUsed({ email: contact.email });
           }
         }
 
         contacts.set(contact.id, contact);
-
-        return Effect.succeed("created" as const);
       }),
     getContact: (id) =>
-      Effect.sync(() => {
+      Effect.suspend(() => {
         reads.push("getContact");
 
-        return Option.fromUndefinedOr(contacts.get(id));
+        return found(contacts.get(id), "contact");
       }),
     getContactByEmail: (address) =>
-      Effect.sync(() => {
+      Effect.suspend(() => {
         reads.push("getContactByEmail");
 
-        for (const contact of contacts.values()) {
-          if (Schemas.mailboxKey(contact.email) === Schemas.mailboxKey(address)) {
-            return Option.some(contact);
-          }
-        }
-
-        return Option.none<Schemas.Contact>();
+        return found(
+          [...contacts.values()].find(
+            (contact) => Schemas.mailboxKey(contact.email) === Schemas.mailboxKey(address),
+          ),
+          "contact",
+        );
       }),
     listContacts: (limit) =>
       Effect.sync(() => {
         reads.push("listContacts");
 
-        const page = [...contacts.values()].slice(0, limit);
-
-        return { items: page, nextCursor: undefined };
+        return { items: [...contacts.values()].slice(0, limit) };
       }),
     updateContact: (id, update) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         writes.push("updateContact");
 
-        const found = contacts.get(id);
-
-        if (found === undefined) {
-          return { outcome: "contact-missing" as const };
-        }
-
-        const email = update.email ?? found.email;
+        const current = yield* found(contacts.get(id), "contact");
+        const email = update.email ?? current.email;
 
         // `status` stands for the stored address, so a move off it is what an opt-out refuses.
         if (
           addressStatus === "unsubscribed" &&
-          Schemas.mailboxKey(email) !== Schemas.mailboxKey(found.email)
+          Schemas.mailboxKey(email) !== Schemas.mailboxKey(current.email)
         ) {
-          return { outcome: "opted-out" as const, email: found.email };
+          return yield* new Schemas.AddressOptedOut({ email: current.email });
         }
 
         for (const other of contacts.values()) {
           if (other.id !== id && Schemas.mailboxKey(other.email) === Schemas.mailboxKey(email)) {
-            return { outcome: "email-taken" as const, email };
+            return yield* new Schemas.EmailAlreadyUsed({ email });
           }
         }
 
-        const updated: Schemas.Contact = { ...found, email };
+        const updated: Schemas.Contact = { ...current, email };
 
         contacts.set(id, updated);
 
-        return { outcome: "updated" as const, contact: updated };
+        return updated;
       }),
     deleteContact: (id) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         writes.push("deleteContact");
 
-        return contacts.delete(id) ? ("deleted" as const) : ("contact-missing" as const);
+        if (!contacts.delete(id)) {
+          return yield* new Schemas.NotFound({ entity: "contact" });
+        }
       }),
     createList: (list) =>
       Effect.sync(() => {
@@ -208,49 +204,36 @@ const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store 
         lists.set(list.id, list);
       }),
     getList: (id) =>
-      Effect.sync(() => {
+      Effect.suspend(() => {
         reads.push("getList");
 
-        return Option.fromUndefinedOr(lists.get(id));
+        return found(lists.get(id), "list");
       }),
     renameList: (id, name) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         writes.push("renameList");
 
-        const stored = lists.get(id);
-
-        if (stored === undefined) {
-          return Option.none<Schemas.ContactList>();
-        }
-
-        const renamed = { ...stored, name };
+        const renamed = { ...(yield* found(lists.get(id), "list")), name };
 
         lists.set(id, renamed);
 
-        return Option.some(renamed);
+        return renamed;
       }),
     deleteList: (id) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         writes.push("deleteList");
 
         if (!lists.delete(id)) {
-          return "list-missing" as const;
+          return yield* new Schemas.NotFound({ entity: "list" });
         }
 
         members.delete(id);
-
-        return "deleted" as const;
       }),
     listMembers: (listId, limit) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         reads.push("listMembers");
 
-        if (!lists.has(listId)) {
-          return Option.none<{
-            readonly items: ReadonlyArray<Schemas.Contact>;
-            readonly nextCursor: string | undefined;
-          }>();
-        }
+        yield* found(lists.get(listId), "list");
 
         const joined: Array<Schemas.Contact> = [];
 
@@ -262,30 +245,26 @@ const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store 
           }
         }
 
-        return Option.some({ items: joined, nextCursor: undefined });
+        return { items: joined };
       }),
     removeMember: (listId, contactId) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         writes.push("removeMember");
 
         if (!lists.has(listId)) {
-          return "list-missing" as const;
+          return yield* new Schemas.NotFound({ entity: "list" });
         }
 
         members.set(
           listId,
           (members.get(listId) ?? []).filter((id) => id !== contactId),
         );
-
-        return "removed" as const;
       }),
     importContacts: (listId, candidates, addedAt) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         writes.push("importContacts");
 
-        if (!lists.has(listId)) {
-          return { outcome: "list-missing" as const };
-        }
+        yield* found(lists.get(listId), "list");
 
         const joined = members.get(listId) ?? [];
 
@@ -313,19 +292,14 @@ const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store 
 
         members.set(listId, joined);
 
-        return { outcome: "imported" as const, contacts: imported };
+        return { contacts: imported };
       }),
     addMember: (listId, contactId) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         writes.push("addMember");
 
-        if (!contacts.has(contactId)) {
-          return "contact-missing" as const;
-        }
-
-        if (!lists.has(listId)) {
-          return "list-missing" as const;
-        }
+        yield* found(contacts.get(contactId), "contact");
+        yield* found(lists.get(listId), "list");
 
         const current = members.get(listId) ?? [];
 
@@ -384,10 +358,10 @@ const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store 
         campaigns.set(campaign.id, { ...campaign, submission: { state: "draft" } });
       }),
     getCampaign: (id) =>
-      Effect.sync(() => {
+      Effect.suspend(() => {
         reads.push("getCampaign");
 
-        return Option.fromUndefinedOr(campaigns.get(id));
+        return found(campaigns.get(id), "campaign");
       }),
     updateDraft: (campaign) =>
       Effect.sync(() => {
@@ -417,9 +391,7 @@ const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store 
       Effect.sync(() => {
         reads.push("listCampaigns");
 
-        const page = [...campaigns.values()].slice(0, limit);
-
-        return { items: page, nextCursor: undefined };
+        return { items: [...campaigns.values()].slice(0, limit) };
       }),
     getCampaignControl: (id) =>
       Effect.gen(function* () {
@@ -429,20 +401,14 @@ const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store 
           return yield* controlFailure;
         }
 
-        const campaign = campaigns.get(id);
+        const { submission } = yield* found(campaigns.get(id), "campaign");
 
-        if (campaign === undefined) {
-          return Option.none();
-        }
-
-        const submission = campaign.submission;
-
-        return Option.some({
+        return {
           state: submission.state,
           runToken: runTokens.get(id),
           startedAt: "startedAt" in submission ? submission.startedAt : undefined,
           pausedReason: submission.state === "paused" ? submission.reason : undefined,
-        });
+        };
       }),
     // Every run this suite starts is a send; scheduling and resuming belong to Campaigns.test.ts.
     newRun: (id, expected, newToken, _target, now) =>
@@ -953,15 +919,13 @@ describe("public errors", () => {
 
           const campaigns = yield* CampaignStore;
 
-          expect(yield* campaigns.getCampaign(knownId)).toStrictEqual(Option.some(campaign));
-          expect(yield* campaigns.getCampaignControl(knownId)).toStrictEqual(
-            Option.some({
-              state: "scheduled",
-              runToken,
-              startedAt: undefined,
-              pausedReason: undefined,
-            }),
-          );
+          expect(yield* campaigns.getCampaign(knownId)).toStrictEqual(campaign);
+          expect(yield* campaigns.getCampaignControl(knownId)).toStrictEqual({
+            state: "scheduled",
+            runToken,
+            startedAt: undefined,
+            pausedReason: undefined,
+          });
         }).pipe(Effect.provide(store.layer)),
       );
     },

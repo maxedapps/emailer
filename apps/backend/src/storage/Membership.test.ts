@@ -1,4 +1,5 @@
-import { Effect, Option } from "effect";
+import * as Schemas from "@emailer/api/Schemas";
+import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { tableLogicalId } from "./Items.ts";
@@ -16,7 +17,6 @@ import {
 
 import type { Table } from "./Testing.ts";
 
-import type * as Schemas from "@emailer/api/Schemas";
 import type { ScriptedReplies } from "./Testing.ts";
 
 const operationsFor = (table: Table) => membershipOperations(primitivesFor(table));
@@ -88,25 +88,25 @@ describe("addMember", () => {
       }),
     ));
 
-  it("reports a missing contact", () =>
+  it("answers NotFound for a missing contact", () =>
     Effect.runPromise(
       Effect.gen(function* () {
         const { run } = addMember({
           transactWriteItems: [cancelled("ConditionalCheckFailed", "None", "None", "None")],
         });
 
-        expect(yield* run).toBe("contact-missing");
+        expect(yield* Effect.flip(run)).toStrictEqual(new Schemas.NotFound({ entity: "contact" }));
       }),
     ));
 
-  it("reports a missing list", () =>
+  it("answers NotFound for a missing list", () =>
     Effect.runPromise(
       Effect.gen(function* () {
         const { run } = addMember({
           transactWriteItems: [cancelled("None", "ConditionalCheckFailed", "None", "None")],
         });
 
-        expect(yield* run).toBe("list-missing");
+        expect(yield* Effect.flip(run)).toStrictEqual(new Schemas.NotFound({ entity: "list" }));
       }),
     ));
 
@@ -159,7 +159,7 @@ describe("removeMember", () => {
       Effect.gen(function* () {
         const { table, run } = removeMember({});
 
-        expect(yield* run).toBe("removed");
+        expect(yield* run).toBeUndefined();
 
         const request = table.transactionRequests[0];
 
@@ -188,14 +188,14 @@ describe("removeMember", () => {
       }),
     ));
 
-  it("reports a missing list", () =>
+  it("answers NotFound for a missing list", () =>
     Effect.runPromise(
       Effect.gen(function* () {
         const { run } = removeMember({
           transactWriteItems: [cancelled("None", "None", "ConditionalCheckFailed")],
         });
 
-        expect(yield* run).toBe("list-missing");
+        expect(yield* Effect.flip(run)).toStrictEqual(new Schemas.NotFound({ entity: "list" }));
       }),
     ));
 
@@ -204,7 +204,7 @@ describe("removeMember", () => {
       Effect.gen(function* () {
         const { table, run } = removeMember({});
 
-        expect(yield* run).toBe("removed");
+        expect(yield* run).toBeUndefined();
         expect(table.transactionRequests[0]?.TransactItems[0]?.Delete).not.toHaveProperty(
           "ConditionExpression",
         );
@@ -240,26 +240,27 @@ describe("listMembers", () => {
     createdAt: { S: createdAt },
   });
 
-  it("answers none for a list that is not there, which is not an empty list", () =>
+  it("answers NotFound for a list that is not there, which is not an empty list", () =>
     Effect.runPromise(
       Effect.gen(function* () {
         const table = scriptedTable({});
 
-        const page = yield* operationsFor(table).listMembers(listId, 25, undefined);
-
-        expect(Option.isNone(page)).toBe(true);
+        expect(
+          yield* Effect.flip(operationsFor(table).listMembers(listId, 25, undefined)),
+        ).toStrictEqual(new Schemas.NotFound({ entity: "list" }));
         expect(table.queryRequests).toStrictEqual([]);
       }),
     ));
 
-  it("answers an empty page for a list with no members", () =>
+  it("answers an empty page for a list with no members, with no nextCursor key at all", () =>
     Effect.runPromise(
       Effect.gen(function* () {
         const table = scriptedTable({ getItem: [Effect.succeed({ Item: listItem })] });
 
         const page = yield* operationsFor(table).listMembers(listId, 25, undefined);
 
-        expect(Option.getOrUndefined(page)).toStrictEqual({ items: [], nextCursor: undefined });
+        // Absent rather than `undefined`, which the API would encode as `null`.
+        expect(page).toStrictEqual({ items: [] });
       }),
     ));
 
@@ -284,10 +285,7 @@ describe("listMembers", () => {
 
         expect(table.queryRequests[0]?.ConsistentRead).toBe(true);
         expect(table.queryRequests[0]?.Limit).toBe(25);
-        expect(Option.getOrUndefined(page)?.items.map((contact) => contact.id)).toStrictEqual([
-          contactId,
-          otherContactId,
-        ]);
+        expect(page.items.map((contact) => contact.id)).toStrictEqual([contactId, otherContactId]);
       }),
     ));
 
@@ -309,8 +307,8 @@ describe("listMembers", () => {
 
         const page = yield* operationsFor(table).listMembers(listId, 25, undefined);
 
-        expect(Option.getOrUndefined(page)?.items).toStrictEqual([]);
-        expect(Option.getOrUndefined(page)?.nextCursor).toBe(contactId);
+        expect(page.items).toStrictEqual([]);
+        expect(page.nextCursor).toBe(contactId);
       }),
     ));
 
@@ -345,9 +343,7 @@ describe("listMembers", () => {
 
         const page = yield* operationsFor(table).listMembers(listId, 25, undefined);
 
-        expect(Option.getOrUndefined(page)?.items.map((contact) => contact.id)).toStrictEqual([
-          contactId,
-        ]);
+        expect(page.items.map((contact) => contact.id)).toStrictEqual([contactId]);
       }),
     ));
 });
@@ -373,12 +369,14 @@ describe("deleteContact", () => {
 
   const found: ScriptedReplies = { getItem: [Effect.succeed({ Item: contactMeta })] };
 
-  it("reports a contact that is not there without writing anything", () =>
+  it("answers NotFound for a contact that is not there without writing anything", () =>
     Effect.runPromise(
       Effect.gen(function* () {
         const table = scriptedTable({});
 
-        expect(yield* operationsFor(table).deleteContact(contactId)).toBe("contact-missing");
+        expect(yield* Effect.flip(operationsFor(table).deleteContact(contactId))).toStrictEqual(
+          new Schemas.NotFound({ entity: "contact" }),
+        );
         expect(table.transactionRequests).toStrictEqual([]);
       }),
     ));
@@ -391,7 +389,7 @@ describe("deleteContact", () => {
           query: [Effect.succeed({ Items: [reverseItem(listId)] })],
         });
 
-        expect(yield* operationsFor(table).deleteContact(contactId)).toBe("deleted");
+        expect(yield* operationsFor(table).deleteContact(contactId)).toBeUndefined();
 
         expect(table.transactionRequests).toHaveLength(2);
         expect(table.transactionRequests[0]?.TransactItems).toStrictEqual([
@@ -457,7 +455,7 @@ describe("deleteContact", () => {
         // repeat discovers nothing to cascade and finishes the job.
         const table = scriptedTable({ ...found, query: [Effect.succeed({ Items: [] })] });
 
-        expect(yield* operationsFor(table).deleteContact(contactId)).toBe("deleted");
+        expect(yield* operationsFor(table).deleteContact(contactId)).toBeUndefined();
 
         expect(table.transactionRequests).toHaveLength(1);
         expect(table.transactionRequests[0]?.TransactItems[0]?.Delete?.Key).toStrictEqual({
@@ -502,12 +500,14 @@ describe("deleteList", () => {
       contactId: { S: `0195f0a0-1111-4222-8333-4444444${String(index).padStart(5, "0")}` },
     }));
 
-  it("reports a list that is not there without writing anything", () =>
+  it("answers NotFound for a list that is not there without writing anything", () =>
     Effect.runPromise(
       Effect.gen(function* () {
         const table = scriptedTable({});
 
-        expect(yield* operationsFor(table).deleteList(listId)).toBe("list-missing");
+        expect(yield* Effect.flip(operationsFor(table).deleteList(listId))).toStrictEqual(
+          new Schemas.NotFound({ entity: "list" }),
+        );
         expect(table.transactionRequests).toStrictEqual([]);
       }),
     ));
@@ -517,7 +517,7 @@ describe("deleteList", () => {
       Effect.gen(function* () {
         const table = scriptedTable(found);
 
-        expect(yield* operationsFor(table).deleteList(listId)).toBe("deleted");
+        expect(yield* operationsFor(table).deleteList(listId)).toBeUndefined();
         expect(table.transactionRequests[0]?.TransactItems).toStrictEqual([
           { Delete: { Table: tableLogicalId, Key: listMeta } },
         ]);
@@ -538,7 +538,7 @@ describe("deleteList", () => {
           ],
         });
 
-        expect(yield* operationsFor(table).deleteList(listId)).toBe("deleted");
+        expect(yield* operationsFor(table).deleteList(listId)).toBeUndefined();
 
         expect(table.queryRequests[0]?.Limit).toBe(40);
         expect(
@@ -563,7 +563,7 @@ describe("deleteList", () => {
           ],
         });
 
-        expect(yield* operationsFor(table).deleteList(listId)).toBe("deleted");
+        expect(yield* operationsFor(table).deleteList(listId)).toBeUndefined();
 
         expect(table.queryRequests).toHaveLength(2);
         expect(table.transactionRequests).toHaveLength(2);
@@ -629,7 +629,6 @@ describe("importContacts", () => {
         const { table, run } = importInto({}, [candidate(contactId, "sam@example.com")]);
 
         expect(yield* run).toStrictEqual({
-          outcome: "imported",
           contacts: [{ email: "sam@example.com", contactId, member: true }],
         });
 
@@ -671,7 +670,6 @@ describe("importContacts", () => {
         );
 
         expect(yield* run).toStrictEqual({
-          outcome: "imported",
           contacts: [{ email: "sam@example.com", contactId: otherContactId, member: true }],
         });
 
@@ -756,7 +754,7 @@ describe("importContacts", () => {
       }),
     ));
 
-  it("reports a list that is not there rather than a storage failure", () =>
+  it("answers NotFound for a list that is not there rather than a storage failure", () =>
     Effect.runPromise(
       Effect.gen(function* () {
         const { run } = importInto(
@@ -768,7 +766,7 @@ describe("importContacts", () => {
           [candidate(contactId, "sam@example.com")],
         );
 
-        expect(yield* run).toStrictEqual({ outcome: "list-missing" });
+        expect(yield* Effect.flip(run)).toStrictEqual(new Schemas.NotFound({ entity: "list" }));
       }),
     ));
 

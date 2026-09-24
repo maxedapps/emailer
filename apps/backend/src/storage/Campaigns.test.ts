@@ -1,4 +1,5 @@
-import { Effect, Option } from "effect";
+import * as Schemas from "@emailer/api/Schemas";
+import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { campaignOperations } from "./Campaigns.ts";
@@ -16,7 +17,6 @@ import {
   serverError,
 } from "./Testing.ts";
 
-import type * as Schemas from "@emailer/api/Schemas";
 import type { Table } from "./Testing.ts";
 
 import type { ScriptedReplies } from "./Testing.ts";
@@ -177,7 +177,7 @@ describe("campaign records", () => {
         const campaign = yield* operationsFor(readBack).getCampaign(campaignId);
 
         expect(table.putItemRequests[0]?.Item).not.toHaveProperty("html");
-        expect(Option.getOrUndefined(campaign)).toStrictEqual({
+        expect(campaign).toStrictEqual({
           id: campaignId,
           listId,
           subject: "Grüße 😀",
@@ -185,7 +185,7 @@ describe("campaign records", () => {
           createdAt,
           submission: { state: "draft" },
         });
-        expect(Option.getOrUndefined(campaign)).not.toHaveProperty("html");
+        expect(campaign).not.toHaveProperty("html");
         expectAliasedReservedNames(table);
         expectAliasedReservedNames(readBack);
       }),
@@ -221,7 +221,7 @@ describe("campaign records", () => {
 
         const campaign = yield* operationsFor(readBack).getCampaign(campaignId);
 
-        expect(Option.getOrUndefined(campaign)).toStrictEqual({
+        expect(campaign).toStrictEqual({
           id: campaignId,
           listId,
           subject: "Grüße 😀",
@@ -247,7 +247,7 @@ describe("campaign records", () => {
           ],
         });
 
-        expect(Option.getOrUndefined(yield* storage.getCampaign(campaignId))).toStrictEqual({
+        expect(yield* storage.getCampaign(campaignId)).toStrictEqual({
           id: campaignId,
           listId,
           subject: "Release",
@@ -348,35 +348,25 @@ describe("campaign records", () => {
           ],
         });
 
-        expect(
-          Option.getOrUndefined(yield* storage.getCampaign(campaignId))?.submission,
-        ).toStrictEqual({
+        expect((yield* storage.getCampaign(campaignId)).submission).toStrictEqual({
           state: "draft",
         });
-        expect(
-          Option.getOrUndefined(yield* storage.getCampaign(campaignId))?.submission,
-        ).toStrictEqual({
+        expect((yield* storage.getCampaign(campaignId)).submission).toStrictEqual({
           state: "scheduled",
           sendAt: queuedAt,
         });
-        expect(
-          Option.getOrUndefined(yield* storage.getCampaign(campaignId))?.submission,
-        ).toStrictEqual({
+        expect((yield* storage.getCampaign(campaignId)).submission).toStrictEqual({
           state: "queued",
           queuedAt,
         });
-        expect(
-          Option.getOrUndefined(yield* storage.getCampaign(campaignId))?.submission,
-        ).toStrictEqual({
+        expect((yield* storage.getCampaign(campaignId)).submission).toStrictEqual({
           state: "sending",
           queuedAt,
           startedAt,
           progress,
           feedback: { bounced: 0, complained: 0 },
         });
-        expect(
-          Option.getOrUndefined(yield* storage.getCampaign(campaignId))?.submission,
-        ).toStrictEqual({
+        expect((yield* storage.getCampaign(campaignId)).submission).toStrictEqual({
           state: "paused",
           queuedAt,
           startedAt,
@@ -384,9 +374,7 @@ describe("campaign records", () => {
           feedback: { bounced: 0, complained: 0 },
           reason: "rate-limited",
         });
-        expect(
-          Option.getOrUndefined(yield* storage.getCampaign(campaignId))?.submission,
-        ).toStrictEqual({
+        expect((yield* storage.getCampaign(campaignId)).submission).toStrictEqual({
           state: "completed",
           queuedAt,
           startedAt,
@@ -432,7 +420,7 @@ describe("campaign records", () => {
           { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } },
           { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "BODY" } },
         ]);
-        expect(Option.getOrUndefined(campaign)).toStrictEqual({
+        expect(campaign).toStrictEqual({
           id: campaignId,
           listId,
           subject: "Release",
@@ -454,7 +442,7 @@ describe("campaign records", () => {
           ],
         });
 
-        expect(Option.getOrUndefined(yield* storage.getCampaign(campaignId))).toStrictEqual({
+        expect(yield* storage.getCampaign(campaignId)).toStrictEqual({
           id: campaignId,
           listId,
           subject: "Release",
@@ -519,7 +507,7 @@ describe("getCampaignControl", () => {
           ],
         });
 
-        expect(Option.getOrUndefined(yield* storage.getCampaignControl(campaignId))).toStrictEqual({
+        expect(yield* storage.getCampaignControl(campaignId)).toStrictEqual({
           state: "paused",
           runToken,
           startedAt,
@@ -542,7 +530,7 @@ describe("getCampaignControl", () => {
           getItem: [Effect.succeed({ Item: meta({ state: "draft" }) })],
         });
 
-        expect(Option.getOrUndefined(yield* storage.getCampaignControl(campaignId))).toStrictEqual({
+        expect(yield* storage.getCampaignControl(campaignId)).toStrictEqual({
           state: "draft",
           runToken: undefined,
           startedAt: undefined,
@@ -552,14 +540,16 @@ describe("getCampaignControl", () => {
       }),
     ));
 
-  it("returns none when the campaign is missing", () =>
+  it("answers NotFound when the campaign is missing", () =>
     Effect.runPromise(
       Effect.gen(function* () {
         const { table, storage } = withStorage({
           getItem: [Effect.succeed({})],
         });
 
-        expect(yield* storage.getCampaignControl(campaignId)).toStrictEqual(Option.none());
+        expect(yield* Effect.flip(storage.getCampaignControl(campaignId))).toStrictEqual(
+          new Schemas.NotFound({ entity: "campaign" }),
+        );
         expectAliasedReservedNames(table);
       }),
     ));
@@ -571,7 +561,7 @@ describe("getCampaignControl", () => {
           getItem: [Effect.succeed({ Item: meta({ state: "queued", queuedAt }) })],
         });
 
-        expect(Option.getOrUndefined(yield* storage.getCampaignControl(campaignId))).toStrictEqual({
+        expect(yield* storage.getCampaignControl(campaignId)).toStrictEqual({
           state: "queued",
           runToken: undefined,
           startedAt: undefined,

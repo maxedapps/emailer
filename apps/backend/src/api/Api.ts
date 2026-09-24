@@ -24,8 +24,8 @@ import { lambdaBasics } from "../Lambda.ts";
 import { CampaignWakeLive } from "../sending/Dispatch.ts";
 import { MailerLive } from "../sending/Mailer.ts";
 import { SendGuardLive, SendPacingLive } from "../sending/SendGuard.ts";
-import { AudienceStoreLive } from "../storage/Audience.ts";
-import { CampaignStoreLive } from "../storage/Campaigns.ts";
+import { AudienceStore, AudienceStoreLive } from "../storage/Audience.ts";
+import { CampaignStore, CampaignStoreLive } from "../storage/Campaigns.ts";
 import { apiToken, authorizationUsing } from "./Auth.ts";
 
 /**
@@ -37,32 +37,57 @@ const invocationTimeout = Duration.seconds(60);
 const pageOf = (query: { readonly limit?: number | undefined }) =>
   query.limit ?? Schemas.defaultPageSize;
 
+// Handlers reach a store through `use`: the router is built before the services are provided, so
+// a group cannot yield them up front.
 const contactsHandlers = HttpApiBuilder.group(EmailerApi, "contacts", (handlers) =>
   handlers.handleAll({
     create: (request) => publicly(Contacts.create(request.payload)),
-    get: (request) => publicly(Contacts.get(request.params.id)),
-    getByEmail: (request) => publicly(Contacts.getByEmail(request.query.email)),
-    list: (request) => publicly(Contacts.list(pageOf(request.query), request.query.cursor)),
-    update: (request) => publicly(Contacts.update(request.params.id, request.payload)),
-    remove: (request) => publicly(Contacts.remove(request.params.id)),
+    get: (request) => publicly(AudienceStore.use((store) => store.getContact(request.params.id))),
+    getByEmail: (request) =>
+      publicly(AudienceStore.use((store) => store.getContactByEmail(request.query.email))),
+    list: (request) =>
+      publicly(
+        AudienceStore.use((store) =>
+          store.listContacts(pageOf(request.query), request.query.cursor),
+        ),
+      ),
+    update: (request) =>
+      publicly(
+        AudienceStore.use((store) => store.updateContact(request.params.id, request.payload)),
+      ),
+    remove: (request) =>
+      publicly(AudienceStore.use((store) => store.deleteContact(request.params.id))),
   }),
 );
 
 const listsHandlers = HttpApiBuilder.group(EmailerApi, "lists", (handlers) =>
   handlers.handleAll({
     create: (request) => publicly(Lists.create(request.payload)),
-    get: (request) => publicly(Lists.get(request.params.id)),
-    list: (request) => publicly(Lists.list(pageOf(request.query), request.query.cursor)),
-    update: (request) => publicly(Lists.rename(request.params.id, request.payload)),
-    remove: (request) => publicly(Lists.remove(request.params.id)),
+    get: (request) => publicly(AudienceStore.use((store) => store.getList(request.params.id))),
+    list: (request) =>
+      publicly(
+        AudienceStore.use((store) => store.listLists(pageOf(request.query), request.query.cursor)),
+      ),
+    update: (request) =>
+      publicly(
+        AudienceStore.use((store) => store.renameList(request.params.id, request.payload.name)),
+      ),
+    remove: (request) =>
+      publicly(AudienceStore.use((store) => store.deleteList(request.params.id))),
     listMembers: (request) =>
       publicly(
-        Lists.listMembers(request.params.listId, pageOf(request.query), request.query.cursor),
+        AudienceStore.use((store) =>
+          store.listMembers(request.params.listId, pageOf(request.query), request.query.cursor),
+        ),
       ),
     addContact: (request) =>
       publicly(Lists.addContact(request.params.listId, request.params.contactId)),
     removeContact: (request) =>
-      publicly(Lists.removeContact(request.params.listId, request.params.contactId)),
+      publicly(
+        AudienceStore.use((store) =>
+          store.removeMember(request.params.listId, request.params.contactId),
+        ),
+      ),
     import: (request) => publicly(Lists.importContacts(request.params.listId, request.payload)),
   }),
 );
@@ -70,14 +95,19 @@ const listsHandlers = HttpApiBuilder.group(EmailerApi, "lists", (handlers) =>
 const campaignsHandlers = HttpApiBuilder.group(EmailerApi, "campaigns", (handlers) =>
   handlers.handleAll({
     create: (request) => publicly(Campaigns.create(request.payload)),
-    list: (request) => publicly(Campaigns.list(pageOf(request.query), request.query.cursor)),
-    get: (request) => publicly(Campaigns.get(request.params.id)),
+    list: (request) =>
+      publicly(
+        CampaignStore.use((store) =>
+          store.listCampaigns(pageOf(request.query), request.query.cursor),
+        ),
+      ),
+    get: (request) => publicly(CampaignStore.use((store) => store.getCampaign(request.params.id))),
     update: (request) => publicly(Campaigns.update(request.params.id, request.payload)),
     remove: (request) => publicly(Campaigns.remove(request.params.id)),
     test: (request) => publicly(sendTest(request.params.id, request.payload)),
     preview: (request) =>
       publicly(
-        Campaigns.get(request.params.id).pipe(
+        CampaignStore.use((store) => store.getCampaign(request.params.id)).pipe(
           Effect.andThen(previewLink(request.params.id).pipe(Effect.orDie)),
         ),
       ),

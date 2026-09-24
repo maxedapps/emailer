@@ -1,5 +1,5 @@
 import * as Schemas from "@emailer/api/Schemas";
-import { ConfigProvider, Duration, Effect, Layer, Option, Result } from "effect";
+import { ConfigProvider, Duration, Effect, Layer, Result } from "effect";
 import { RateLimiter } from "effect/unstable/persistence";
 import { describe, expect, it } from "vitest";
 
@@ -76,18 +76,26 @@ const fixture = (scenario: Scenario = {}) => {
     Layer.succeed(AudienceStore)({
       ...unusedAudience,
       listMembers: (_listId, limit) =>
-        Effect.sync(() => {
+        Effect.gen(function* () {
           pageRequests.push(limit);
 
-          return scenario.listMissing === true
-            ? Option.none()
-            : Option.some({ items: scenario.members ?? [], nextCursor: scenario.nextCursor });
+          if (scenario.listMissing === true) {
+            return yield* new Schemas.NotFound({ entity: "list" });
+          }
+
+          const items = [...(scenario.members ?? [])];
+
+          return scenario.nextCursor === undefined
+            ? { items }
+            : { items, nextCursor: scenario.nextCursor };
         }),
       addressStatus: (email) => Effect.succeed(statuses.get(email) ?? ("mailable" as const)),
     }),
     Layer.succeed(CampaignStore)({
       getCampaign: (id) =>
-        Effect.succeed(id === campaignId ? Option.some(campaign) : Option.none()),
+        id === campaignId
+          ? Effect.succeed(campaign)
+          : Effect.fail(new Schemas.NotFound({ entity: "campaign" })),
       getCampaignBody: () => written("getCampaignBody"),
       createCampaign: () => written("createCampaign"),
       listCampaigns: () => written("listCampaigns"),

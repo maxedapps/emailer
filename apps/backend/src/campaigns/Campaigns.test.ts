@@ -1,6 +1,6 @@
 import { NodeServices } from "@effect/platform-node";
 import * as Schemas from "@emailer/api/Schemas";
-import { Deferred, Effect, Fiber, Layer, Option, Result } from "effect";
+import { Deferred, Effect, Fiber, Layer, Result } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { CampaignSchedule } from "./CampaignSchedule.ts";
@@ -51,7 +51,7 @@ interface World {
   readonly runTokens: Map<string, string>;
   readonly startedAt: Map<string, string>;
   readonly history: Map<string, RunHistory>;
-  readonly control: Map<string, Array<Option.Option<CampaignControl>>>;
+  readonly control: Map<string, Array<CampaignControl>>;
   readonly order: Array<string>;
   beforeWrite?: Effect.Effect<void>;
   beforeScheduleCreate?: Effect.Effect<void>;
@@ -137,6 +137,10 @@ const rememberHistory = (world: World, campaign: Schemas.Campaign) => {
   }
 };
 
+/** A stored entity, or the store's answer for one that is not there. */
+const found = <A>(value: A | undefined, entity: Schemas.NotFound["entity"]) =>
+  value === undefined ? Effect.fail(new Schemas.NotFound({ entity })) : Effect.succeed(value);
+
 const afterWrite = <A>(world: World, apply: () => A) =>
   Effect.gen(function* () {
     if (world.beforeWrite !== undefined) {
@@ -150,7 +154,7 @@ const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> 
   Layer.mergeAll(
     Layer.succeed(AudienceStore)({
       ...unusedAudience,
-      getList: (id) => Effect.sync(() => Option.fromUndefinedOr(world.lists.get(id))),
+      getList: (id) => found(world.lists.get(id), "list"),
     }),
     Layer.succeed(CampaignStore)({
       ...unusedCampaigns,
@@ -158,27 +162,16 @@ const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> 
         Effect.sync(() => {
           world.campaigns.set(campaign.id, { ...campaign, submission: { state: "draft" } });
         }),
-      getCampaign: (id) => Effect.sync(() => Option.fromUndefinedOr(world.campaigns.get(id))),
-      listCampaigns: (limit) =>
-        Effect.sync(() => ({
-          items: [...world.campaigns.values()].slice(0, limit),
-          nextCursor: undefined,
-        })),
+      getCampaign: (id) => found(world.campaigns.get(id), "campaign"),
       getCampaignControl: (id) =>
-        Effect.sync(() => {
-          const pending = world.control.get(id);
+        Effect.gen(function* () {
+          const scripted = world.control.get(id)?.shift();
 
-          if (pending !== undefined && pending.length > 0) {
-            return pending.shift() ?? Option.none();
+          if (scripted !== undefined) {
+            return scripted;
           }
 
-          const campaign = world.campaigns.get(id);
-
-          if (campaign === undefined) {
-            return Option.none();
-          }
-
-          return Option.some(controlOfCampaign(world, campaign));
+          return controlOfCampaign(world, yield* found(world.campaigns.get(id), "campaign"));
         }),
       newRun: (id, expected, newToken, target, at) =>
         afterWrite(world, () => {
@@ -505,21 +498,6 @@ describe("create", () => {
         expect(Result.isSuccess(attempt) && attempt.success.submission).toStrictEqual({
           state: "draft",
         });
-      }),
-    ));
-});
-
-describe("list", () => {
-  it("omits the nextCursor key on a last page", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const fix = fixture();
-
-        const attempt = yield* runWith(fix, Campaigns.list(25, undefined));
-        const page = Result.isSuccess(attempt) ? attempt.success : undefined;
-
-        expect(page).not.toHaveProperty("nextCursor");
-        expect(page?.items).toStrictEqual([...fix.world.campaigns.values()]);
       }),
     ));
 });
@@ -875,13 +853,13 @@ describe("queued wake repair", () => {
           const fix = fixture({ campaign: queuedCampaign, runToken: existingRunToken });
 
           fix.world.control.set(campaignId, [
-            Option.some(queuedControl(existingRunToken)),
-            Option.some({
+            queuedControl(existingRunToken),
+            {
               state: "scheduled",
               runToken: replacementToken,
               startedAt: undefined,
               pausedReason: undefined,
-            }),
+            },
           ]);
 
           const attempt = yield* runWith(fix, queuedRepair[command](campaignId));
@@ -889,12 +867,12 @@ describe("queued wake repair", () => {
           expect(Result.isSuccess(attempt) && attempt.success).toStrictEqual(queuedCampaign);
           expect(fix.wake.messages).toStrictEqual([{ campaignId, runToken: existingRunToken }]);
           expect(fix.world.control.get(campaignId)).toStrictEqual([
-            Option.some({
+            {
               state: "scheduled",
               runToken: replacementToken,
               startedAt: undefined,
               pausedReason: undefined,
-            }),
+            },
           ]);
         }),
       ),
@@ -908,13 +886,13 @@ describe("queued wake repair", () => {
           const fix = fixture({ campaign: queuedCampaign, runToken: existingRunToken });
 
           fix.world.control.set(campaignId, [
-            Option.some(queuedControl(existingRunToken)),
-            Option.some({
+            queuedControl(existingRunToken),
+            {
               state: "draft",
               runToken: undefined,
               startedAt: undefined,
               pausedReason: undefined,
-            }),
+            },
           ]);
 
           const attempt = yield* runWith(fix, queuedRepair[command](campaignId));
@@ -1101,12 +1079,12 @@ describe("schedule", () => {
 
         fix.world.afterScheduleCreate = Effect.sync(() => {
           fix.world.control.set(campaignId, [
-            Option.some({
+            {
               state: "scheduled",
               runToken: replacementToken,
               startedAt: undefined,
               pausedReason: undefined,
-            }),
+            },
           ]);
         });
 

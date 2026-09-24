@@ -1,5 +1,5 @@
 import * as Schemas from "@emailer/api/Schemas";
-import { Effect, Option, Schema, Struct } from "effect";
+import { Effect, Schema, Struct } from "effect";
 
 import { corrupt } from "./Errors.ts";
 import {
@@ -53,12 +53,12 @@ export const listOperations = (
     const response = yield* readItem("getList", listKey(listId));
 
     if (response.Item === undefined) {
-      return Option.none<Schemas.ContactList>();
+      return yield* new Schemas.NotFound({ entity: "list" });
     }
 
     const stored = yield* decodeStoredList(response.Item).pipe(Effect.mapError(corrupt("getList")));
 
-    return Option.some<Schemas.ContactList>(Struct.omit(stored, ["v"]));
+    return Struct.omit(stored, ["v"]);
   });
 
   const listLists = Effect.fn("Storage.listLists")(function* (
@@ -74,10 +74,7 @@ export const listOperations = (
       ),
     );
 
-    return { items: lists, nextCursor: page.nextCursor } satisfies StoredPage<
-      Schemas.ContactList,
-      string
-    >;
+    return { ...page, items: lists } satisfies StoredPage<Schemas.ContactList, string>;
   });
 
   /**
@@ -96,14 +93,14 @@ export const listOperations = (
     });
 
     if (!outcome.applied) {
-      return Option.none<Schemas.ContactList>();
+      return yield* new Schemas.NotFound({ entity: "list" });
     }
 
     const stored = yield* decodeStoredList(outcome.attributes).pipe(
       Effect.mapError(corrupt("renameList")),
     );
 
-    return Option.some<Schemas.ContactList>(Struct.omit(stored, ["v"]));
+    return Struct.omit(stored, ["v"]);
   });
 
   return { createList, getList, listLists, renameList } as const;

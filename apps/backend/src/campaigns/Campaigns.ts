@@ -1,5 +1,5 @@
 import * as Schemas from "@emailer/api/Schemas";
-import { Clock, Effect, Option } from "effect";
+import { Clock, Effect } from "effect";
 
 import { newIdentifier, nowIso } from "../Identifiers.ts";
 import { CampaignWake } from "../sending/Dispatch.ts";
@@ -10,42 +10,14 @@ import { corrupt } from "../storage/Errors.ts";
 
 import type { CampaignControl } from "../storage/Campaigns.ts";
 
-export const get = Effect.fn("Campaigns.get")(function* (campaignId: string) {
-  const campaigns = yield* CampaignStore;
-
-  const found = yield* campaigns.getCampaign(campaignId);
-
-  if (Option.isNone(found)) {
-    return yield* new Schemas.NotFound({ entity: "campaign" });
-  }
-
-  return found.value;
-});
-
-export const list = Effect.fn("Campaigns.list")(function* (
-  limit: number,
-  cursor: Schemas.EntityCursor | undefined,
-) {
-  const campaigns = yield* CampaignStore;
-
-  const page = yield* campaigns.listCampaigns(limit, cursor);
-
-  return page.nextCursor === undefined
-    ? { items: page.items }
-    : { items: page.items, nextCursor: page.nextCursor };
-});
-
 export const create = Effect.fn("Campaigns.create")(function* (
   payload: Schemas.CreateCampaignPayload,
 ) {
   const audience = yield* AudienceStore;
   const campaigns = yield* CampaignStore;
 
-  const list = yield* audience.getList(payload.listId);
-
-  if (Option.isNone(list)) {
-    return yield* new Schemas.NotFound({ entity: "list" });
-  }
+  // Read only to answer NotFound for a list that does not exist.
+  yield* audience.getList(payload.listId);
 
   const id = yield* newIdentifier;
   const createdAt = yield* nowIso;
@@ -69,20 +41,10 @@ export const create = Effect.fn("Campaigns.create")(function* (
   return created;
 });
 
-const readControl = Effect.fn("Campaigns.readControl")(function* (campaignId: string) {
-  const campaigns = yield* CampaignStore;
-  const control = yield* campaigns.getCampaignControl(campaignId);
-
-  if (Option.isNone(control)) {
-    return yield* new Schemas.NotFound({ entity: "campaign" });
-  }
-
-  return control.value;
-});
-
 /** A draft write whose condition failed: the campaign left draft, or was deleted, meanwhile. */
 const draftConflict = Effect.fn("Campaigns.draftConflict")(function* (campaignId: string) {
-  const control = yield* readControl(campaignId);
+  const campaigns = yield* CampaignStore;
+  const control = yield* campaigns.getCampaignControl(campaignId);
 
   return yield* new Schemas.CampaignStateConflict({ state: control.state });
 });
@@ -115,14 +77,15 @@ export const update = Effect.fn("Campaigns.update")(function* (
 ) {
   const audience = yield* AudienceStore;
   const campaigns = yield* CampaignStore;
-  const current = yield* get(campaignId);
+  const current = yield* campaigns.getCampaign(campaignId);
 
   if (current.submission.state !== "draft") {
     return yield* new Schemas.CampaignStateConflict({ state: current.submission.state });
   }
 
-  if (change.listId !== undefined && Option.isNone(yield* audience.getList(change.listId))) {
-    return yield* new Schemas.NotFound({ entity: "list" });
+  // Read only to answer NotFound for a list that does not exist.
+  if (change.listId !== undefined) {
+    yield* audience.getList(change.listId);
   }
 
   const next = edited(current, change);
@@ -141,7 +104,7 @@ export const update = Effect.fn("Campaigns.update")(function* (
  */
 export const remove = Effect.fn("Campaigns.remove")(function* (campaignId: string) {
   const campaigns = yield* CampaignStore;
-  const control = yield* readControl(campaignId);
+  const control = yield* campaigns.getCampaignControl(campaignId);
 
   if (control.state !== "draft") {
     return yield* new Schemas.CampaignStateConflict({ state: control.state });
@@ -170,19 +133,20 @@ const wakeQueued = Effect.fn("Campaigns.wakeQueued")(function* (
   campaignId: string,
   control: CampaignControl,
 ) {
+  const campaigns = yield* CampaignStore;
   const wake = yield* CampaignWake;
   const runToken = yield* requireRunToken(control);
 
   yield* wake.enqueue(campaignId, runToken);
 
-  return yield* get(campaignId);
+  return yield* campaigns.getCampaign(campaignId);
 });
 
 export const send = Effect.fn("Campaigns.send")(function* (campaignId: string) {
   const campaigns = yield* CampaignStore;
   const wake = yield* CampaignWake;
   const schedules = yield* CampaignSchedule;
-  const control = yield* readControl(campaignId);
+  const control = yield* campaigns.getCampaignControl(campaignId);
 
   switch (control.state) {
     case "draft":
@@ -212,21 +176,21 @@ export const send = Effect.fn("Campaigns.send")(function* (campaignId: string) {
         }
       }
 
-      return yield* get(campaignId);
+      return yield* campaigns.getCampaign(campaignId);
     }
 
     case "queued":
       return yield* wakeQueued(campaignId, control);
 
     default:
-      return yield* get(campaignId);
+      return yield* campaigns.getCampaign(campaignId);
   }
 });
 
 export const resume = Effect.fn("Campaigns.resume")(function* (campaignId: string) {
   const campaigns = yield* CampaignStore;
   const wake = yield* CampaignWake;
-  const control = yield* readControl(campaignId);
+  const control = yield* campaigns.getCampaignControl(campaignId);
 
   switch (control.state) {
     case "paused": {
@@ -246,14 +210,14 @@ export const resume = Effect.fn("Campaigns.resume")(function* (campaignId: strin
         yield* wake.enqueue(campaignId, runToken);
       }
 
-      return yield* get(campaignId);
+      return yield* campaigns.getCampaign(campaignId);
     }
 
     case "queued":
       return yield* wakeQueued(campaignId, control);
 
     default:
-      return yield* get(campaignId);
+      return yield* campaigns.getCampaign(campaignId);
   }
 });
 
@@ -263,7 +227,7 @@ export const schedule = Effect.fn("Campaigns.schedule")(function* (
 ) {
   const campaigns = yield* CampaignStore;
   const schedules = yield* CampaignSchedule;
-  const control = yield* readControl(campaignId);
+  const control = yield* campaigns.getCampaignControl(campaignId);
 
   if (Date.parse(sendAt) <= (yield* Clock.currentTimeMillis)) {
     return yield* new Schemas.SendAtNotInFuture({ sendAt });
@@ -291,12 +255,10 @@ export const schedule = Effect.fn("Campaigns.schedule")(function* (
         // Durable scheduled intent may precede create or cleanup failure.
         yield* schedules.create(campaignId, runToken, sendAt);
 
-        const current = yield* campaigns.getCampaignControl(campaignId);
-
-        const stillScheduled =
-          Option.isSome(current) &&
-          current.value.state === "scheduled" &&
-          current.value.runToken === runToken;
+        const stillScheduled = yield* campaigns.getCampaignControl(campaignId).pipe(
+          Effect.map((current) => current.state === "scheduled" && current.runToken === runToken),
+          Effect.catchTag("NotFound", () => Effect.succeed(false)),
+        );
 
         if (!stillScheduled) {
           yield* schedules.remove(runToken);
@@ -307,11 +269,11 @@ export const schedule = Effect.fn("Campaigns.schedule")(function* (
         }
       }
 
-      return yield* get(campaignId);
+      return yield* campaigns.getCampaign(campaignId);
     }
 
     default:
-      return yield* get(campaignId);
+      return yield* campaigns.getCampaign(campaignId);
   }
 });
 
@@ -330,7 +292,7 @@ const cancellationReachedDestination = (source: CampaignControl, current: Campai
 export const cancel = Effect.fn("Campaigns.cancel")(function* (campaignId: string) {
   const campaigns = yield* CampaignStore;
   const schedules = yield* CampaignSchedule;
-  const control = yield* readControl(campaignId);
+  const control = yield* campaigns.getCampaignControl(campaignId);
 
   switch (control.state) {
     case "draft":
@@ -339,7 +301,7 @@ export const cancel = Effect.fn("Campaigns.cancel")(function* (campaignId: strin
         yield* schedules.remove(control.runToken);
       }
 
-      return yield* get(campaignId);
+      return yield* campaigns.getCampaign(campaignId);
     }
 
     case "sending":
@@ -365,24 +327,18 @@ export const cancel = Effect.fn("Campaigns.cancel")(function* (campaignId: strin
         // Durable cancellation may precede cleanup failure; repeating cancel retries this token.
         yield* schedules.remove(runToken);
 
-        return yield* get(campaignId);
+        return yield* campaigns.getCampaign(campaignId);
       }
 
       const current = yield* campaigns.getCampaignControl(campaignId);
 
-      if (Option.isNone(current)) {
-        return yield* new Schemas.NotFound({ entity: "campaign" });
-      }
-
-      if (!cancellationReachedDestination(control, current.value)) {
-        return yield* new Schemas.CampaignStateConflict({
-          state: current.value.state,
-        });
+      if (!cancellationReachedDestination(control, current)) {
+        return yield* new Schemas.CampaignStateConflict({ state: current.state });
       }
 
       yield* schedules.remove(runToken);
 
-      return yield* get(campaignId);
+      return yield* campaigns.getCampaign(campaignId);
     }
   }
 });

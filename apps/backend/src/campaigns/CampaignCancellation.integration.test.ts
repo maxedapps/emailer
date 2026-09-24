@@ -1,6 +1,6 @@
 import { makeEmailerClient } from "@emailer/api/Client";
 import type { EmailerClient } from "@emailer/api/Client";
-import { Clock, DateTime, Effect, Option } from "effect";
+import { Clock, DateTime, Effect } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { newIdentifier, nowIso } from "../Identifiers.ts";
@@ -64,26 +64,15 @@ const createSimulatorCampaign = (client: EmailerClient, runId: string, name: str
     return { list, campaign };
   });
 
-const requireControl = (storage: LiveStorage, campaignId: string) =>
-  Effect.gen(function* () {
-    const control = yield* storage.getCampaignControl(campaignId);
-
-    if (Option.isNone(control)) {
-      throw new Error(`campaign ${campaignId} has no control record`);
-    }
-
-    return control.value;
-  });
-
 const requireMembers = (storage: LiveStorage, listId: string) =>
   Effect.gen(function* () {
     const listed = yield* storage.listMembers(listId, 25, undefined);
 
-    if (Option.isNone(listed) || listed.value.items[0] === undefined) {
+    if (listed.items[0] === undefined) {
       throw new Error(`list ${listId} has no members`);
     }
 
-    return listed.value.items;
+    return listed.items;
   });
 
 const requireCapturedRequest = (capture: TransactionCapture) => {
@@ -147,7 +136,7 @@ describe("queued campaign cancellation", () => {
           }),
         ).toBe("conflict");
 
-        const control = yield* requireControl(ordinary, campaign.id);
+        const control = yield* ordinary.getCampaignControl(campaign.id);
 
         expect(control.state).toBe("sending");
         expect(control.runToken).toBe(token);
@@ -176,7 +165,7 @@ describe("queued campaign cancellation", () => {
 
         expect(yield* storage.beginRun(campaign.id, token, yield* nowIso)).toBe("stale");
 
-        const control = yield* requireControl(storage, campaign.id);
+        const control = yield* storage.getCampaignControl(campaign.id);
 
         expect(control.state).toBe("draft");
         expect(control.runToken).toBe(token);
@@ -247,7 +236,7 @@ describe("queued campaign cancellation", () => {
 
           const seededMeta = yield* campaignMeta(campaign.id);
           const seededRows = yield* sendRows(campaign.id);
-          const seeded = yield* requireControl(storage, campaign.id);
+          const seeded = yield* storage.getCampaignControl(campaign.id);
 
           expect(seeded.state).toBe("paused");
           expect(seeded.pausedReason).toBe("daily-quota");
@@ -280,7 +269,7 @@ describe("queued campaign cancellation", () => {
           expect(cancelled.submission.reason).toBe("manual");
           expect(cancelled.submission.startedAt).toBe(seeded.startedAt);
           expect(cancelled.submission.progress.accepted).toBe(1);
-          expect(yield* requireControl(storage, campaign.id)).toMatchObject({
+          expect(yield* storage.getCampaignControl(campaign.id)).toMatchObject({
             state: "paused",
             runToken: resumeToken,
             startedAt: seeded.startedAt,
@@ -365,7 +354,7 @@ describe("queued campaign cancellation", () => {
         ).toBe("conflict");
         expect(yield* storage.beginRun(campaign.id, token, yield* nowIso)).toBe("stale");
 
-        const control = yield* requireControl(storage, campaign.id);
+        const control = yield* storage.getCampaignControl(campaign.id);
 
         expect(control.state).toBe("draft");
         expect(control.runToken).toBe(token);
@@ -409,7 +398,7 @@ describe("queued campaign cancellation", () => {
 
         yield* replayTransactWrite(enqueueRequest);
 
-        const control = yield* requireControl(ordinary, campaign.id);
+        const control = yield* ordinary.getCampaignControl(campaign.id);
 
         expect(control.state).toBe("draft");
         expect(control.runToken).toBe(token);
@@ -453,7 +442,7 @@ describe("queued campaign cancellation", () => {
 
         yield* replayTransactWrite(cancelRequest);
 
-        const control = yield* requireControl(ordinary, campaign.id);
+        const control = yield* ordinary.getCampaignControl(campaign.id);
 
         expect(control.state).toBe("queued");
         expect(control.runToken).toBe(replacement);
@@ -556,7 +545,7 @@ describe("queued campaign cancellation", () => {
         expect(meta.bounced).toEqual({ N: "1" });
         expect(meta.runBounced).toEqual({ N: "0" });
         expect(meta.runAccepted).toEqual({ N: "1" });
-        expect((yield* requireControl(ordinary, campaign.id)).runToken).toBe(resumeToken);
+        expect((yield* ordinary.getCampaignControl(campaign.id)).runToken).toBe(resumeToken);
       }),
     ));
 
@@ -581,7 +570,7 @@ describe("queued campaign cancellation", () => {
 
               expect(sent.submission.state).toBe("queued");
 
-              const control = yield* requireControl(storage, campaign.id);
+              const control = yield* storage.getCampaignControl(campaign.id);
 
               expect(control.state).toBe("queued");
               expect(control.startedAt).toBeUndefined();
@@ -602,7 +591,7 @@ describe("queued campaign cancellation", () => {
 
           yield* awaitStaleWakeLog(campaign.id, token, sinceMs);
 
-          const control = yield* requireControl(storage, campaign.id);
+          const control = yield* storage.getCampaignControl(campaign.id);
 
           expect(control.state).toBe("draft");
           expect(control.runToken).toBe(token);

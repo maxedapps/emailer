@@ -1,6 +1,6 @@
 import type * as dynamodb from "@distilled.cloud/aws/dynamodb";
 import * as Schemas from "@emailer/api/Schemas";
-import { Effect, Option, Schema, SchemaTransformation, Struct } from "effect";
+import { Effect, Schema, SchemaTransformation, Struct } from "effect";
 
 import { corrupt, unavailable } from "./Errors.ts";
 import { unsubscribeKey } from "./Addresses.ts";
@@ -81,12 +81,6 @@ export const contactOf = (
   return attributes === undefined ? named : { ...named, attributes };
 };
 
-type UpdateContactOutcome =
-  | { readonly outcome: "updated"; readonly contact: Schemas.Contact }
-  | { readonly outcome: "contact-missing" }
-  | { readonly outcome: "email-taken"; readonly email: string }
-  | { readonly outcome: "opted-out"; readonly email: string };
-
 export const contactItem = (contact: Schemas.Contact): dynamodb.AttributeMap => {
   const item: dynamodb.AttributeMap = {
     ...contactKey(contact.id),
@@ -117,8 +111,8 @@ export const contactOperations = (
 
   /**
    * Slot 0 is the contact, slot 1 its address reservation. A slot-1 condition failure is the
-   * ordinary business outcome `email-taken`; a slot-0 failure means the generated identifier
-   * already exists, which is an anomaly rather than an answer and stays on the failure channel.
+   * ordinary answer `EmailAlreadyUsed`; a slot-0 failure means the generated identifier already
+   * exists, which is an anomaly rather than an answer and stays a storage failure.
    */
   const createContact = Effect.fn("Storage.createContact")(function* (contact: Schemas.Contact) {
     const outcome = yield* runTransaction("createContact", {
@@ -141,11 +135,11 @@ export const contactOperations = (
     });
 
     if (outcome.committed) {
-      return "created" as const;
+      return;
     }
 
     if (outcome.conditionFailures.has(1)) {
-      return "email-taken" as const;
+      return yield* new Schemas.EmailAlreadyUsed({ email: contact.email });
     }
 
     return yield* unavailable("createContact")(outcome.conditionFailures);
@@ -161,10 +155,10 @@ export const contactOperations = (
     const response = yield* readItem("getContact", contactKey(contactId));
 
     if (response.Item === undefined) {
-      return Option.none<Schemas.Contact>();
+      return yield* new Schemas.NotFound({ entity: "contact" });
     }
 
-    return Option.some(yield* readContact("getContact", response.Item));
+    return yield* readContact("getContact", response.Item);
   });
 
   const listContacts = Effect.fn("Storage.listContacts")(function* (
@@ -174,17 +168,14 @@ export const contactOperations = (
     const page = yield* readEntityPage("listContacts", contactKind, contactKey, limit, cursor);
     const contacts = yield* Effect.forEach(page.items, (item) => readContact("listContacts", item));
 
-    return { items: contacts, nextCursor: page.nextCursor } satisfies StoredPage<
-      Schemas.Contact,
-      string
-    >;
+    return { ...page, items: contacts } satisfies StoredPage<Schemas.Contact, string>;
   });
 
   const getContactByEmail = Effect.fn("Storage.getContactByEmail")(function* (email: string) {
     const reservation = yield* readItem("getContactByEmail", reservationKey(email));
 
     if (reservation.Item === undefined) {
-      return Option.none<Schemas.Contact>();
+      return yield* new Schemas.NotFound({ entity: "contact" });
     }
 
     const reserved = yield* decodeReservation(reservation.Item).pipe(
@@ -196,11 +187,8 @@ export const contactOperations = (
     // Every path that writes a reservation writes the contact in the same transaction, so the two
     // cannot disagree. If they ever did, answering "no contact has this address" is honest, where
     // returning a contact under an address it does not hold would not be.
-    if (
-      Option.isSome(found) &&
-      Schemas.mailboxKey(found.value.email) !== Schemas.mailboxKey(email)
-    ) {
-      return Option.none<Schemas.Contact>();
+    if (Schemas.mailboxKey(found.email) !== Schemas.mailboxKey(email)) {
+      return yield* new Schemas.NotFound({ entity: "contact" });
     }
 
     return found;
@@ -216,13 +204,7 @@ export const contactOperations = (
     contactId: string,
     update: Schemas.UpdateContactPayload,
   ) {
-    const found = yield* getContact(contactId);
-
-    if (Option.isNone(found)) {
-      return { outcome: "contact-missing" } as const satisfies UpdateContactOutcome;
-    }
-
-    const current = found.value;
+    const current = yield* getContact(contactId);
     const email = update.email ?? current.email;
     const name = update.name === undefined ? current.name : (update.name ?? undefined);
 
@@ -290,17 +272,17 @@ export const contactOperations = (
     });
 
     if (outcome.committed) {
-      return { outcome: "updated", contact: next } as const satisfies UpdateContactOutcome;
+      return next;
     }
 
-    // Answered before `email-taken` when both fail: another address can be chosen, an opt-out
+    // Answered before `EmailAlreadyUsed` when both fail: another address can be chosen, an opt-out
     // cannot be worked around.
     if (outcome.conditionFailures.has(1)) {
-      return { outcome: "opted-out", email: current.email } as const satisfies UpdateContactOutcome;
+      return yield* new Schemas.AddressOptedOut({ email: current.email });
     }
 
     if (outcome.conditionFailures.has(3)) {
-      return { outcome: "email-taken", email } as const satisfies UpdateContactOutcome;
+      return yield* new Schemas.EmailAlreadyUsed({ email });
     }
 
     return yield* unavailable("updateContact")(outcome.conditionFailures);

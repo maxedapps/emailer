@@ -1,5 +1,5 @@
 import type * as Schemas from "@emailer/api/Schemas";
-import { Clock, Data, Duration, Effect, Option, Result } from "effect";
+import { Clock, Data, Duration, Effect, Result } from "effect";
 
 import { unsubscribeLink } from "../consent/Unsubscribe.ts";
 import { newIdentifier, nowIso } from "../Identifiers.ts";
@@ -103,15 +103,17 @@ export const runSlice = Effect.fn("Dispatching.runSlice")(function* (
     return;
   }
 
-  const listed = yield* audience.listMembers(listId, memberPageSize, previous);
+  // A list deleted mid-run leaves nobody to send to, so the run completes.
+  const page = yield* audience
+    .listMembers(listId, memberPageSize, previous)
+    .pipe(Effect.catchTag("NotFound", () => Effect.undefined));
 
-  if (Option.isNone(listed)) {
+  if (page === undefined) {
     yield* campaigns.completeRun(message.campaignId, message.runToken, yield* nowIso);
 
     return;
   }
 
-  const page = listed.value;
   const { text, html } = yield* campaigns.getCampaignBody(message.campaignId);
   const content: MessageContent = { subject, text, html };
   // ExclusiveStartKey of the last member this slice finished (skip, settle, or

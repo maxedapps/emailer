@@ -54,9 +54,13 @@ const isConflictCancellation = (error: TaggedWriteFailure) => {
   );
 };
 
+/**
+ * A page as the contract answers it. On the last page `nextCursor` is absent rather than
+ * `undefined`, which the API would encode as `null`.
+ */
 export interface StoredPage<Item, Cursor> {
   readonly items: ReadonlyArray<Item>;
-  readonly nextCursor: Cursor | undefined;
+  readonly nextCursor?: Cursor;
 }
 
 const IndexEntry = Schema.Struct({ gsi1sk: attributeOf(Schema.String) });
@@ -320,10 +324,12 @@ const pagePrimitives = (primitives: QueryPrimitives & BatchPrimitives) => {
         return item === undefined ? [] : [item];
       });
 
-      return {
-        items,
-        nextCursor: yield* nextCursorOf(operationId, page.LastEvaluatedKey),
-      } satisfies StoredPage<dynamodb.AttributeMap, string>;
+      const nextCursor = yield* nextCursorOf(operationId, page.LastEvaluatedKey);
+
+      return (nextCursor === undefined ? { items } : { items, nextCursor }) satisfies StoredPage<
+        dynamodb.AttributeMap,
+        string
+      >;
     });
 
   return { readEntityPage } as const;
