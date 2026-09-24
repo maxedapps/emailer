@@ -3,7 +3,7 @@
 - Status: Accepted
 - Date: 2026-09-24
 - Authority: On 2026-09-24 a whole-codebase review found one error type standing for every failure. The user asked for granular, type-safe error handling that embraces Effect and Alchemy, for a lean codebase, and for no change that raises running cost. They accepted the review's recommendations, including dropping delivery-delay events and keeping the feedback queue. They approved this record and its plan on 2026-09-24.
-- Supersedes in part, once implemented:
+- Supersedes in part:
   - [ADR-0004](0004-sender-owned-one-click-unsubscribe.md): unsubscribe as "a separate item type from suppression". The two become separate fields of one address item. Unsubscribe is still not a suppression reason, `unsuppress` never clears it, and both stay keyed by lowercased address.
   - [ADR-0006](0006-consent-survives-a-contacts-address-change.md): the opt-out check targets the address item, not `UNSUBSCRIBE#`.
   - [ADR-0007](0007-immutable-recipient-unsubscribe-links.md): the POST's `PutItem`-only capability becomes `UpdateItem`-only. The conditional first write becomes `if_not_exists`.
@@ -12,6 +12,7 @@
   - [ADR-0013](0013-repeat-safe-writes.md): the AWS client's implicit default retry policy.
   - [ADR-0020](0020-drafts-previews-and-test-sends.md): its statement that the unsubscribe function holds `PutItem` only.
 - Plan: [0024-typed-errors-and-cost-neutral-storage.plan.md](0024-typed-errors-and-cost-neutral-storage.plan.md)
+- Amended: 2026-09-24, in implementation (plan T7). The AWS retry policy is capped with `Schedule.while` on the elapsed time plus the next delay, not with `Schedule.upTo`: `upTo` checks only the elapsed time at each step, so it still granted a wait past the 5 s operation timeout and a persistent failure ended as `TimeoutError`.
 
 ## Context
 

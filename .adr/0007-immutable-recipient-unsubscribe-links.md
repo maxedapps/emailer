@@ -6,6 +6,7 @@
 - Authority: The user requested the refactor plan and explicitly permits redeploying the application, erasing development data, and invalidating existing links. The user then requested implementation of the plan (`work/clean-codebase.md`, in git history), which accepts this record.
 - Supersedes: ADR-0004's contact-ID token decision and ADR-0006's mutable-contact lookup residual; other consent policies remain in effect.
 - Amended: [ADR-0020](0020-drafts-previews-and-test-sends.md) — the signing code moved to a shared `SignedToken` module that preview links use too. The token format and the secret are unchanged, and a frozen token in the tests pins them.
+- Superseded in part: [ADR-0024](0024-typed-errors-and-cost-neutral-storage.md) for the POST's `PutItem`-only capability. It holds `UpdateItem` only and keeps the first opt-out with `if_not_exists` rather than a conditional put.
 
 ## Context
 

@@ -374,7 +374,7 @@ Status: Done except the deploy-plan check, which is T10's. As built: `Classified
 
 ### T9 — Docs and ADRs
 
-Status: Not started
+Status: Done. As built: the README lists every public error by status under "What commands print" and gains "Upgrading a stage deployed before ADR-0024" with the migration order. ADR-0024 records the T7 retry-bound change as an amendment. The link check found no broken relative link; the leak check is clean on the branch.
 
 - **README:**
   - the error names in "What commands print" and "Behavior": 404 per entity, 503 per dependency, 409 `ContactChanged`, 400 for an oversized body;

@@ -189,6 +189,21 @@ pnpm exec alchemy destroy --config alchemy.run.ts --stage prod --env-file .env -
 
 Destroying a stage deletes its resources and rotates the unsubscribe and preview keys. The sending identity and Alchemy bootstrap/state buckets stay.
 
+### Upgrading a stage deployed before ADR-0024
+
+Each mailbox's opt-out, suppression and transient bounces moved from three items to one ([ADR-0024](.adr/0024-typed-errors-and-cost-neutral-storage.md)). A stage deployed before that change needs its old items merged once, with the same AWS credentials as the deploy. Find the table's physical name first:
+
+```sh
+aws dynamodb list-tables --query "TableNames[?starts_with(@, 'emailer-<stage>-')]"
+export EMAILER_TABLE_NAME=<that name>
+```
+
+1. Before the deploy, merge: `node apps/backend/scripts/MigrateAddressItems.ts`. It prints how many old items it found and merged, never addresses.
+2. Deploy with `--force`, as above.
+3. Wait at least five minutes, the dispatcher's longest invocation, so no old code is still writing.
+4. Merge again: the same command picks up whatever the old code wrote in between. Each merge keeps what an address item already holds, so running it again is safe.
+5. Check, then delete the old items: `node apps/backend/scripts/MigrateAddressItems.ts --verify`, then `--delete-old`, which verifies again before it deletes anything.
+
 ## Use
 
 `pnpm emailer` runs the CLI with the `.env` in the repository root; variables already set in your shell take precedence. To use another file, run Node directly, e.g. `node --env-file=.env.test apps/cli/src/main.ts …`.
@@ -334,6 +349,12 @@ Each command below is run as `pnpm emailer <command>`. `[…]` marks an optional
   - `uncertain`: SES's answer was lost.
 - **`campaigns preview`:** `{ url, expiresAt }`.
 - **`addresses status` / `unsuppress`:** `{ email, status, unsubscribedAt?, suppression?, transientBounces, accountSuppression }`, where `status` is `mailable`, `unsubscribed`, `suppressed` or `bouncing`.
+- **A failure** goes to stderr as the error the API answered, named by its `_tag`, and the command exits non-zero:
+  - **400** for a request the contract refuses, including a value over a limit below;
+  - **401** `Unauthorized` for a missing or wrong API token;
+  - **404** `ContactNotFound`, `ListNotFound` or `CampaignNotFound`;
+  - **409** for a conflict: `EmailAlreadyUsed`, `AddressOptedOut`, `ContactChanged`, `CampaignStateConflict`, `SendAtNotInFuture` or `TestAudienceTooLarge`;
+  - **503** when sending is halted (`SendingPaused`) or a dependency is unavailable: `StorageUnavailable`, `EmailServiceUnavailable`, `QueueUnavailable`, `SchedulerUnavailable` or `AlarmsUnavailable`, each naming the `operation` and the `failure`.
 
 ### Limits
 
@@ -350,7 +371,8 @@ Each command below is run as `pnpm emailer <command>`. `[…]` marks an optional
 
 ### Behavior
 
-- An address identifies at most one contact, case-insensitively. Creating or updating onto an address another contact holds answers **409**.
+- An address identifies at most one contact, case-insensitively. Creating or updating onto an address another contact holds answers **409** `EmailAlreadyUsed`.
+- An update, delete or import that races another change to the same contact tries again twice, then answers **409** `ContactChanged`; run it again.
 - `--attr` replaces the whole attribute map; it does not merge. Repeat it per entry. `--clear-name` removes the name.
 - `lists import` rejects a file with a key the format does not declare, such as a misspelled `attributs`, before anything is sent, and names the key's path. It reports where each address stands after the import, not what changed, so running the same file again is safe and returns the same answer. An address that already has a contact gains the membership but keeps its name and attributes; use `contacts update` for those.
 - `--filter` keeps members whose attributes equal every `key=value` (AND). Omit it for the whole list. Members that don't match are left out entirely and are not counted in `skipped`.

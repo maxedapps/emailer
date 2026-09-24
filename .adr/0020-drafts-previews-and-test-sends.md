@@ -16,6 +16,7 @@
   - a confirmation prompt with `--yes`;
   - synchronous capped test sends that share the account-wide guards;
   - a preview link with an optional `--open`.
+- Superseded in part: [ADR-0024](0024-typed-errors-and-cost-neutral-storage.md) for its statement that the unsubscribe function holds `PutItem` only. It holds `UpdateItem` only.
 
   They then chose, over a route on the API function, a dedicated preview function, because of ADR-0004 and ADR-0008. They also chose concern folders for the backend. See the plan (`work/drafting-and-preview.md`, in git history).
 - Supersedes in part:
