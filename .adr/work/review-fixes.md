@@ -77,7 +77,6 @@ All from this session, 2026-09-23, at HEAD `9ebb2fc`. The review lanes ran read-
   - recording an uncertain send as accepted;
   - skipping the settle after a successful retry.
   - The backoff fix in T1 fails when the backoff `Effect.sleep` is removed; the test as it stands does not.
-- **Scratch artifacts (not durable):** `/tmp/claude-1000/-home-max-dev-projects-emailer/15d2788f-c679-46be-b3e8-22362830894b/scratchpad/{tc,simplify,mut}` and `simplify-combined.patch`. Use them as a reference if they still exist; the tasks below are self-contained.
 - **CLI failure output today:**
   - A duplicate `--to` prints 896 lines (41 KB) of schema tree.
   - A transport failure prints `"cause": {}`.
@@ -339,7 +338,8 @@ All from this session, 2026-09-23, at HEAD `9ebb2fc`. The review lanes ran read-
 #### T13 — Delivery
 
 - **Change:**
-  - Run the leak check against `~/.config/emailer/leak-pattern.txt` over files, patches and commit messages.
+  - Run the leak check against `~/.config/emailer/leak-pattern.txt` over files, patches and commit messages, always case-insensitive (`grep -i`).
+  - Separately, scan the diff for personal or company details the pattern doesn't cover: the owner's first name as a fixture persona, and brand, vendor or infrastructure names. Neutral placeholders only (user rule, 2026-09-24).
   - Push `review-fixes` and open a PR against `main`, grepping the PR body too.
 - **Starts at:** project memory "Public repo leak check"
 - **Depends on:** T12
