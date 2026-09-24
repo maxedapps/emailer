@@ -31,12 +31,16 @@ export const feedbackFailures = AWS.SQS.Queue("FeedbackFailures", {
  * invocation is covered by AWS's 6×-timeout recommendation. Source retention is the SQS default of
  * four days, shorter than the dead-letter queue.
  */
+/** Named, so the queue policy below can state the queue's ARN without waiting on the queue. */
+const feedbackEventsName = Effect.map(Stack, ({ stage }) => `emailer-${stage}-feedback-events`);
+
 const feedbackEvents = AWS.SQS.Queue(
   "FeedbackEvents",
   Effect.gen(function* () {
     const failures = yield* feedbackFailures;
 
     return {
+      queueName: yield* feedbackEventsName,
       visibilityTimeout: Duration.minutes(3),
       redrivePolicy: {
         deadLetterTargetArn: failures.queueArn,
@@ -53,16 +57,17 @@ const feedbackEvents = AWS.SQS.Queue(
  * the queue policy that lets EventBridge send them. Deploy-time only, like `feedbackPublishing`:
  * `alchemy.run.ts` yields this and the function's constructor does not.
  *
- * `events(...).toQueue(...)` would write the policy against the rule's ARN output while the rule
- * targets the queue: a cycle Alchemy beta.79 cannot create on a fresh stage, since neither a queue
- * nor a rule can be created ahead of its inputs. The rule is named instead, so the policy states
- * its ARN up front and the queue is created before the rule.
+ * `events(...).toQueue(...)` would write the queue's policy against its own ARN output and the
+ * rule's, while the rule targets the queue: cycles Alchemy beta.79 cannot create on a fresh stage,
+ * since neither a queue nor a rule can be created ahead of its inputs. Both are named instead, so
+ * the policy states both ARNs up front and the queue is created before the rule.
  */
 export const feedbackRouting = Effect.gen(function* () {
   const queue = yield* feedbackEvents;
   const { stage } = yield* Stack;
   const { accountId, region } = yield* AWS.AWSEnvironment.current;
   const ruleName = `emailer-${stage}-ses-feedback`;
+  const queueArn = `arn:aws:sqs:${region}:${accountId}:${yield* feedbackEventsName}`;
 
   yield* AWS.EventBridge.Rule("SESFeedbackEvents", {
     name: ruleName,
@@ -79,7 +84,7 @@ export const feedbackRouting = Effect.gen(function* () {
         Effect: "Allow",
         Principal: { Service: "events.amazonaws.com" },
         Action: ["sqs:SendMessage"],
-        Resource: [queue.queueArn],
+        Resource: [queueArn],
         Condition: {
           ArnEquals: {
             "aws:SourceArn": [`arn:aws:events:${region}:${accountId}:rule/${ruleName}`],
