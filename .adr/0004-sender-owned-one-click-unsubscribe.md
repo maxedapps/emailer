@@ -26,7 +26,7 @@ Unsubscribe is a **separate item type from suppression**, not a sixth suppressio
 
 ## Alternatives considered
 
-**SES subscription management (`ListManagementOptions`).** Rejected: it puts the contact list in SES, making it a second store beside our table with its own notion of contacts and topics, and it would own the headers — the wiki's rule against two simultaneous header authorities. It also constrains sends to a single recipient and requires an `{{amazonSESUnsubscribeUrl}}` placeholder in the body. We would inherit a subscription model we do not control at the moment we are about to open the recipient set.
+**SES subscription management (`ListManagementOptions`).** Rejected: it puts the contact list in SES, making it a second store beside our table with its own notion of contacts and topics, and it would own the headers, leaving two authorities over the same unsubscribe headers ([SES subscription management](https://docs.aws.amazon.com/ses/latest/dg/sending-email-subscription-management.html)). It also constrains sends to a single recipient and requires an `{{amazonSESUnsubscribeUrl}}` placeholder in the body. We would inherit a subscription model we do not control at the moment we are about to open the recipient set.
 
 **A route on the existing API Lambda, with the base URL derived from the request `Host`.** Genuinely simpler: no new function, no cross-resource reference, no second declaration form. Rejected because it puts an unauthenticated, publicly-reachable route inside the Bearer-guarded administrative surface, and because the links would follow whatever hostname fronted the API rather than a stable one. Note that it does **not** buy secret isolation: the API function mints the links, so it holds the signing key either way.
 

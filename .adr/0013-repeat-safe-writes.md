@@ -37,7 +37,6 @@ Three facts shape the fix. DynamoDB transactions accept a `ClientRequestToken`, 
 - **Genuine crashes still leave unconfirmed rows**, and a persistent outage still dies to the SQS redelivery: the 5-second operation timeout bounds the client's policy to about four attempts, which is the right fallback.
 - **The store layers require the Crypto service**, which the API, dispatcher and feedback functions provide. Test suites use numbered tokens derived from the requests already sent.
 - **A human retrying a create still gets a new entity**; ADR-0005's clause on API idempotency stands.
-- **The wiki's DynamoDB page** describes the two mechanisms by write shape.
 
 ## Confirmation
 

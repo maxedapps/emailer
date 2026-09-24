@@ -7,5 +7,5 @@
     "packages/**/*.ts",
     "stacks/**/*.ts"
   ],
-  "exclude": ["**/node_modules", "**/dist", "**/coverage", "tools", "wiki"]
+  "exclude": ["**/node_modules", "**/dist", "**/coverage", "tools"]
 }

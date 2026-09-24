@@ -141,7 +141,7 @@ pnpm exec alchemy deploy --config alchemy.run.ts --stage prod --env-file .env --
 
 Do not pass `--detailed`: it prints bound secrets, including `EMAILER_API_TOKEN` and the signing keys. Treat a secret you have printed as exposed and replace it.
 
-After a code change, Alchemy can plan a function as `noop` and keep the old bundle ([why](wiki/alchemy/version-specific-traps.md#a-changed-bundle-can-deploy-as-noop)). Redeploy with `--force`, then confirm each function's `CodeSha256` changed:
+After a code change, Alchemy can plan a function as `noop` and keep the old bundle: in beta.79 the plan compares a function's settings, not its code. Redeploy with `--force`, then confirm each function's `CodeSha256` changed:
 
 ```sh
 aws lambda get-function-configuration --function-name emailer-<stage>-<api|dispatcher|feedback|unsubscribe|preview> --query CodeSha256

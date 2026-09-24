@@ -57,5 +57,4 @@ Since Effect RC113, schema-level `parseOptions` annotations are ignored. RC116 a
 ## References
 
 - [Effect `HttpApi.ParseOptions` (RC117)](https://unpkg.com/effect@4.0.0-rc.117/src/unstable/httpapi/HttpApi.ts), [effect#8423](https://github.com/Effect-TS/effect/pull/8423)
-- [wiki: HTTP, CLI and runtime](../wiki/effect/http-cli-and-runtime.md)
 - [Codebase cleanup plan](work/codebase-cleanup.md)

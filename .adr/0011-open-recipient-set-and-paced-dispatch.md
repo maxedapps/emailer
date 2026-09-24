@@ -68,7 +68,7 @@ Confirmed on 2026-09-15 against ephemeral stage `test-b`, then destroyed. Accoun
 - [ADR-0003: Feedback events through EventBridge](0003-feedback-events-through-eventbridge.md)
 - [ADR-0008: Storage capabilities and error boundaries](0008-storage-capabilities-and-error-boundaries.md)
 - Effect `effect/unstable/persistence/RateLimiter` (installed 4.0.0-rc.112)
-- [Alchemy: SQS event source and sinks](../wiki/alchemy/events-and-sinks.md)
+- [Alchemy event sources](https://alchemy.run/infrastructure-as-effects/event-sources/) and [sinks](https://alchemy.run/infrastructure-as-effects/sinks/)
 - [Amazon SES: Managing sending quotas](https://docs.aws.amazon.com/ses/latest/dg/manage-sending-quotas.html)
 - [AWS Lambda: SQS event source scaling](https://docs.aws.amazon.com/lambda/latest/dg/services-sqs-scaling.html)
 - [DynamoDB reserved words](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/ReservedWords.html)

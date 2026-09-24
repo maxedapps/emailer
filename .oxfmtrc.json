@@ -15,7 +15,6 @@
     ".progress/**",
     "tools/oxlint/anti-slop/**",
     ".adr/**",
-    "wiki/**",
     "pnpm-lock.yaml"
   ]
 }

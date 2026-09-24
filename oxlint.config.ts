@@ -14,7 +14,6 @@ export default defineConfig({
     ".alchemy/**",
     ".progress/**",
     "tools/oxlint/anti-slop/**",
-    "wiki/**",
   ],
   jsPlugins: [
     // Vendored from https://github.com/dmmulroy/anti-slop (MIT, Dillon Mulroy).
