@@ -1,4 +1,5 @@
 import { NodeCrypto } from "@effect/platform-node";
+import { Stack } from "alchemy";
 import * as AWS from "alchemy/AWS";
 import { Config, Duration, Effect, Layer, Schema, Stream } from "effect";
 
@@ -50,15 +51,44 @@ const feedbackEvents = AWS.SQS.Queue(
 /**
  * The default-bus rule that puts SES bounce, complaint and delivery-delay events on the queue, and
  * the queue policy that lets EventBridge send them. Deploy-time only, like `feedbackPublishing`:
- * `toQueue` yields its `Rule` outside the runtime guard, so `alchemy.run.ts` yields this and the
- * function's constructor does not.
+ * `alchemy.run.ts` yields this and the function's constructor does not.
+ *
+ * `events(...).toQueue(...)` would write the policy against the rule's ARN output while the rule
+ * targets the queue: a cycle Alchemy beta.79 cannot create on a fresh stage, since neither a queue
+ * nor a rule can be created ahead of its inputs. The rule is named instead, so the policy states
+ * its ARN up front and the queue is created before the rule.
  */
-export const feedbackRouting = Effect.flatMap(feedbackEvents, (queue) =>
-  AWS.EventBridge.events("SESFeedbackEvents", {
-    source: ["aws.ses"],
-    "detail-type": ["Email Bounced", "Email Complaint Received", "Email Delivery Delayed"],
-  }).toQueue(queue),
-);
+export const feedbackRouting = Effect.gen(function* () {
+  const queue = yield* feedbackEvents;
+  const { stage } = yield* Stack;
+  const { accountId, region } = yield* AWS.AWSEnvironment.current;
+  const ruleName = `emailer-${stage}-ses-feedback`;
+
+  yield* AWS.EventBridge.Rule("SESFeedbackEvents", {
+    name: ruleName,
+    eventPattern: {
+      source: ["aws.ses"],
+      "detail-type": ["Email Bounced", "Email Complaint Received", "Email Delivery Delayed"],
+    },
+    targets: [{ Id: "FeedbackEvents", Arn: yield* queue.queueArn }],
+  });
+
+  yield* queue.bind`Allow(SESFeedbackEvents, SendMessage(${queue}))`({
+    policyStatements: [
+      {
+        Effect: "Allow",
+        Principal: { Service: "events.amazonaws.com" },
+        Action: ["sqs:SendMessage"],
+        Resource: [yield* queue.queueArn],
+        Condition: {
+          ArnEquals: {
+            "aws:SourceArn": [`arn:aws:events:${region}:${accountId}:rule/${ruleName}`],
+          },
+        },
+      },
+    ],
+  });
+});
 
 /**
  * The EventBridge event as the rule delivers it. `detail` is decoded separately, so an SES event

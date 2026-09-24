@@ -64,7 +64,7 @@ Each task is one commit, in this order, with `pnpm check` green after each.
 
 ### T6 — Feedback through SQS, recovered by native redrive
 
-- SES events reach a `FeedbackEvents` queue through `AWS.EventBridge.events(...).toQueue(...)`. The feedback Lambda consumes it with `consumeQueueMessages` at batch size 1. Its redrive policy dead-letters into `FeedbackFailures` after five receives.
+- SES events reach a `FeedbackEvents` queue through a named default-bus rule, with a queue policy for that rule's ARN. `AWS.EventBridge.events(...).toQueue(...)` was the first choice, but its policy waits on the rule's ARN while the rule waits on the queue, a cycle Alchemy beta.79 cannot create on a fresh stage (the first live deploy stopped with `UnsatisfiedResourceCycle`). The feedback Lambda consumes the queue with `consumeQueueMessages` at batch size 1. Its redrive policy dead-letters into `FeedbackFailures` after five receives.
 - Deleted:
   - `ReplayFeedback.ts` and its test;
   - the `feedback:replay` script;
