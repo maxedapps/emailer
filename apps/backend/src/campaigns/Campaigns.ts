@@ -2,7 +2,6 @@ import { CampaignStateConflict, SendAtNotInFuture } from "@emailer/api/Errors";
 import type * as Schemas from "@emailer/api/Schemas";
 import { Clock, Effect } from "effect";
 
-import { CorruptItem } from "../Errors.ts";
 import { newIdentifier, nowIso } from "../Identifiers.ts";
 import { CampaignWake } from "../sending/Dispatch.ts";
 import { CampaignSchedule } from "./CampaignSchedule.ts";
@@ -104,15 +103,6 @@ export const remove = Effect.fn("Campaigns.remove")(function* (campaignId: strin
   }
 });
 
-const requireRunToken = (control: CampaignControl) => {
-  // Scheduled, queued and paused campaigns always carry one.
-  if (control.runToken === undefined) {
-    return Effect.die(new CorruptItem({ operation: "getCampaignControl" }));
-  }
-
-  return Effect.succeed(control.runToken);
-};
-
 /**
  * Re-sends the wake-up for a campaign that is already queued. Both `send` and `resume` reach this
  * when an earlier call wrote `queued` but its enqueue or its response was lost, which is what
@@ -121,11 +111,10 @@ const requireRunToken = (control: CampaignControl) => {
  */
 const wakeQueued = Effect.fn("Campaigns.wakeQueued")(function* (
   campaignId: string,
-  control: CampaignControl,
+  runToken: string,
 ) {
   const campaigns = yield* CampaignStore;
   const wake = yield* CampaignWake;
-  const runToken = yield* requireRunToken(control);
 
   yield* wake.enqueue(campaignId, runToken);
 
@@ -159,7 +148,7 @@ export const send = Effect.fn("Campaigns.send")(function* (campaignId: string) {
     }
 
     case "queued":
-      return yield* wakeQueued(campaignId, control);
+      return yield* wakeQueued(campaignId, control.runToken);
 
     default:
       return yield* campaigns.getCampaign(campaignId);
@@ -173,13 +162,12 @@ export const resume = Effect.fn("Campaigns.resume")(function* (campaignId: strin
 
   switch (control.state) {
     case "paused": {
-      const observed = yield* requireRunToken(control);
       const runToken = yield* newIdentifier;
       const now = yield* nowIso;
 
       const outcome = yield* campaigns.newRun(
         campaignId,
-        { state: "paused", runToken: observed },
+        { state: "paused", runToken: control.runToken },
         runToken,
         "queued",
         now,
@@ -193,7 +181,7 @@ export const resume = Effect.fn("Campaigns.resume")(function* (campaignId: strin
     }
 
     case "queued":
-      return yield* wakeQueued(campaignId, control);
+      return yield* wakeQueued(campaignId, control.runToken);
 
     default:
       return yield* campaigns.getCampaign(campaignId);
@@ -239,7 +227,9 @@ export const schedule = Effect.fn("Campaigns.schedule")(function* (
   }
 });
 
-const cancellationReachedDestination = (source: CampaignControl, current: CampaignControl) => {
+type Pending = Extract<CampaignControl, { readonly state: "scheduled" | "queued" }>;
+
+const cancellationReachedDestination = (source: Pending, current: CampaignControl) => {
   if (current.runToken !== source.runToken) {
     return false;
   }
@@ -267,14 +257,12 @@ export const cancel = Effect.fn("Campaigns.cancel")(function* (campaignId: strin
 
     case "scheduled":
     case "queued": {
-      const runToken = yield* requireRunToken(control);
-
       const source =
         control.state === "scheduled"
-          ? { state: "scheduled" as const, runToken }
+          ? { state: "scheduled" as const, runToken: control.runToken }
           : {
               state: "queued" as const,
-              runToken,
+              runToken: control.runToken,
               started: control.startedAt !== undefined,
             };
 

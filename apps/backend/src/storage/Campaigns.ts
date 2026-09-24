@@ -1,23 +1,18 @@
 import { CampaignNotFound } from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
 import * as AWS from "alchemy/AWS";
-import { Context, Crypto, Effect, Layer, Schema, SchemaTransformation, Struct } from "effect";
+import { Context, Crypto, Effect, Layer, Schema } from "effect";
 
-import { corrupt } from "../Errors.ts";
 import {
-  attributeOf,
   bodyKey,
   campaignKey,
+  itemReader,
+  itemWriter,
   listingAttributes,
   num,
-  NumberAttribute,
-  recordVersion,
   str,
-  StoredVersionAttribute,
-  StringMapAttribute,
   strMap,
   tableLogicalId,
-  withOptional,
 } from "./Items.ts";
 import { allPrimitives, readPrimitives } from "./Primitives.ts";
 import { AllTableOperationsHttp, allTableOperations, dataTable } from "./Table.ts";
@@ -40,48 +35,107 @@ const sendKey = (campaignId: string, contactId: string) => ({
   sk: str(`SEND#${contactId}`),
 });
 
-const StoredCount = NumberAttribute.check(Schema.isInt());
+/** What every state shares: the summary's fields, the counters and the current run's baselines. */
+const always = {
+  id: Schemas.EntityId,
+  listId: Schemas.EntityId,
+  subject: Schemas.CampaignSubject,
+  createdAt: Schemas.Timestamp,
+  filter: Schema.optionalKey(Schemas.ContactAttributes),
+  ...Schemas.CampaignProgress.fields,
+  ...Schemas.CampaignFeedback.fields,
+  runAccepted: Schema.Int,
+  runBounced: Schema.Int,
+  runComplained: Schema.Int,
+};
 
-const StoredCampaign = Schema.Struct({
-  v: StoredVersionAttribute,
-  id: attributeOf(Schemas.EntityId),
-  listId: attributeOf(Schemas.EntityId),
-  subject: attributeOf(Schemas.CampaignSubject),
-  createdAt: attributeOf(Schemas.Timestamp),
-  state: attributeOf(Schemas.CampaignState),
-  queuedAt: Schema.optionalKey(attributeOf(Schemas.Timestamp)),
-  startedAt: Schema.optionalKey(attributeOf(Schemas.Timestamp)),
-  finishedAt: Schema.optionalKey(attributeOf(Schemas.Timestamp)),
-  pausedReason: Schema.optionalKey(attributeOf(Schemas.PauseReason)),
-  cursor: Schema.optionalKey(attributeOf(Schemas.EntityId)),
-  runToken: Schema.optionalKey(attributeOf(Schemas.EntityId)),
-  filter: Schema.optionalKey(
-    StringMapAttribute.pipe(
-      Schema.decodeTo(Schemas.ContactAttributes, SchemaTransformation.passthrough()),
-    ),
-  ),
-  accepted: StoredCount,
-  rejected: StoredCount,
-  uncertain: StoredCount,
-  skipped: StoredCount,
-  bounced: StoredCount,
-  complained: StoredCount,
-  runAccepted: StoredCount,
-  runBounced: StoredCount,
-  runComplained: StoredCount,
+const SendingRecord = Schema.Struct({
+  ...always,
+  state: Schema.Literal("sending"),
+  runToken: Schemas.EntityId,
+  queuedAt: Schemas.Timestamp,
+  startedAt: Schemas.Timestamp,
+  cursor: Schema.optionalKey(Schemas.EntityId),
 });
 
-const decodeStoredCampaign = Schema.decodeUnknownEffect(StoredCampaign);
+/**
+ * The campaign's `META` item, by state. A draft keeps the token of a cancelled run; every other
+ * state holds its run's token. `queuedAt` is when the run was queued or, while scheduled, when its
+ * wake-up is due. A queued run that resumes a paused one keeps its `startedAt` and its cursor.
+ */
+const CampaignRecord = Schema.Union([
+  Schema.Struct({
+    ...always,
+    state: Schema.Literal("draft"),
+    runToken: Schema.optionalKey(Schemas.EntityId),
+  }),
+  Schema.Struct({
+    ...always,
+    state: Schema.Literal("scheduled"),
+    runToken: Schemas.EntityId,
+    queuedAt: Schemas.Timestamp,
+  }),
+  Schema.Struct({
+    ...always,
+    state: Schema.Literal("queued"),
+    runToken: Schemas.EntityId,
+    queuedAt: Schemas.Timestamp,
+    startedAt: Schema.optionalKey(Schemas.Timestamp),
+    cursor: Schema.optionalKey(Schemas.EntityId),
+  }),
+  SendingRecord,
+  Schema.Struct({
+    ...always,
+    state: Schema.Literal("paused"),
+    runToken: Schemas.EntityId,
+    queuedAt: Schemas.Timestamp,
+    startedAt: Schemas.Timestamp,
+    pausedReason: Schemas.PauseReason,
+    cursor: Schema.optionalKey(Schemas.EntityId),
+  }),
+  Schema.Struct({
+    ...always,
+    state: Schema.Literal("completed"),
+    runToken: Schemas.EntityId,
+    queuedAt: Schemas.Timestamp,
+    startedAt: Schemas.Timestamp,
+    finishedAt: Schemas.Timestamp,
+  }),
+]);
 
-const StoredCampaignBody = Schema.Struct({
-  v: StoredVersionAttribute,
-  text: attributeOf(Schemas.CampaignText),
-  html: Schema.optionalKey(attributeOf(Schemas.CampaignHtml)),
-});
+type CampaignRecord = typeof CampaignRecord.Type;
 
-const decodeStoredCampaignBody = Schema.decodeUnknownEffect(StoredCampaignBody);
+const readCampaign = itemReader(CampaignRecord);
 
-const decodeSubmission = Schema.decodeUnknownEffect(Schemas.CampaignSubmission);
+/** A run that has just begun is sending, and anything else there is corrupt. */
+const readSending = itemReader(SendingRecord);
+
+const writeCampaign = itemWriter(CampaignRecord);
+
+const readBody = itemReader(Schemas.CampaignBody);
+
+const writeBody = itemWriter(Schemas.CampaignBody);
+
+/** A send row is claimed before its submission and settled after it, or skipped outright. */
+const SendRecord = Schema.Union([
+  Schema.Struct({
+    state: Schema.Literal("unconfirmed"),
+    sendId: Schemas.EntityId,
+    contactId: Schemas.EntityId,
+    recipient: Schemas.NormalizedEmailAddress,
+    startedAt: Schemas.Timestamp,
+  }),
+  Schema.Struct({
+    state: Schema.Literal("skipped"),
+    contactId: Schemas.EntityId,
+    recipient: Schemas.NormalizedEmailAddress,
+    skipReason: Schemas.SkipReason,
+    startedAt: Schemas.Timestamp,
+    finishedAt: Schemas.Timestamp,
+  }),
+]);
+
+const writeSend = itemWriter(SendRecord);
 
 /**
  * What one SES submission came to: the mailer answers it, and a send row is settled from it.
@@ -104,12 +158,15 @@ interface CampaignRun {
   };
 }
 
-export interface CampaignControl {
-  readonly state: Schemas.CampaignState;
-  readonly runToken: string | undefined;
-  readonly startedAt: string | undefined;
-  readonly pausedReason: Schemas.PauseReason | undefined;
-}
+/**
+ * What the commands decide by: a campaign's state, with the run token, start and pause reason that
+ * state holds. Derived from the record, so each state carries exactly what it stores.
+ */
+type ControlOf<Stored> = Stored extends unknown
+  ? Pick<Stored, Extract<keyof Stored, "state" | "runToken" | "startedAt" | "pausedReason">>
+  : never;
+
+export type CampaignControl = ControlOf<CampaignRecord>;
 
 export type RunSource = {
   readonly state: "draft" | "scheduled" | "paused";
@@ -120,57 +177,61 @@ export type CancelSource =
   | { readonly state: "scheduled"; readonly runToken: string }
   | { readonly state: "queued"; readonly runToken: string; readonly started: boolean };
 
-const submissionOf = (stored: typeof StoredCampaign.Type) => {
-  const run = {
-    queuedAt: stored.queuedAt,
-    startedAt: stored.startedAt,
-    progress: {
-      accepted: stored.accepted,
-      rejected: stored.rejected,
-      uncertain: stored.uncertain,
-      skipped: stored.skipped,
-    },
-    feedback: { bounced: stored.bounced, complained: stored.complained },
-  };
+const countersOf = (stored: CampaignRecord) => ({
+  progress: {
+    accepted: stored.accepted,
+    rejected: stored.rejected,
+    uncertain: stored.uncertain,
+    skipped: stored.skipped,
+  },
+  feedback: { bounced: stored.bounced, complained: stored.complained },
+});
 
+const submissionOf = (stored: CampaignRecord): Schemas.CampaignSubmission => {
   switch (stored.state) {
     case "draft":
-      return { state: "draft" as const };
+      return { state: "draft" };
     case "scheduled":
-      // For a scheduled campaign `queuedAt` is the instant the wake-up is due.
-      return { state: "scheduled" as const, sendAt: stored.queuedAt };
+      return { state: "scheduled", sendAt: stored.queuedAt };
     case "queued":
-      return { state: "queued" as const, queuedAt: stored.queuedAt };
+      return { state: "queued", queuedAt: stored.queuedAt };
     case "sending":
-      return { state: "sending" as const, ...run };
+      return {
+        state: "sending",
+        queuedAt: stored.queuedAt,
+        startedAt: stored.startedAt,
+        ...countersOf(stored),
+      };
     case "paused":
-      return { state: "paused" as const, ...run, reason: stored.pausedReason };
+      return {
+        state: "paused",
+        queuedAt: stored.queuedAt,
+        startedAt: stored.startedAt,
+        ...countersOf(stored),
+        reason: stored.pausedReason,
+      };
     case "completed":
-      return { state: "completed" as const, ...run, finishedAt: stored.finishedAt };
+      return {
+        state: "completed",
+        queuedAt: stored.queuedAt,
+        startedAt: stored.startedAt,
+        finishedAt: stored.finishedAt,
+        ...countersOf(stored),
+      };
   }
 };
 
-const summaryOf = (stored: typeof StoredCampaign.Type) =>
-  decodeSubmission(submissionOf(stored)).pipe(
-    Effect.map((submission): Schemas.CampaignSummary => {
-      const summary = {
-        id: stored.id,
-        listId: stored.listId,
-        subject: stored.subject,
-        createdAt: stored.createdAt,
-        submission,
-      };
+const summaryOf = (stored: CampaignRecord): Schemas.CampaignSummary => {
+  const summary = {
+    id: stored.id,
+    listId: stored.listId,
+    subject: stored.subject,
+    createdAt: stored.createdAt,
+    submission: submissionOf(stored),
+  };
 
-      return stored.filter === undefined ? summary : { ...summary, filter: stored.filter };
-    }),
-  );
-
-const controlOf = (stored: typeof StoredCampaign.Type): CampaignControl => ({
-  state: stored.state,
-  runToken: stored.runToken,
-  startedAt: stored.startedAt,
-  pausedReason: stored.pausedReason,
-});
+  return stored.filter === undefined ? summary : { ...summary, filter: stored.filter };
+};
 
 const stateName = { "#state": "state" };
 
@@ -219,9 +280,7 @@ const settlementWrite = (settlement: SubmissionOutcome) => {
 };
 
 const bodyItem = (campaign: Schemas.Campaign) =>
-  withOptional({ ...bodyKey(campaign.id), v: num(recordVersion), text: str(campaign.text) }, [
-    ["html", campaign.html],
-  ]);
+  Effect.map(writeBody(campaign), (attributes) => ({ ...bodyKey(campaign.id), ...attributes }));
 
 /** The two reads a campaign's content needs, and all the public preview function may do. */
 const campaignReads = (primitives: ReadPrimitives) => {
@@ -232,9 +291,7 @@ const campaignReads = (primitives: ReadPrimitives) => {
   const getCampaignBody = Effect.fn("Storage.getCampaignBody")(function* (campaignId: string) {
     const response = yield* readItem("getCampaignBody", bodyKey(campaignId));
 
-    const stored = yield* decodeStoredCampaignBody(response.Item).pipe(corrupt("getCampaignBody"));
-
-    return Struct.omit(stored, ["v"]);
+    return yield* readBody("getCampaignBody", response.Item);
   });
 
   const getCampaign = Effect.fn("Storage.getCampaign")(function* (campaignId: string) {
@@ -244,12 +301,10 @@ const campaignReads = (primitives: ReadPrimitives) => {
       return yield* new CampaignNotFound();
     }
 
-    const stored = yield* decodeStoredCampaign(response.Item).pipe(corrupt("getCampaign"));
-
-    const summary = yield* summaryOf(stored).pipe(corrupt("getCampaign"));
+    const stored = yield* readCampaign("getCampaign", response.Item);
     const body = yield* getCampaignBody(campaignId);
 
-    return { ...summary, ...body } satisfies Schemas.Campaign;
+    return { ...summaryOf(stored), ...body } satisfies Schemas.Campaign;
   });
 
   return { getCampaignBody, getCampaign } as const;
@@ -272,33 +327,29 @@ export const campaignOperations = (
   const createCampaign = Effect.fn("Storage.createCampaign")(function* (
     campaign: Schemas.Campaign,
   ) {
-    yield* recordOnce("createCampaign", bodyItem(campaign));
+    yield* recordOnce("createCampaign", yield* bodyItem(campaign));
 
-    const item = {
+    const { text: _text, html: _html, submission: _submission, ...summary } = campaign;
+
+    const stored = yield* writeCampaign({
+      ...summary,
+      state: "draft",
+      accepted: 0,
+      rejected: 0,
+      uncertain: 0,
+      skipped: 0,
+      bounced: 0,
+      complained: 0,
+      runAccepted: 0,
+      runBounced: 0,
+      runComplained: 0,
+    });
+
+    yield* recordOnce("createCampaign", {
       ...campaignKey(campaign.id),
       ...listingAttributes(campaignKind, campaign.createdAt, campaign.id),
-      v: num(recordVersion),
-      id: str(campaign.id),
-      listId: str(campaign.listId),
-      subject: str(campaign.subject),
-      createdAt: str(campaign.createdAt),
-      state: str("draft"),
-      accepted: num(0),
-      rejected: num(0),
-      uncertain: num(0),
-      skipped: num(0),
-      bounced: num(0),
-      complained: num(0),
-      runAccepted: num(0),
-      runBounced: num(0),
-      runComplained: num(0),
-    };
-
-    // `filter` is a reserved word; no expression names it, and any future one must alias `#filter`.
-    yield* recordOnce(
-      "createCampaign",
-      campaign.filter === undefined ? item : { ...item, filter: strMap(campaign.filter) },
-    );
+      ...stored,
+    });
   });
 
   const listCampaigns = Effect.fn("Storage.listCampaigns")(function* (
@@ -308,14 +359,12 @@ export const campaignOperations = (
     const page = yield* readEntityPage("listCampaigns", campaignKind, campaignKey, limit, cursor);
 
     const campaigns = yield* Effect.forEach(page.items, (item) =>
-      decodeStoredCampaign(item).pipe(Effect.flatMap(summaryOf), corrupt("listCampaigns")),
+      Effect.map(readCampaign("listCampaigns", item), summaryOf),
     );
 
     return { ...page, items: campaigns } satisfies StoredPage<Schemas.CampaignSummary, string>;
   });
 
-  // Tokenless virgin drafts are valid here; a missing token on queued/scheduled is the command's
-  // problem, not a second decoder.
   const getCampaignControl = Effect.fn("Storage.getCampaignControl")(function* (
     campaignId: string,
   ) {
@@ -325,9 +374,9 @@ export const campaignOperations = (
       return yield* new CampaignNotFound();
     }
 
-    const stored = yield* decodeStoredCampaign(response.Item).pipe(corrupt("getCampaignControl"));
+    const control: CampaignControl = yield* readCampaign("getCampaignControl", response.Item);
 
-    return controlOf(stored);
+    return control;
   });
 
   const commitLifecycle = (
@@ -454,7 +503,7 @@ export const campaignOperations = (
       return "stale" as const;
     }
 
-    const stored = yield* decodeStoredCampaign(outcome.attributes).pipe(corrupt("beginRun"));
+    const stored = yield* readSending("beginRun", outcome.attributes);
 
     return {
       outcome: "running" as const,
@@ -496,12 +545,13 @@ export const campaignOperations = (
             Table: tableLogicalId,
             Item: {
               ...sendKey(id, contactId),
-              v: num(recordVersion),
-              sendId: str(sendId),
-              contactId: str(contactId),
-              recipient: str(recipient),
-              state: str("unconfirmed"),
-              startedAt: str(now),
+              ...(yield* writeSend({
+                state: "unconfirmed",
+                sendId,
+                contactId,
+                recipient,
+                startedAt: now,
+              })),
             },
             ConditionExpression: "attribute_not_exists(pk)",
           },
@@ -535,13 +585,14 @@ export const campaignOperations = (
             Table: tableLogicalId,
             Item: {
               ...sendKey(id, contactId),
-              v: num(recordVersion),
-              contactId: str(contactId),
-              recipient: str(recipient),
-              state: str("skipped"),
-              skipReason: str(reason),
-              startedAt: str(now),
-              finishedAt: str(now),
+              ...(yield* writeSend({
+                state: "skipped",
+                contactId,
+                recipient,
+                skipReason: reason,
+                startedAt: now,
+                finishedAt: now,
+              })),
             },
             ConditionExpression: "attribute_not_exists(pk)",
           },
@@ -723,7 +774,7 @@ export const campaignOperations = (
                 }),
           },
         },
-        { Put: { Table: tableLogicalId, Item: bodyItem(campaign) } },
+        { Put: { Table: tableLogicalId, Item: yield* bodyItem(campaign) } },
       ],
     });
 

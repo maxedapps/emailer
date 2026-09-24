@@ -2,17 +2,25 @@ import type * as dynamodb from "@distilled.cloud/aws/dynamodb";
 import type * as AWS from "alchemy/AWS";
 import { ContactNotFound, ListNotFound, StorageUnavailable } from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
-import { Effect, Schema, Struct } from "effect";
+import { Effect, Schema } from "effect";
 
 import { corrupt } from "../Errors.ts";
 import {
   contactItem,
   contactKey,
-  decodeContactItem,
+  readContact,
   reservationItem,
   reservationKey,
 } from "./Contacts.ts";
-import { attributeOf, num, recordVersion, str, tableLogicalId } from "./Items.ts";
+import {
+  itemReader,
+  itemWriter,
+  keyCodec,
+  num,
+  recordVersion,
+  str,
+  tableLogicalId,
+} from "./Items.ts";
 import { listKey } from "./Lists.ts";
 
 import type {
@@ -32,30 +40,28 @@ import type {
  */
 const cascadePageLimit = 40;
 
-/**
- * Membership rows project one field each, and are decoded like any item: an attribute of the
- * wrong kind is reported as corrupt, never read as absent.
- */
-const MemberEntry = Schema.Struct({ contactId: attributeOf(Schemas.EntityId) });
-
-const MembershipEntry = Schema.Struct({ listId: attributeOf(Schemas.EntityId) });
-
-const ReservationEntry = Schema.Struct({
-  pk: attributeOf(Schema.String.check(Schema.isStartsWith("EMAIL#"))),
-  contactId: attributeOf(Schemas.EntityId),
+/** Both directions of a membership store the same record. */
+const Member = Schema.Struct({
+  listId: Schemas.EntityId,
+  contactId: Schemas.EntityId,
+  addedAt: Schemas.Timestamp,
 });
 
-const MemberCursor = Schema.Struct({
-  sk: attributeOf(Schema.String.check(Schema.isStartsWith("MEMBER#"))),
-});
+const readMember = itemReader(Member);
 
-const decodeMemberEntry = Schema.decodeUnknownEffect(MemberEntry);
+const writeMember = itemWriter(Member);
 
-const decodeMembershipEntry = Schema.decodeUnknownEffect(MembershipEntry);
+/** A reservation read back by batch, keyed by the mailbox its key names. */
+const readHeldReservation = itemReader(
+  Schema.Struct({
+    pk: Schema.String.check(Schema.isStartsWith("EMAIL#")),
+    contactId: Schemas.EntityId,
+  }),
+);
 
-const decodeReservationEntry = Schema.decodeUnknownEffect(ReservationEntry);
-
-const decodeMemberCursor = Schema.decodeUnknownEffect(MemberCursor);
+const decodeMemberCursor = Schema.decodeUnknownEffect(
+  keyCodec(Schema.Struct({ sk: Schema.String.check(Schema.isStartsWith("MEMBER#")) })),
+);
 
 const memberKey = (listId: string, contactId: string) => ({
   pk: str(`LIST#${listId}`),
@@ -78,13 +84,6 @@ export const membershipOperations = (
   primitives: ReadPrimitives & QueryPrimitives & BatchPrimitives & TransactionPrimitives,
 ) => {
   const { readItem, readItems, runQuery, runTransaction } = primitives;
-
-  const memberItem = (listId: string, contactId: string, addedAt: string) => ({
-    v: num(recordVersion),
-    listId: str(listId),
-    contactId: str(contactId),
-    addedAt: str(addedAt),
-  });
 
   const removeMembership = (listId: string, contactId: string) => [
     { Delete: { Table: tableLogicalId, Key: memberKey(listId, contactId) } },
@@ -115,6 +114,8 @@ export const membershipOperations = (
     contactId: string,
     addedAt: string,
   ) {
+    const member = yield* writeMember({ listId, contactId, addedAt });
+
     const outcome = yield* runTransaction("addMember", {
       TransactItems: [
         {
@@ -128,14 +129,14 @@ export const membershipOperations = (
         {
           Put: {
             Table: tableLogicalId,
-            Item: { ...memberKey(listId, contactId), ...memberItem(listId, contactId, addedAt) },
+            Item: { ...memberKey(listId, contactId), ...member },
             ConditionExpression: "attribute_not_exists(pk)",
           },
         },
         {
           Put: {
             Table: tableLogicalId,
-            Item: { ...memberOfKey(contactId, listId), ...memberItem(listId, contactId, addedAt) },
+            Item: { ...memberOfKey(contactId, listId), ...member },
             ConditionExpression: "attribute_not_exists(pk)",
           },
         },
@@ -207,7 +208,7 @@ export const membershipOperations = (
     const memberIds: Array<string> = [];
 
     for (const item of page.Items ?? []) {
-      const { contactId: memberId } = yield* decodeMemberEntry(item).pipe(corrupt("listMembers"));
+      const { contactId: memberId } = yield* readMember("listMembers", item);
 
       memberIds.push(memberId);
     }
@@ -215,9 +216,9 @@ export const membershipOperations = (
     const byId = new Map<string, Schemas.Contact>();
 
     for (const item of yield* readItems("listMembers", memberIds.map(contactKey))) {
-      const stored = yield* decodeContactItem(item).pipe(corrupt("listMembers"));
+      const contact = yield* readContact("listMembers", item);
 
-      byId.set(stored.id, Struct.omit(stored, ["v"]));
+      byId.set(contact.id, contact);
     }
 
     const contacts = memberIds.flatMap((memberId): Array<Schemas.Contact> => {
@@ -281,7 +282,7 @@ export const membershipOperations = (
       return yield* new ContactNotFound();
     }
 
-    const contact = yield* decodeContactItem(stored.Item).pipe(corrupt("deleteContact"));
+    const contact = yield* readContact("deleteContact", stored.Item);
 
     let startKey: dynamodb.AttributeMap | undefined;
 
@@ -302,7 +303,7 @@ export const membershipOperations = (
       );
 
       for (const item of page.Items ?? []) {
-        const { listId } = yield* decodeMembershipEntry(item).pipe(corrupt("deleteContact"));
+        const { listId } = yield* readMember("deleteContact", item);
 
         const removal = yield* runTransaction("deleteContact", {
           TransactItems: removeMembership(listId, contactId),
@@ -381,7 +382,7 @@ export const membershipOperations = (
       const removals: Array<AWS.DynamoDB.TransactWriteItemsRequest["TransactItems"][number]> = [];
 
       for (const item of page.Items ?? []) {
-        const { contactId: memberId } = yield* decodeMemberEntry(item).pipe(corrupt("deleteList"));
+        const { contactId: memberId } = yield* readMember("deleteList", item);
 
         removals.push(...removeMembership(listId, memberId));
       }
@@ -438,7 +439,7 @@ export const membershipOperations = (
     const holders = new Map<string, string>();
 
     for (const item of reserved) {
-      const entry = yield* decodeReservationEntry(item).pipe(corrupt("importContacts"));
+      const entry = yield* readHeldReservation("importContacts", item);
 
       holders.set(entry.pk.slice("EMAIL#".length), entry.contactId);
     }
@@ -458,14 +459,14 @@ export const membershipOperations = (
           {
             Put: {
               Table: tableLogicalId,
-              Item: contactItem(candidate),
+              Item: yield* contactItem(candidate),
               ConditionExpression: "attribute_not_exists(pk)",
             },
           },
           {
             Put: {
               Table: tableLogicalId,
-              Item: reservationItem(candidate.email, contactId),
+              Item: yield* reservationItem(candidate.email, contactId),
               ConditionExpression: "attribute_not_exists(pk)",
             },
           },

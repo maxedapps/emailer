@@ -5,7 +5,7 @@ import { Data, Duration, Effect, Predicate, Random, Schedule, Schema } from "eff
 import { StorageUnavailable } from "@emailer/api/Errors";
 
 import { corrupt, unavailable } from "../Errors.ts";
-import { attributeOf, listingIndexName, operationTimeout, str, tableLogicalId } from "./Items.ts";
+import { keyCodec, listingIndexName, operationTimeout, str, tableLogicalId } from "./Items.ts";
 
 import type { TableOperations } from "./Items.ts";
 
@@ -68,9 +68,9 @@ export interface StoredPage<Item, Cursor> {
   readonly nextCursor?: Cursor;
 }
 
-const IndexEntry = Schema.Struct({ gsi1sk: attributeOf(Schema.String) });
-
-const decodeIndexEntry = Schema.decodeUnknownEffect(IndexEntry);
+const decodeIndexEntry = Schema.decodeUnknownEffect(
+  keyCodec(Schema.Struct({ gsi1sk: Schema.String })),
+);
 
 /**
  * The next cursor is derived from `LastEvaluatedKey` and from nothing else. Deriving it from a

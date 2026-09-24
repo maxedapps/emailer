@@ -3,7 +3,7 @@ import * as AWS from "alchemy/AWS";
 import { Clock, Duration, Effect, Layer, Schema } from "effect";
 import { RateLimiter } from "effect/unstable/persistence";
 
-import { num, NumberAttribute, recordVersion, str } from "./Items.ts";
+import { itemReader, num, recordVersion, str } from "./Items.ts";
 import { updatePrimitives } from "./Primitives.ts";
 import { dataTable } from "./Table.ts";
 
@@ -22,12 +22,7 @@ const rateLimitKey = (key: string) => ({
 
 const windowNames = { "#count": "count", "#expiresAt": "expiresAt" } as const;
 
-const WindowAttributes = Schema.Struct({
-  count: NumberAttribute,
-  expiresAt: NumberAttribute,
-});
-
-const decodeWindow = Schema.decodeUnknownEffect(WindowAttributes);
+const readWindow = itemReader(Schema.Struct({ count: Schema.Int, expiresAt: Schema.Finite }));
 
 const unsupported = (method: string) =>
   new RateLimiter.RateLimiterError({
@@ -36,7 +31,7 @@ const unsupported = (method: string) =>
     }),
   });
 
-const storeFailure = (cause: StorageUnavailable | Error) =>
+const storeFailure = (cause: StorageUnavailable) =>
   new RateLimiter.RateLimiterError({
     reason: new RateLimiter.RateLimitStoreError({
       message: "Failed to execute fixedWindow rate limiting command",
@@ -48,8 +43,7 @@ export const rateLimitOperations = (primitives: Pick<UpdatePrimitives, "updateIf
   const { updateIf } = primitives;
 
   const fromAttributes = (now: number, attributes: dynamodb.AttributeMap | undefined) =>
-    decodeWindow(attributes).pipe(
-      Effect.mapError(storeFailure),
+    readWindow("fixedWindow", attributes).pipe(
       Effect.map((window) => [window.count, window.expiresAt - now] as const),
     );
 
@@ -76,7 +70,7 @@ export const rateLimitOperations = (primitives: Pick<UpdatePrimitives, "updateIf
             ":extend": num(extend),
             ":version": num(recordVersion),
           },
-          ReturnValues: "UPDATED_NEW" as const,
+          ReturnValues: "ALL_NEW" as const,
         };
 
         const reset = {
@@ -89,7 +83,7 @@ export const rateLimitOperations = (primitives: Pick<UpdatePrimitives, "updateIf
             ":now": num(now),
             ":nowPlusExtend": num(now + extend),
           },
-          ReturnValues: "UPDATED_NEW" as const,
+          ReturnValues: "ALL_NEW" as const,
         };
 
         const first = yield* claim(common);

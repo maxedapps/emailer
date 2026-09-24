@@ -21,6 +21,14 @@ import type { ScriptedReplies } from "./Testing.ts";
 
 const operationsFor = (table: Table) => membershipOperations(primitivesFor(table));
 
+/** A membership row as a query returns it: either direction stores the same record. */
+const memberRow = (list: string, member: string) => ({
+  v: { N: "1" },
+  listId: { S: list },
+  contactId: { S: member },
+  addedAt: { S: createdAt },
+});
+
 describe("addMember", () => {
   const addMember = (replies: ScriptedReplies) => {
     const table = scriptedTable(replies);
@@ -260,7 +268,7 @@ describe("listMembers", () => {
           getItem: [Effect.succeed({ Item: listItem })],
           query: [
             Effect.succeed({
-              Items: [{ contactId: { S: contactId } }, { contactId: { S: otherContactId } }],
+              Items: [memberRow(listId, contactId), memberRow(listId, otherContactId)],
             }),
           ],
           batchGetItem: [
@@ -319,7 +327,7 @@ describe("listMembers", () => {
         getItem: [Effect.succeed({ Item: listItem })],
         query: [
           Effect.succeed({
-            Items: [{ contactId: { S: contactId } }, { contactId: { S: otherContactId } }],
+            Items: [memberRow(listId, contactId), memberRow(listId, otherContactId)],
           }),
         ],
         batchGetItem: [Effect.succeed({ Responses: { [physicalName]: [contactItem(contactId)] } })],
@@ -347,8 +355,7 @@ describe("deleteContact", () => {
   const reverseItem = (list: string) => ({
     pk: { S: `CONTACT#${contactId}` },
     sk: { S: `LISTOF#${list}` },
-    listId: { S: list },
-    contactId: { S: contactId },
+    ...memberRow(list, contactId),
   });
 
   const found: ScriptedReplies = { getItem: [Effect.succeed({ Item: contactMeta })] };
@@ -480,9 +487,9 @@ describe("deleteList", () => {
   const found: ScriptedReplies = { getItem: [Effect.succeed({ Item: listMeta })] };
 
   const memberItems = (count: number) =>
-    Array.from({ length: count }, (_, index) => ({
-      contactId: { S: `0195f0a0-1111-4222-8333-4444444${String(index).padStart(5, "0")}` },
-    }));
+    Array.from({ length: count }, (_, index) =>
+      memberRow(listId, `0195f0a0-1111-4222-8333-4444444${String(index).padStart(5, "0")}`),
+    );
 
   it.effect("answers NotFound for a list that is not there without writing anything", () =>
     Effect.gen(function* () {
@@ -560,7 +567,7 @@ describe("deleteList", () => {
 
       const table = scriptedTable({
         ...found,
-        query: [Effect.succeed({ Items: [{ contactId: { S: memberId } }] })],
+        query: [Effect.succeed({ Items: [memberRow(listId, memberId)] })],
       });
 
       yield* operationsFor(table).deleteList(listId);

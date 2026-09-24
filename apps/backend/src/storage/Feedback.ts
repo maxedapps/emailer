@@ -1,16 +1,16 @@
 import * as Schemas from "@emailer/api/Schemas";
 import * as AWS from "alchemy/AWS";
-import { Context, Crypto, Effect, Layer } from "effect";
+import { Context, Crypto, Effect, Layer, Schema } from "effect";
 
 import { suppressionWrites, transientKey } from "./Addresses.ts";
 import {
   campaignKey,
+  itemWriter,
   num,
   recordVersion,
   str,
   strSet,
   tableLogicalId,
-  withOptional,
 } from "./Items.ts";
 import { transactionPrimitives, writePrimitives } from "./Primitives.ts";
 import { dataTable } from "./Table.ts";
@@ -18,7 +18,9 @@ import { dataTable } from "./Table.ts";
 import type { TableOperations } from "./Items.ts";
 import type { TransactionPrimitives, TransactionTokens } from "./Primitives.ts";
 
-export type FeedbackOutcome = "suppressed" | "recorded";
+const FeedbackOutcome = Schema.Literals(["suppressed", "recorded"]);
+
+export type FeedbackOutcome = typeof FeedbackOutcome.Type;
 
 const feedbackKey = (
   campaignId: string,
@@ -34,19 +36,23 @@ const feedbackKey = (
  * One event's history row for one recipient, as the consumer classified it. The store copies it;
  * it decides nothing about what the event means.
  */
-export interface FeedbackRow {
-  readonly campaignId: string;
-  readonly kind: Schemas.SuppressionReason;
-  readonly feedbackId: string;
-  readonly recipient: string;
-  readonly messageId: string;
-  readonly outcome: FeedbackOutcome;
-  readonly receivedAt: string;
-  readonly bounceType?: string | undefined;
-  readonly bounceSubType?: string | undefined;
-  readonly complaintFeedbackType?: string | undefined;
-  readonly complaintSubType?: string | undefined;
-}
+const FeedbackRow = Schema.Struct({
+  campaignId: Schemas.EntityId,
+  kind: Schemas.SuppressionReason,
+  feedbackId: Schema.String,
+  recipient: Schema.String,
+  messageId: Schema.String,
+  outcome: FeedbackOutcome,
+  receivedAt: Schemas.Timestamp,
+  bounceType: Schema.optional(Schema.String),
+  bounceSubType: Schema.optional(Schema.String),
+  complaintFeedbackType: Schema.optional(Schema.String),
+  complaintSubType: Schema.optional(Schema.String),
+});
+
+export type FeedbackRow = typeof FeedbackRow.Type;
+
+const writeRow = itemWriter(FeedbackRow);
 
 /**
  * What the row changes beside itself: a campaign counter, the recipient's transient-bounce window,
@@ -59,31 +65,17 @@ export type FeedbackWrite =
 
 export type FeedbackWriteOutcome = "committed" | "duplicate" | "unknown-campaign";
 
-const putHistory = (row: FeedbackRow) => ({
-  Put: {
-    Table: tableLogicalId,
-    Item: withOptional(
-      {
+const putHistory = (row: FeedbackRow) =>
+  Effect.map(writeRow({ ...row, recipient: Schemas.mailboxKey(row.recipient) }), (attributes) => ({
+    Put: {
+      Table: tableLogicalId,
+      Item: {
         ...feedbackKey(row.campaignId, row.kind, row.feedbackId, row.recipient),
-        v: num(recordVersion),
-        campaignId: str(row.campaignId),
-        kind: str(row.kind),
-        feedbackId: str(row.feedbackId),
-        recipient: str(Schemas.mailboxKey(row.recipient)),
-        messageId: str(row.messageId),
-        outcome: str(row.outcome),
-        receivedAt: str(row.receivedAt),
+        ...attributes,
       },
-      [
-        ["bounceType", row.bounceType],
-        ["bounceSubType", row.bounceSubType],
-        ["complaintFeedbackType", row.complaintFeedbackType],
-        ["complaintSubType", row.complaintSubType],
-      ],
-    ),
-    ConditionExpression: "attribute_not_exists(pk)",
-  },
-});
+      ConditionExpression: "attribute_not_exists(pk)",
+    },
+  }));
 
 const addCampaignCounter = (campaignId: string, counter: "bounced" | "complained") => ({
   Update: {
@@ -150,7 +142,7 @@ export const feedbackWrites = (primitives: TransactionPrimitives) => {
     write: FeedbackWrite,
   ) {
     const outcome = yield* runTransaction("recordFeedback", {
-      TransactItems: [putHistory(row), ...sideEffectOf(row, write)],
+      TransactItems: [yield* putHistory(row), ...sideEffectOf(row, write)],
     });
 
     return writeOutcome(outcome);

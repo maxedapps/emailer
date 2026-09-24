@@ -6,11 +6,10 @@ import { Effect, Layer, Result } from "effect";
 
 import { CampaignSchedule } from "./CampaignSchedule.ts";
 import * as Campaigns from "./Campaigns.ts";
-import { CorruptItem } from "../Errors.ts";
 import { CampaignWake } from "../sending/Dispatch.ts";
 import { AudienceStore } from "../storage/Audience.ts";
 import { CampaignStore } from "../storage/Campaigns.ts";
-import { defectOf, unusedAudience, unusedCampaigns } from "../storage/Testing.ts";
+import { unusedAudience, unusedCampaigns } from "../storage/Testing.ts";
 
 import type { CampaignControl } from "../storage/Campaigns.ts";
 
@@ -106,12 +105,40 @@ const startedAtOf = (world: World, campaign: Schemas.Campaign): string | undefin
   world.startedAt.get(campaign.id) ??
   ("startedAt" in campaign.submission ? campaign.submission.startedAt : undefined);
 
-const controlOfCampaign = (world: World, campaign: Schemas.Campaign): CampaignControl => ({
-  state: campaign.submission.state,
-  runToken: world.runTokens.get(campaign.id),
-  startedAt: startedAtOf(world, campaign),
-  pausedReason: campaign.submission.state === "paused" ? campaign.submission.reason : undefined,
-});
+/** The control snapshot the store would read for the world's campaign. */
+const controlOfCampaign = (world: World, campaign: Schemas.Campaign): CampaignControl => {
+  const submission = campaign.submission;
+  const observed = world.runTokens.get(campaign.id);
+
+  if (submission.state === "draft") {
+    return observed === undefined ? { state: "draft" } : { state: "draft", runToken: observed };
+  }
+
+  if (observed === undefined) {
+    throw new Error(`a ${submission.state} campaign in this world needs a run token`);
+  }
+
+  const startedAt = startedAtOf(world, campaign);
+
+  switch (submission.state) {
+    case "scheduled":
+      return { state: "scheduled", runToken: observed };
+    case "queued":
+      return startedAt === undefined
+        ? { state: "queued", runToken: observed }
+        : { state: "queued", runToken: observed, startedAt };
+    case "sending":
+    case "completed":
+      return { state: submission.state, runToken: observed, startedAt: submission.startedAt };
+    case "paused":
+      return {
+        state: "paused",
+        runToken: observed,
+        startedAt: submission.startedAt,
+        pausedReason: submission.reason,
+      };
+  }
+};
 
 const tokenMatches = (world: World, id: string, expected: string | undefined) =>
   world.runTokens.get(id) === expected;
@@ -359,8 +386,12 @@ const fixture = (scenario: Scenario = {}): Fixture => {
   world.campaigns.set(campaignId, campaign);
   rememberHistory(world, campaign);
 
-  if (scenario.runToken !== undefined) {
-    world.runTokens.set(campaignId, scenario.runToken);
+  // Every state past draft holds its run's token; a draft holds one only if a test gives it.
+  const runToken =
+    scenario.runToken ?? (campaign.submission.state === "draft" ? undefined : existingRunToken);
+
+  if (runToken !== undefined) {
+    world.runTokens.set(campaignId, runToken);
   }
 
   if (scenario.startedAt !== undefined) {
@@ -685,6 +716,7 @@ describe("update", () => {
 
       fix.world.beforeWrite = Effect.sync(() => {
         fix.world.campaigns.set(campaignId, queuedCampaign);
+        fix.world.runTokens.set(campaignId, existingRunToken);
       });
 
       const attempt = yield* runWith(fix, Campaigns.update(campaignId, { subject: "x" }));
@@ -751,12 +783,7 @@ describe("queued wake repair", () => {
     resume: Campaigns.resume,
   } as const;
 
-  const queuedControl = (runToken: string | undefined): CampaignControl => ({
-    state: "queued",
-    runToken,
-    startedAt: undefined,
-    pausedReason: undefined,
-  });
+  const queuedControl = (runToken: string): CampaignControl => ({ state: "queued", runToken });
 
   it.effect.each(["send", "resume"] as const)(
     "%s re-wakes only the token observed with queued state",
@@ -779,12 +806,7 @@ describe("queued wake repair", () => {
 
         fix.world.control.set(campaignId, [
           queuedControl(existingRunToken),
-          {
-            state: "scheduled",
-            runToken: replacementToken,
-            startedAt: undefined,
-            pausedReason: undefined,
-          },
+          { state: "scheduled", runToken: replacementToken },
         ]);
 
         const attempt = yield* runWith(fix, queuedRepair[command](campaignId));
@@ -792,12 +814,7 @@ describe("queued wake repair", () => {
         expect(Result.isSuccess(attempt) && attempt.success).toStrictEqual(queuedCampaign);
         expect(fix.wake.messages).toStrictEqual([{ campaignId, runToken: existingRunToken }]);
         expect(fix.world.control.get(campaignId)).toStrictEqual([
-          {
-            state: "scheduled",
-            runToken: replacementToken,
-            startedAt: undefined,
-            pausedReason: undefined,
-          },
+          { state: "scheduled", runToken: replacementToken },
         ]);
       }),
   );
@@ -808,33 +825,12 @@ describe("queued wake repair", () => {
       Effect.gen(function* () {
         const fix = fixture({ campaign: queuedCampaign, runToken: existingRunToken });
 
-        fix.world.control.set(campaignId, [
-          queuedControl(existingRunToken),
-          {
-            state: "draft",
-            runToken: undefined,
-            startedAt: undefined,
-            pausedReason: undefined,
-          },
-        ]);
+        fix.world.control.set(campaignId, [queuedControl(existingRunToken), { state: "draft" }]);
 
         const attempt = yield* runWith(fix, queuedRepair[command](campaignId));
 
         expect(Result.isSuccess(attempt) && attempt.success).toStrictEqual(queuedCampaign);
         expect(fix.wake.messages).toStrictEqual([{ campaignId, runToken: existingRunToken }]);
-      }),
-  );
-
-  it.effect.each(["send", "resume"] as const)(
-    "%s reports corruption when control is still queued without a run token",
-    (command) =>
-      Effect.gen(function* () {
-        const fix = fixture({ campaign: queuedCampaign });
-
-        const defect = yield* defectOf(runWith(fix, queuedRepair[command](campaignId)));
-
-        expect(defect).toStrictEqual(new CorruptItem({ operation: "getCampaignControl" }));
-        expect(fix.wake.messages).toHaveLength(0);
       }),
   );
 });

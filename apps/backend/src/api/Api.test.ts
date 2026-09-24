@@ -76,15 +76,7 @@ const campaign: Schemas.Campaign = {
   submission: { state: "draft" },
 };
 
-const controlOf = (
-  state: Schemas.CampaignState,
-  observedToken: string | undefined = runToken,
-): CampaignControl => ({
-  state,
-  runToken: observedToken,
-  startedAt: undefined,
-  pausedReason: undefined,
-});
+const draft: CampaignControl = { state: "draft" };
 
 const record = {
   email,
@@ -444,7 +436,7 @@ describe("campaigns", () => {
       const { call } = api({
         campaigns: {
           getCampaign: () => Effect.succeed(campaign),
-          getCampaignControl: () => Effect.succeed(controlOf("draft", undefined)),
+          getCampaignControl: () => Effect.succeed(draft),
           updateDraft: recording(calls, "updated" as const),
           deleteDraft: recording(calls, "deleted" as const),
         },
@@ -497,7 +489,7 @@ describe("campaigns", () => {
   it.live("links to a preview that names the campaign, reading only its control item", () =>
     Effect.gen(function* () {
       const { call } = api({
-        campaigns: { getCampaignControl: () => Effect.succeed(controlOf("draft", undefined)) },
+        campaigns: { getCampaignControl: () => Effect.succeed(draft) },
       });
 
       const link = yield* call((client) =>
@@ -518,8 +510,11 @@ describe("campaigns", () => {
   );
 
   it.effect.each([
-    ["send", controlOf("draft", undefined)],
-    ["resume", { ...controlOf("paused"), pausedReason: "manual" as const }],
+    ["send", draft],
+    [
+      "resume",
+      { state: "paused", runToken, startedAt: createdAt, pausedReason: "manual" } as const,
+    ],
   ] as const)("%ss by starting a queued run and waking it", ([command, control]) =>
     Effect.gen(function* () {
       const wakes: Array<ReadonlyArray<unknown>> = [];
@@ -560,7 +555,7 @@ describe("campaigns", () => {
 
       const { call } = api({
         campaigns: {
-          getCampaignControl: () => Effect.succeed(controlOf("draft", undefined)),
+          getCampaignControl: () => Effect.succeed(draft),
           newRun: recording(runs, "scheduled" as const),
           getCampaign: () => Effect.succeed(campaign),
         },
@@ -581,7 +576,7 @@ describe("campaigns", () => {
 
       const { call } = api({
         campaigns: {
-          getCampaignControl: () => Effect.succeed(controlOf("scheduled")),
+          getCampaignControl: () => Effect.succeed({ state: "scheduled", runToken } as const),
           cancelCampaign: recording(cancels, "applied" as const),
           getCampaign: () => Effect.succeed(campaign),
         },
@@ -624,7 +619,7 @@ describe("addresses", () => {
 });
 
 describe("public errors", () => {
-  const conflict = { ...controlOf("sending"), startedAt: createdAt };
+  const conflict = { state: "sending", runToken, startedAt: createdAt } as const;
 
   const cases = [
     {
@@ -673,7 +668,7 @@ describe("public errors", () => {
       request: () =>
         send("POST", `/campaigns/${campaignId}/schedule`, '{"sendAt":"2020-01-01T00:00:00.000Z"}'),
       stubs: {
-        campaigns: { getCampaignControl: () => Effect.succeed(controlOf("draft", undefined)) },
+        campaigns: { getCampaignControl: () => Effect.succeed(draft) },
       },
     },
     {
@@ -765,7 +760,7 @@ describe("failure reporting", () => {
       request: () => send("POST", `/campaigns/${campaignId}/send`, "{}"),
       stubs: {
         campaigns: {
-          getCampaignControl: () => Effect.succeed(controlOf("draft", undefined)),
+          getCampaignControl: () => Effect.succeed(draft),
           newRun: () => Effect.succeed("queued" as const),
         },
         wake: {
@@ -782,7 +777,7 @@ describe("failure reporting", () => {
         send("POST", `/campaigns/${campaignId}/schedule`, '{"sendAt":"2099-06-01T09:00:00.000Z"}'),
       stubs: {
         campaigns: {
-          getCampaignControl: () => Effect.succeed(controlOf("draft", undefined)),
+          getCampaignControl: () => Effect.succeed(draft),
           newRun: () => Effect.succeed("scheduled" as const),
         },
         schedule: {

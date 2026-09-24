@@ -6,21 +6,10 @@ import {
   StorageUnavailable,
 } from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
-import { Effect, Schema, SchemaTransformation, Struct } from "effect";
+import { Effect, Schema } from "effect";
 
-import { corrupt } from "../Errors.ts";
 import { unsubscribeKey } from "./Addresses.ts";
-import {
-  attributeOf,
-  listingAttributes,
-  num,
-  recordVersion,
-  str,
-  StoredVersionAttribute,
-  StringMapAttribute,
-  strMap,
-  tableLogicalId,
-} from "./Items.ts";
+import { itemReader, itemWriter, listingAttributes, str, tableLogicalId } from "./Items.ts";
 
 import type {
   PagePrimitives,
@@ -47,31 +36,16 @@ export const reservationKey = (email: string) => ({
   sk: str("META"),
 });
 
-/**
- * The stored item, wire kinds and domain rules together. `optionalKey` rather than `optional`: an
- * attribute DynamoDB never wrote is absent from the map, and an attribute present but of the wrong
- * kind is a decoding failure rather than an absence. Key and index attributes travel on the same
- * item and are ignored here.
- */
-const StoredContact = Schema.Struct({
-  v: StoredVersionAttribute,
-  id: attributeOf(Schemas.EntityId),
-  email: attributeOf(Schemas.NormalizedEmailAddress),
-  name: Schema.optionalKey(attributeOf(Schemas.EntityName)),
-  attributes: Schema.optionalKey(
-    StringMapAttribute.pipe(
-      Schema.decodeTo(Schemas.ContactAttributes, SchemaTransformation.passthrough()),
-    ),
-  ),
-  createdAt: attributeOf(Schemas.Timestamp),
-});
+const writeContact = itemWriter(Schemas.Contact);
 
-/** Decodes a stored contact item. Membership hydrates contacts too, so this is shared. */
-export const decodeContactItem = Schema.decodeUnknownEffect(StoredContact);
+/** Reads a stored contact. Membership hydrates contacts too, so this is shared. */
+export const readContact = itemReader(Schemas.Contact);
 
-const StoredReservation = Schema.Struct({ contactId: attributeOf(Schemas.EntityId) });
+const Reservation = Schema.Struct({ contactId: Schemas.EntityId });
 
-const decodeReservation = Schema.decodeUnknownEffect(StoredReservation);
+const writeReservation = itemWriter(Reservation);
+
+const readReservation = itemReader(Reservation);
 
 /** Builds a contact with its absent fields omitted rather than set to `undefined`. */
 export const contactOf = (
@@ -87,28 +61,19 @@ export const contactOf = (
   return attributes === undefined ? named : { ...named, attributes };
 };
 
-export const contactItem = (contact: Schemas.Contact): dynamodb.AttributeMap => {
-  const item: dynamodb.AttributeMap = {
+/** A contact's whole item: its record, its key and its entry in the listing index. */
+export const contactItem = (contact: Schemas.Contact): Effect.Effect<dynamodb.AttributeMap> =>
+  Effect.map(writeContact(contact), (attributes) => ({
     ...contactKey(contact.id),
     ...listingAttributes(contactKind, contact.createdAt, contact.id),
-    v: num(recordVersion),
-    id: str(contact.id),
-    email: str(contact.email),
-    createdAt: str(contact.createdAt),
-  };
+    ...attributes,
+  }));
 
-  const named = contact.name === undefined ? item : { ...item, name: str(contact.name) };
-
-  return contact.attributes === undefined
-    ? named
-    : { ...named, attributes: strMap(contact.attributes) };
-};
-
-export const reservationItem = (email: string, contactId: string): dynamodb.AttributeMap => ({
-  ...reservationKey(email),
-  v: num(recordVersion),
-  contactId: str(contactId),
-});
+export const reservationItem = (email: string, contactId: string) =>
+  Effect.map(writeReservation({ contactId }), (attributes) => ({
+    ...reservationKey(email),
+    ...attributes,
+  }));
 
 export const contactOperations = (
   primitives: ReadPrimitives & PagePrimitives & TransactionPrimitives,
@@ -126,14 +91,14 @@ export const contactOperations = (
         {
           Put: {
             Table: tableLogicalId,
-            Item: contactItem(contact),
+            Item: yield* contactItem(contact),
             ConditionExpression: "attribute_not_exists(pk)",
           },
         },
         {
           Put: {
             Table: tableLogicalId,
-            Item: reservationItem(contact.email, contact.id),
+            Item: yield* reservationItem(contact.email, contact.id),
             ConditionExpression: "attribute_not_exists(pk)",
           },
         },
@@ -153,12 +118,6 @@ export const contactOperations = (
       failure: "ConditionalCheckFailed",
     });
   });
-
-  const readContact = (operation: string, item: dynamodb.AttributeMap) =>
-    decodeContactItem(item).pipe(
-      corrupt(operation),
-      Effect.map((stored): Schemas.Contact => Struct.omit(stored, ["v"])),
-    );
 
   const getContact = Effect.fn("Storage.getContact")(function* (contactId: string) {
     const response = yield* readItem("getContact", contactKey(contactId));
@@ -187,7 +146,7 @@ export const contactOperations = (
       return yield* new ContactNotFound();
     }
 
-    const reserved = yield* decodeReservation(reservation.Item).pipe(corrupt("getContactByEmail"));
+    const reserved = yield* readReservation("getContactByEmail", reservation.Item);
 
     const found = yield* getContact(reserved.contactId);
 
@@ -248,7 +207,7 @@ export const contactOperations = (
             {
               Put: {
                 Table: tableLogicalId,
-                Item: reservationItem(email, contactId),
+                Item: yield* reservationItem(email, contactId),
                 ConditionExpression: "attribute_not_exists(pk)",
               },
             },
@@ -264,7 +223,7 @@ export const contactOperations = (
           // holds once this write has applied, so the same request landing twice is not a lost race.
           Put: {
             Table: tableLogicalId,
-            Item: contactItem(next),
+            Item: yield* contactItem(next),
             ConditionExpression:
               "attribute_exists(pk) AND (#email = :currentEmail OR #email = :email)",
             ExpressionAttributeNames: { "#email": "email" },

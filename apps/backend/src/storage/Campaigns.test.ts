@@ -1,3 +1,4 @@
+import type * as dynamodb from "@distilled.cloud/aws/dynamodb";
 import * as Errors from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
 import { Effect } from "effect";
@@ -103,7 +104,7 @@ interface StoredCampaignFields {
   readonly filter?: Schemas.ContactAttributes;
 }
 
-const meta = (fields: StoredCampaignFields) => {
+const meta = (fields: StoredCampaignFields): dynamodb.AttributeMap => {
   const item = withOptional(
     {
       pk: { S: `CAMPAIGN#${campaignId}` },
@@ -130,7 +131,8 @@ const meta = (fields: StoredCampaignFields) => {
       ["finishedAt", fields.finishedAt],
       ["pausedReason", fields.pausedReason],
       ["cursor", fields.cursor],
-      ["runToken", fields.runToken],
+      // Every state past draft holds its run's token.
+      ["runToken", fields.runToken ?? (fields.state === "draft" ? undefined : runToken)],
     ],
   );
 
@@ -501,7 +503,7 @@ describe("getCampaignControl", () => {
           ],
         });
 
-        expect(yield* storage.getCampaignControl(campaignId)).toStrictEqual({
+        expect(yield* storage.getCampaignControl(campaignId)).toMatchObject({
           state: "paused",
           runToken,
           startedAt,
@@ -522,12 +524,10 @@ describe("getCampaignControl", () => {
         getItem: [Effect.succeed({ Item: meta({ state: "draft" }) })],
       });
 
-      expect(yield* storage.getCampaignControl(campaignId)).toStrictEqual({
-        state: "draft",
-        runToken: undefined,
-        startedAt: undefined,
-        pausedReason: undefined,
-      });
+      const control = yield* storage.getCampaignControl(campaignId);
+
+      expect(control.state).toBe("draft");
+      expect(control).not.toHaveProperty("runToken");
     }),
   );
 
@@ -543,18 +543,16 @@ describe("getCampaignControl", () => {
     }),
   );
 
-  it.effect("decodes a queued record without a run token rather than treating it as corrupt", () =>
+  it.effect("treats a queued campaign without a run token as corrupt", () =>
     Effect.gen(function* () {
-      const { storage } = withStorage({
-        getItem: [Effect.succeed({ Item: meta({ state: "queued", queuedAt }) })],
-      });
+      const item = meta({ state: "queued", queuedAt });
+      const { runToken: _missing, ...tokenless } = item;
 
-      expect(yield* storage.getCampaignControl(campaignId)).toStrictEqual({
-        state: "queued",
-        runToken: undefined,
-        startedAt: undefined,
-        pausedReason: undefined,
-      });
+      const { storage } = withStorage({ getItem: [Effect.succeed({ Item: tokenless })] });
+
+      expect(yield* defectOf(storage.getCampaignControl(campaignId))).toStrictEqual(
+        new CorruptItem({ operation: "getCampaignControl" }),
+      );
     }),
   );
 });

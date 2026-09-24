@@ -1,16 +1,12 @@
-import * as Schemas from "@emailer/api/Schemas";
-import { Effect, Result, Schema } from "effect";
+import type * as dynamodb from "@distilled.cloud/aws/dynamodb";
 import { describe, expect, it } from "@effect/vitest";
+import * as Schemas from "@emailer/api/Schemas";
+import { Effect, Schema } from "effect";
 
-import { contactItem, decodeContactItem } from "./Contacts.ts";
-import {
-  attributeOf,
-  NumberAttribute,
-  recordVersion,
-  StoredVersionAttribute,
-  StringAttribute,
-  StringMapAttribute,
-} from "./Items.ts";
+import { CorruptItem } from "../Errors.ts";
+import { contactItem, readContact } from "./Contacts.ts";
+import { itemReader, itemWriter, keyCodec } from "./Items.ts";
+import { defectOf } from "./Testing.ts";
 
 const contactId = "0195f0a0-1111-4222-8333-44444444c001";
 
@@ -24,138 +20,122 @@ const contact: Schemas.Contact = {
   createdAt,
 };
 
-const decodeString = Schema.decodeUnknownResult(StringAttribute);
+const read = (item: dynamodb.AttributeMap) => readContact("getContact", item);
 
-const decodeNumber = Schema.decodeUnknownResult(NumberAttribute);
-
-const decodeStringMap = Schema.decodeUnknownResult(StringMapAttribute);
-
-const decodeEntityId = Schema.decodeUnknownResult(attributeOf(Schemas.EntityId));
-
-const decodeVersion = Schema.decodeUnknownResult(StoredVersionAttribute);
-
-describe("wire codecs", () => {
-  it("decodes each attribute kind to its value", () => {
-    expect(decodeString({ S: "value" })).toStrictEqual(Result.succeed("value"));
-    expect(decodeNumber({ N: "42" })).toStrictEqual(Result.succeed(42));
-    expect(decodeNumber({ N: "-7" })).toStrictEqual(Result.succeed(-7));
-    expect(decodeStringMap({ M: { tier: { S: "gold" } } })).toStrictEqual(
-      Result.succeed({ tier: "gold" }),
-    );
-    expect(decodeStringMap({ M: {} })).toStrictEqual(Result.succeed({}));
-  });
-
-  // The helpers these replaced answered `undefined` for an attribute of the wrong kind, so a
-  // corrupt value and a value that was never written were indistinguishable.
-  it.each([
-    ["a number where a string belongs", { N: "42" }],
-    ["a bare value carrying no attribute kind", "value"],
-    ["an absent attribute", undefined],
-  ])("refuses %s", (_label, wire) => {
-    expect(Result.isFailure(decodeString(wire))).toBe(true);
-  });
-
-  it.each([
-    ["a string where a number belongs", { S: "42" }],
-    ["a number that is not one", { N: "not-a-number" }],
-    ["an infinite number", { N: "Infinity" }],
-  ])("refuses %s", (_label, wire) => {
-    expect(Result.isFailure(decodeNumber(wire))).toBe(true);
-  });
-
-  it.each([
-    ["a list where a map belongs", { L: [] }],
-    ["a map whose value is the wrong kind", { M: { tier: { N: "1" } } }],
-  ])("refuses %s", (_label, wire) => {
-    expect(Result.isFailure(decodeStringMap(wire))).toBe(true);
-  });
-
-  it("applies the domain rule as well as the wire kind", () => {
-    expect(decodeEntityId({ S: contactId })).toStrictEqual(Result.succeed(contactId));
-    expect(Result.isFailure(decodeEntityId({ S: "not-a-uuid" }))).toBe(true);
-    expect(Result.isFailure(decodeEntityId({ N: "1" }))).toBe(true);
-  });
-
-  it("accepts only the record version this code can read", () => {
-    expect(decodeVersion({ N: String(recordVersion) })).toStrictEqual(
-      Result.succeed(recordVersion),
-    );
-    expect(Result.isFailure(decodeVersion({ N: "99" }))).toBe(true);
-  });
-
-  // A map key of `__proto__` arrives as a real own property from parsed JSON. It must survive as
-  // an ordinary key and must not become anyone's prototype.
-  it("keeps a __proto__ map key as data and pollutes nothing", () => {
-    const decoded = decodeStringMap(
-      JSON.parse('{"M":{"__proto__":{"S":"evil"},"tier":{"S":"gold"}}}'),
-    );
-
-    const value = Result.isSuccess(decoded) ? decoded.success : {};
-
-    expect(Object.keys(value)).toStrictEqual(["__proto__", "tier"]);
-    expect(Object.prototype.hasOwnProperty.call(value, "__proto__")).toBe(true);
-    // The decisive half: the key stayed data instead of becoming the object's prototype.
-    expect(Object.getPrototypeOf(value)).toBe(Object.prototype);
-  });
-});
-
-describe("stored contact items", () => {
-  it.effect("round trips a contact through the writer and the reader", () =>
+describe("the item codec", () => {
+  it.effect("writes a record's values as attributes of their kind, stamped with the version", () =>
     Effect.gen(function* () {
-      const stored = yield* decodeContactItem(contactItem(contact));
+      const written = yield* itemWriter(
+        Schema.Struct({
+          text: Schema.String,
+          count: Schema.Int,
+          attributes: Schemas.ContactAttributes,
+          occurrences: Schema.NonEmptyArray(Schema.String),
+        }),
+      )({ text: "hello", count: 3, attributes: { tier: "gold" }, occurrences: ["a#1"] });
 
-      expect(stored).toMatchObject({
-        v: recordVersion,
-        id: contactId,
-        email: "sam@example.com",
-        name: "Sam",
-        attributes: { tier: "gold" },
-        createdAt,
+      expect(written).toStrictEqual({
+        v: { N: "1" },
+        text: { S: "hello" },
+        count: { N: "3" },
+        attributes: { M: { tier: { S: "gold" } } },
+        occurrences: { SS: ["a#1"] },
       });
     }),
   );
 
-  it.effect(
-    "omits an optional field the writer never wrote rather than reading it as undefined",
-    () =>
-      Effect.gen(function* () {
-        const item = contactItem({ id: contactId, email: "sam@example.com", createdAt });
+  it.effect("round trips a record, omitting what was never written", () =>
+    Effect.gen(function* () {
+      const bare = { id: contactId, email: "sam@example.com", createdAt };
 
-        const stored = yield* decodeContactItem(item);
+      expect(yield* read(yield* contactItem(contact))).toStrictEqual(contact);
+      expect(yield* read(yield* contactItem(bare))).toStrictEqual(bare);
+    }),
+  );
 
-        expect("name" in stored).toBe(false);
-        expect("attributes" in stored).toBe(false);
-      }),
+  it.effect("writes no attribute for an optional value left undefined", () =>
+    Effect.gen(function* () {
+      const item = yield* contactItem({ ...contact, name: undefined });
+
+      expect(item).not.toHaveProperty("name");
+    }),
   );
 
   it.effect("ignores the key and index attributes that travel on the same item", () =>
     Effect.gen(function* () {
-      const item = contactItem(contact);
+      const item = yield* contactItem(contact);
 
       expect(item["pk"]).toBeDefined();
       expect(item["gsi1pk"]).toBeDefined();
-      expect((yield* decodeContactItem(item)).id).toBe(contactId);
+      expect(yield* read(item)).toStrictEqual(contact);
     }),
   );
 
   it.effect.each([
-    ["a malformed optional value", { name: { N: "7" } }],
-    ["a malformed required value", { email: { N: "7" } }],
+    ["an attribute of the wrong kind", { name: { N: "7" } }],
+    ["a required value of the wrong kind", { email: { N: "7" } }],
     ["an address that is not one", { email: { S: "not-an-address" } }],
     ["a version this code cannot read", { v: { N: "99" } }],
-  ] as const)("refuses an item carrying %s", ([_label, overrides]) =>
+    ["no version at all", { v: undefined }],
+  ] as const)("reads an item carrying %s as the CorruptItem defect", ([_label, overrides]) =>
     Effect.gen(function* () {
-      const item = { ...contactItem(contact), ...overrides };
+      const item = { ...(yield* contactItem(contact)), ...overrides };
 
-      expect(Result.isFailure(yield* Effect.result(decodeContactItem(item)))).toBe(true);
+      expect(yield* defectOf(read(item))).toStrictEqual(
+        new CorruptItem({ operation: "getContact" }),
+      );
     }),
   );
 
-  it.effect("refuses an item missing a required attribute", () =>
+  it.effect("reads an item missing a required attribute as the CorruptItem defect", () =>
     Effect.gen(function* () {
-      const { createdAt: _absent, ...item } = contactItem(contact);
+      const { createdAt: _absent, ...item } = yield* contactItem(contact);
 
-      expect(Result.isFailure(yield* Effect.result(decodeContactItem(item)))).toBe(true);
+      expect(yield* defectOf(read(item))).toStrictEqual(
+        new CorruptItem({ operation: "getContact" }),
+      );
+    }),
+  );
+
+  // DynamoDB refuses an empty set, so writing one is a bug, never a request.
+  it.effect("refuses to write an empty set", () =>
+    Effect.gen(function* () {
+      const write = itemWriter(Schema.Struct({ occurrences: Schema.Array(Schema.String) }));
+
+      expect(yield* defectOf(write({ occurrences: [] }))).toBeDefined();
+    }),
+  );
+
+  it.effect("reads a key, which carries no version", () =>
+    Effect.gen(function* () {
+      const decode = Schema.decodeEffect(keyCodec(Schema.Struct({ sk: Schema.String })));
+
+      expect(yield* decode({ pk: { S: "LIST#1" }, sk: { S: "MEMBER#2" } })).toStrictEqual({
+        sk: "MEMBER#2",
+      });
+    }),
+  );
+
+  // A map key of `__proto__` arrives as a real own property from parsed JSON. It must survive as
+  // an ordinary key and must not become anyone's prototype.
+  it.effect("keeps a __proto__ map key as data and pollutes nothing", () =>
+    Effect.gen(function* () {
+      const decode = itemReader(Schema.Struct({ attributes: Schemas.ContactAttributes }));
+
+      const stored = yield* decode(
+        "getContact",
+        yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown))(
+          '{"v":{"N":"1"},"attributes":{"M":{"__proto__":{"S":"evil"},"tier":{"S":"gold"}}}}',
+        ).pipe(
+          // SAFETY: the parsed JSON is an attribute map by construction.
+          Effect.map((parsed) => parsed as Parameters<typeof decode>[1]),
+        ),
+      );
+
+      expect(Object.keys(stored.attributes)).toStrictEqual(["__proto__", "tier"]);
+      expect(Object.prototype.hasOwnProperty.call(stored.attributes, "__proto__")).toBe(true);
+      // The decisive half: the key stayed data instead of becoming the object's prototype.
+      expect(Object.getPrototypeOf(stored.attributes)).toBe(Object.prototype);
     }),
   );
 });

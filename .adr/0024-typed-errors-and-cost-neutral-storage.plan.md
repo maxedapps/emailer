@@ -156,7 +156,14 @@ Status: Done. As built:
 
 ### T4 — Item codec and the campaign record by state
 
-Status: Not started
+Status: Done except the prod decode scan, which waits for the user's go-ahead. As built:
+
+- `itemReader(record)` and `itemWriter(record)` take the contract schema as it is. The codec checks the version when it reads and stamps it when it writes, so no record declares `v`.
+- There is no `values()`. The codec is effectful, because the lint rules forbid synchronous schema calls, and building every expression through it would make every request builder effectful. Expression values keep `str`, `num`, `strMap` and `strSet`.
+- Reading decodes every attribute on the item. An attribute of a kind the table never stores (a boolean, a list, a binary value) makes the item corrupt.
+- The address rows and the helpers only they use stay until T6, so this task adds 70 production lines for now.
+- The rate-limit claims return `ALL_NEW` (free) instead of `UPDATED_NEW`, so the window decodes with its version.
+- Send rows are written through the codec but never read. The prod scan decodes only the items the code reads.
 
 - **`storage/Items.ts`** gets the generic codec:
   - DynamoDB attribute values ⇄ plain values, for strings, numbers, string maps and string sets only;

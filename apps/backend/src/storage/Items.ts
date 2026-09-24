@@ -1,8 +1,9 @@
 import type * as dynamodb from "@distilled.cloud/aws/dynamodb";
 import type * as Schemas from "@emailer/api/Schemas";
 import type * as AWS from "alchemy/AWS";
-import type { Effect } from "effect";
-import { Duration, Schema, SchemaTransformation } from "effect";
+import { Duration, Effect, Schema, SchemaIssue, SchemaTransformation } from "effect";
+
+import { corrupt } from "../Errors.ts";
 
 export const tableLogicalId = "EmailerData";
 
@@ -46,7 +47,7 @@ export const strMap = (values: Schemas.ContactAttributes) => ({
  * Composing them with a domain schema is `Schema.decodeTo(..., passthrough())`, so an item schema
  * states the wire shape and the domain rule in one place, and the same schema encodes back.
  */
-export const StringAttribute = Schema.Struct({ S: Schema.String }).pipe(
+const StringAttribute = Schema.Struct({ S: Schema.String }).pipe(
   Schema.decodeTo(
     Schema.String,
     SchemaTransformation.transform({
@@ -56,7 +57,7 @@ export const StringAttribute = Schema.Struct({ S: Schema.String }).pipe(
   ),
 );
 
-export const NumberAttribute = Schema.Struct({ N: Schema.FiniteFromString }).pipe(
+const NumberAttribute = Schema.Struct({ N: Schema.FiniteFromString }).pipe(
   Schema.decodeTo(
     Schema.Finite,
     SchemaTransformation.transform({
@@ -66,7 +67,7 @@ export const NumberAttribute = Schema.Struct({ N: Schema.FiniteFromString }).pip
   ),
 );
 
-export const StringMapAttribute = Schema.Struct({
+const StringMapAttribute = Schema.Struct({
   M: Schema.Record(Schema.String, StringAttribute),
 }).pipe(
   Schema.decodeTo(
@@ -77,6 +78,115 @@ export const StringMapAttribute = Schema.Struct({
     }),
   ),
 );
+
+const StringSetAttribute = Schema.Struct({ SS: Schema.NonEmptyArray(Schema.String) }).pipe(
+  Schema.decodeTo(
+    Schema.NonEmptyArray(Schema.String),
+    SchemaTransformation.transform({
+      decode: (attribute: { readonly SS: readonly [string, ...Array<string>] }) => attribute.SS,
+      encode: (values: readonly [string, ...Array<string>]) => ({ SS: values }),
+    }),
+  ),
+);
+
+/**
+ * The four attribute kinds this table stores, each as its plain value. A set is tried before a
+ * map, so an array is never written as a map, and an empty one, which DynamoDB refuses, is not
+ * written at all.
+ */
+const Attribute = Schema.Union([
+  StringAttribute,
+  NumberAttribute,
+  StringSetAttribute,
+  StringMapAttribute,
+]);
+
+type Value = typeof Attribute.Type;
+
+const PlainValues = Schema.Record(Schema.String, Schema.UndefinedOr(Schema.toType(Attribute)));
+
+type PlainValues = typeof PlainValues.Type;
+
+/** An optional field left `undefined` is an attribute that is not written. */
+const present = (values: PlainValues) => {
+  const written: Record<string, Value> = {};
+
+  for (const [name, value] of Object.entries(values)) {
+    if (value !== undefined) {
+      written[name] = value;
+    }
+  }
+
+  return written;
+};
+
+/** An item's attributes as plain values, and back. */
+const Plain = Schema.Record(Schema.String, Attribute).pipe(
+  Schema.decodeTo(
+    PlainValues,
+    SchemaTransformation.transform<PlainValues, Record<string, Value>>({
+      decode: (values) => values,
+      encode: present,
+    }),
+  ),
+);
+
+/**
+ * A key read as the attributes it declares: a cursor, or an index entry, neither of which carries
+ * a version. Any other attribute is ignored.
+ */
+export const keyCodec = <A, I>(key: Schema.Codec<A, I>) =>
+  Plain.pipe(Schema.decodeTo(key, SchemaTransformation.passthrough({ strict: false })));
+
+/** Every item carries the record version this code reads, and writing one stamps it. */
+const Versioned = Plain.pipe(
+  Schema.decodeTo(
+    PlainValues,
+    SchemaTransformation.transformEffect({
+      decode: (values, options) =>
+        values["v"] === recordVersion
+          ? Effect.succeed(values)
+          : Effect.fail(
+              new SchemaIssue.InvalidValue(
+                { message: `Expected record version ${recordVersion}` },
+                values,
+                options,
+              ),
+            ),
+      encode: (values) => Effect.succeed({ ...values, v: recordVersion }),
+    }),
+  ),
+);
+
+const item = <A, I>(record: Schema.Codec<A, I>) =>
+  Versioned.pipe(Schema.decodeTo(record, SchemaTransformation.passthrough({ strict: false })));
+
+/**
+ * Reads stored items as `record`, a contract schema: key and index attributes, and any other the
+ * record does not declare, are ignored. An item that does not decode is the `CorruptItem` defect.
+ */
+export const itemReader = <A, I>(record: Schema.Codec<A, I>) => {
+  const decode = Schema.decodeUnknownEffect(item(record));
+
+  return (operation: string, stored: dynamodb.AttributeMap | undefined) =>
+    decode(stored).pipe(corrupt(operation));
+};
+
+/**
+ * Writes `record` values as an item's attributes, version included; the caller adds the keys. A
+ * value that does not encode is a defect, since this code built it.
+ */
+export const itemWriter = <A, I>(record: Schema.Codec<A, I>) => {
+  const encode = Schema.encodeEffect(item(record));
+
+  return (value: A): Effect.Effect<dynamodb.AttributeMap> =>
+    encode(value).pipe(
+      // SAFETY: the attribute codecs encode exactly DynamoDB's attribute value shapes; the encoded
+      // type differs from the SDK's only in marking its arrays readonly.
+      Effect.map((attributes) => attributes as dynamodb.AttributeMap),
+      Effect.orDie,
+    );
+};
 
 /** Applies a domain rule to a string attribute: the wire kind and the rule in one schema. */
 export const attributeOf = <T>(domain: Schema.Codec<T, string>) =>

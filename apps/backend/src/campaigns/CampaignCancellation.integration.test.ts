@@ -140,7 +140,7 @@ describe("queued campaign cancellation", () => {
 
         expect(control.state).toBe("sending");
         expect(control.runToken).toBe(token);
-        expect(control.startedAt).toBeDefined();
+        expect(control).toHaveProperty("startedAt");
         expect(yield* sendRows(campaign.id)).toHaveLength(0);
       }),
     ));
@@ -169,7 +169,7 @@ describe("queued campaign cancellation", () => {
 
         expect(control.state).toBe("draft");
         expect(control.runToken).toBe(token);
-        expect(control.startedAt).toBeUndefined();
+        expect(control).not.toHaveProperty("startedAt");
         expect(yield* sendRows(campaign.id)).toHaveLength(0);
       }),
     ));
@@ -238,7 +238,10 @@ describe("queued campaign cancellation", () => {
           const seededRows = yield* sendRows(campaign.id);
           const seeded = yield* storage.getCampaignControl(campaign.id);
 
-          expect(seeded.state).toBe("paused");
+          if (seeded.state !== "paused") {
+            throw new Error(`campaign ${campaign.id} was not seeded paused`);
+          }
+
           expect(seeded.pausedReason).toBe("daily-quota");
           expect(seededRows).toHaveLength(1);
           expect(seededRows[0]).toMatchObject({
@@ -358,7 +361,7 @@ describe("queued campaign cancellation", () => {
 
         expect(control.state).toBe("draft");
         expect(control.runToken).toBe(token);
-        expect(control.startedAt).toBeUndefined();
+        expect(control).not.toHaveProperty("startedAt");
         expect((yield* campaignMeta(campaign.id)).queuedAt).toBeUndefined();
         expect(yield* sendRows(campaign.id)).toHaveLength(0);
       }),
@@ -402,7 +405,7 @@ describe("queued campaign cancellation", () => {
 
         expect(control.state).toBe("draft");
         expect(control.runToken).toBe(token);
-        expect(control.startedAt).toBeUndefined();
+        expect(control).not.toHaveProperty("startedAt");
         expect(yield* sendRows(campaign.id)).toHaveLength(0);
       }),
     ));
@@ -446,7 +449,7 @@ describe("queued campaign cancellation", () => {
 
         expect(control.state).toBe("queued");
         expect(control.runToken).toBe(replacement);
-        expect(control.startedAt).toBeUndefined();
+        expect(control).not.toHaveProperty("startedAt");
       }),
     ));
 
@@ -573,7 +576,7 @@ describe("queued campaign cancellation", () => {
               const control = yield* storage.getCampaignControl(campaign.id);
 
               expect(control.state).toBe("queued");
-              expect(control.startedAt).toBeUndefined();
+              expect(control).not.toHaveProperty("startedAt");
 
               if (control.runToken === undefined) {
                 throw new Error(`queued campaign ${campaign.id} has no run token`);
@@ -595,7 +598,7 @@ describe("queued campaign cancellation", () => {
 
           expect(control.state).toBe("draft");
           expect(control.runToken).toBe(token);
-          expect(control.startedAt).toBeUndefined();
+          expect(control).not.toHaveProperty("startedAt");
           expect(yield* sendRows(campaign.id)).toHaveLength(0);
           expect(yield* dispatchFailureCount).toBe(0);
         }),
