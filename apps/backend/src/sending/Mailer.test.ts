@@ -1,9 +1,9 @@
-import * as Retry from "@distilled.cloud/aws/Retry";
+import type * as sesv2 from "@distilled.cloud/aws/sesv2";
+import { describe, expect, it } from "@effect/vitest";
 import * as AWS from "alchemy/AWS";
 import { fromCredentials } from "alchemy/AWS/Credentials";
 import { Effect, Layer, Logger, Redacted, Schema } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
-import { describe, expect, it } from "vitest";
 
 import { mintToken } from "../consent/Unsubscribe.ts";
 import { makeSend } from "./Mailer.ts";
@@ -130,11 +130,36 @@ const acceptedBody = JSON.stringify({ MessageId: "0100018f-deadbeef" });
 
 const parseJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
 
-const encodeJson = Schema.encodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
+const textPart = {
+  Data: `Hallo\n\nZeile zwei — ende${footerFor(unsubscribeUrl, postalAddress)}`,
+  Charset: "UTF-8",
+};
+
+/** The exact SES request a campaign send of `content` makes, carrying the given body parts. */
+const campaignRequest = (Body: sesv2.Body = { Text: textPart }) => ({
+  FromEmailAddress: "news@example.com",
+  Destination: { ToAddresses: ["sam@example.com"] },
+  Content: {
+    Simple: {
+      Subject: { Data: "Grüße 😀", Charset: "UTF-8" },
+      Body,
+      Headers: [
+        { Name: "List-Unsubscribe", Value: `<${unsubscribeUrl}>` },
+        { Name: "List-Unsubscribe-Post", Value: "List-Unsubscribe=One-Click" },
+      ],
+    },
+  },
+  EmailTags: [
+    { Name: "campaignId", Value: campaignSend.campaignId },
+    { Name: "sendId", Value: campaignSend.sendId },
+  ],
+  ConfigurationSetName: "emailer-mail",
+});
 
 describe("makeSend", () => {
-  it("submits one message with one recipient, the exact content and the bound configuration set", () =>
-    Effect.runPromise(
+  it.effect(
+    "submits one message with one recipient, the exact content and the bound configuration set",
+    () =>
       Effect.gen(function* () {
         const transport = transportReplying(() => awsJson(200, acceptedBody));
 
@@ -150,38 +175,13 @@ describe("makeSend", () => {
         expect(transport.sent[0]?.url).toBe(
           "https://email.eu-central-1.amazonaws.com/v2/email/outbound-emails",
         );
-
-        const request = yield* parseJson(transport.sent[0]?.body ?? "{}");
-
-        expect(request).toStrictEqual({
-          FromEmailAddress: "news@example.com",
-          Destination: { ToAddresses: ["sam@example.com"] },
-          Content: {
-            Simple: {
-              Subject: { Data: "Grüße 😀", Charset: "UTF-8" },
-              Body: {
-                Text: {
-                  Data: `Hallo\n\nZeile zwei — ende${footerFor(unsubscribeUrl, postalAddress)}`,
-                  Charset: "UTF-8",
-                },
-              },
-              Headers: [
-                { Name: "List-Unsubscribe", Value: `<${unsubscribeUrl}>` },
-                { Name: "List-Unsubscribe-Post", Value: "List-Unsubscribe=One-Click" },
-              ],
-            },
-          },
-          EmailTags: [
-            { Name: "campaignId", Value: campaignSend.campaignId },
-            { Name: "sendId", Value: campaignSend.sendId },
-          ],
-          ConfigurationSetName: "emailer-mail",
-        });
+        expect(yield* parseJson(transport.sent[0]?.body ?? "{}")).toStrictEqual(campaignRequest());
       }),
-    ));
+  );
 
-  it("submits HTML with the footer before the closing body tag, the text footer, and the same headers", () =>
-    Effect.runPromise(
+  it.effect(
+    "submits HTML with the footer before the closing body tag, the text footer, and the same headers",
+    () =>
       Effect.gen(function* () {
         const transport = transportReplying(() => awsJson(200, acceptedBody));
         const html = "<html><body><p>Hallo</p></body></html>";
@@ -192,255 +192,157 @@ describe("makeSend", () => {
           outcome: "accepted",
           messageId: "0100018f-deadbeef",
         });
-
-        const request = yield* parseJson(transport.sent[0]?.body ?? "{}");
-
-        expect(request).toStrictEqual({
-          FromEmailAddress: "news@example.com",
-          Destination: { ToAddresses: ["sam@example.com"] },
-          Content: {
-            Simple: {
-              Subject: { Data: "Grüße 😀", Charset: "UTF-8" },
-              Body: {
-                Text: {
-                  Data: `Hallo\n\nZeile zwei — ende${footerFor(unsubscribeUrl, postalAddress)}`,
-                  Charset: "UTF-8",
-                },
-                Html: {
-                  Data: `<html><body><p>Hallo</p>${htmlFooterFor(unsubscribeUrl, postalAddress)}</body></html>`,
-                  Charset: "UTF-8",
-                },
-              },
-              Headers: [
-                { Name: "List-Unsubscribe", Value: `<${unsubscribeUrl}>` },
-                { Name: "List-Unsubscribe-Post", Value: "List-Unsubscribe=One-Click" },
-              ],
+        expect(yield* parseJson(transport.sent[0]?.body ?? "{}")).toStrictEqual(
+          campaignRequest({
+            Text: textPart,
+            Html: {
+              Data: `<html><body><p>Hallo</p>${htmlFooterFor(unsubscribeUrl, postalAddress)}</body></html>`,
+              Charset: "UTF-8",
             },
-          },
-          EmailTags: [
-            { Name: "campaignId", Value: campaignSend.campaignId },
-            { Name: "sendId", Value: campaignSend.sendId },
-          ],
-          ConfigurationSetName: "emailer-mail",
-        });
+          }),
+        );
       }),
-    ));
+  );
 
-  it("sends a test with the same content and headers but no message tags", () =>
-    Effect.runPromise(
+  it.effect("sends a test with the same content and headers but no message tags", () =>
+    Effect.gen(function* () {
+      const transport = transportReplying(() => awsJson(200, acceptedBody));
+      const { EmailTags: _campaignTags, ...testRequest } = campaignRequest();
+
+      yield* sending(transport, content, { kind: "test" });
+
+      expect(yield* parseJson(transport.sent[0]?.body ?? "{}")).toStrictEqual(testRequest);
+    }),
+  );
+
+  it.effect("performs no HTTP call while the binding is being constructed", () =>
+    Effect.gen(function* () {
+      const transport = transportReplying(() => awsJson(200, acceptedBody));
+
+      yield* AWS.SES.SendEmail(identity, configurationSet).pipe(
+        Effect.provide(sendEmailLayer(transport)),
+      );
+
+      expect(transport.sent).toHaveLength(0);
+    }),
+  );
+
+  it.effect.each([
+    {
+      answer: "a retryable throttle",
+      status: 429,
+      errorType: "TooManyRequestsException",
+      rejectionCode: "rate-limited",
+    },
+    {
+      answer: "a definitive refusal",
+      status: 400,
+      errorType: "MessageRejected",
+      rejectionCode: "message-rejected",
+    },
+    {
+      answer: "the common throttling error",
+      status: 400,
+      errorType: "ThrottlingException",
+      rejectionCode: "rate-limited",
+    },
+  ] as const)(
+    "treats $answer ($errorType) as a $rejectionCode rejection after exactly one attempt",
+    ({ status, errorType, rejectionCode }) =>
       Effect.gen(function* () {
-        const transport = transportReplying(() => awsJson(200, acceptedBody));
+        const transport = transportReplying(() =>
+          awsJson(status, JSON.stringify({ message: "refused" }), errorType),
+        );
 
-        yield* sending(transport, content, { kind: "test" });
+        const outcome = yield* sending(transport);
 
-        const request = yield* parseJson(transport.sent[0]?.body ?? "{}");
+        expect(outcome).toStrictEqual({ outcome: "rejected", rejectionCode });
+        expect(transport.sent).toHaveLength(1);
+      }),
+  );
 
-        expect(request).toStrictEqual({
-          FromEmailAddress: "news@example.com",
+  // Live: Distilled's default retry backs off on the clock, so the retries this case counts
+  // happen only as real time passes within its two-second bound.
+  it.live("would retry the same answer without the operation-local policy", () =>
+    Effect.gen(function* () {
+      const transport = transportReplying(() =>
+        awsJson(429, JSON.stringify({ message: "rate exceeded" }), "TooManyRequestsException"),
+      );
+
+      yield* Effect.gen(function* () {
+        const send = yield* AWS.SES.SendEmail(identity, configurationSet);
+
+        return yield* send({
           Destination: { ToAddresses: ["sam@example.com"] },
-          Content: {
-            Simple: {
-              Subject: { Data: "Grüße 😀", Charset: "UTF-8" },
-              Body: {
-                Text: {
-                  Data: `Hallo\n\nZeile zwei — ende${footerFor(unsubscribeUrl, postalAddress)}`,
-                  Charset: "UTF-8",
-                },
-              },
-              Headers: [
-                { Name: "List-Unsubscribe", Value: `<${unsubscribeUrl}>` },
-                { Name: "List-Unsubscribe-Post", Value: "List-Unsubscribe=One-Click" },
-              ],
-            },
-          },
-          ConfigurationSetName: "emailer-mail",
+          Content: { Simple: { Subject: { Data: "x" }, Body: { Text: { Data: "y" } } } },
         });
-      }),
-    ));
+      }).pipe(Effect.provide(sendEmailLayer(transport)), Effect.timeout("2 seconds"), Effect.exit);
 
-  it("performs no HTTP call while the binding is being constructed", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const transport = transportReplying(() => awsJson(200, acceptedBody));
+      expect(transport.sent.length).toBeGreaterThan(1);
+    }),
+  );
 
-        yield* AWS.SES.SendEmail(identity, configurationSet).pipe(
-          Effect.provide(sendEmailLayer(transport)),
-        );
+  it.effect("keeps an opaque server error uncertain rather than calling it a rejection", () =>
+    Effect.gen(function* () {
+      const transport = transportReplying(() =>
+        awsJson(500, JSON.stringify({ message: "we broke" })),
+      );
 
-        expect(transport.sent).toHaveLength(0);
-      }),
-    ));
+      const outcome = yield* sending(transport);
 
-  it("makes exactly one attempt when SES answers with a retryable throttle", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const transport = transportReplying(() =>
-          awsJson(429, JSON.stringify({ message: "rate exceeded" }), "TooManyRequestsException"),
-        );
+      expect(outcome).toStrictEqual({ outcome: "uncertain" });
+    }),
+  );
 
-        const outcome = yield* sending(transport);
+  it.effect("keeps a lost connection uncertain", () =>
+    Effect.gen(function* () {
+      const transport = transportReplying(() => {
+        throw new TypeError("fetch failed: ECONNREFUSED");
+      });
 
-        expect(outcome).toStrictEqual({
-          outcome: "rejected",
-          rejectionCode: "rate-limited",
-        });
-        expect(transport.sent).toHaveLength(1);
-      }),
-    ));
+      const messages: Array<unknown> = [];
+      const outcome = yield* sending(transport).pipe(Effect.provide(loggedTo(messages)));
 
-  it("would retry the same answer without the operation-local policy", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const transport = transportReplying(() =>
-          awsJson(429, JSON.stringify({ message: "rate exceeded" }), "TooManyRequestsException"),
-        );
+      expect(outcome).toStrictEqual({ outcome: "uncertain" });
+      expect(messages).toMatchObject([["submission uncertain", { reason: "transport" }]]);
+      expect(transport.sent).toHaveLength(1);
+    }),
+  );
 
-        yield* Effect.gen(function* () {
-          const send = yield* AWS.SES.SendEmail(identity, configurationSet);
+  it.effect("keeps an acceptance without a MessageId uncertain", () =>
+    Effect.gen(function* () {
+      const transport = transportReplying(() => awsJson(200, JSON.stringify({})));
 
-          return yield* send({
-            Destination: { ToAddresses: ["sam@example.com"] },
-            Content: { Simple: { Subject: { Data: "x" }, Body: { Text: { Data: "y" } } } },
-          });
-        }).pipe(
-          Effect.provide(sendEmailLayer(transport)),
-          Effect.timeout("2 seconds"),
-          Effect.exit,
-        );
+      const messages: Array<unknown> = [];
+      const outcome = yield* sending(transport).pipe(Effect.provide(loggedTo(messages)));
 
-        expect(transport.sent.length).toBeGreaterThan(1);
-      }),
-    ));
+      expect(outcome).toStrictEqual({ outcome: "uncertain" });
+      expect(messages).toMatchObject([["submission uncertain", { reason: "malformed-response" }]]);
+    }),
+  );
 
-  it("treats a definitive refusal as a rejection with a bounded code", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const transport = transportReplying(() =>
-          awsJson(400, JSON.stringify({ message: "not verified" }), "MessageRejected"),
-        );
-
-        const outcome = yield* sending(transport);
-
-        expect(outcome).toStrictEqual({
-          outcome: "rejected",
-          rejectionCode: "message-rejected",
-        });
-        expect(transport.sent).toHaveLength(1);
-      }),
-    ));
-
-  it("treats the common throttling error as a rejection, not as an uncertain outcome", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const transport = transportReplying(() =>
-          awsJson(400, JSON.stringify({ message: "slow down" }), "ThrottlingException"),
-        );
-
-        const outcome = yield* sending(transport);
-
-        expect(outcome).toStrictEqual({
-          outcome: "rejected",
-          rejectionCode: "rate-limited",
-        });
-        expect(transport.sent).toHaveLength(1);
-      }),
-    ));
-
-  it("keeps an opaque server error uncertain rather than calling it a rejection", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const transport = transportReplying(() =>
-          awsJson(500, JSON.stringify({ message: "we broke" })),
-        );
-
-        const outcome = yield* sending(transport);
-
-        expect(outcome).toStrictEqual({ outcome: "uncertain" });
-      }),
-    ));
-
-  it("keeps a lost connection uncertain", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const transport = transportReplying(() => {
-          throw new TypeError("fetch failed: ECONNREFUSED");
-        });
-
-        const messages: Array<unknown> = [];
-        const outcome = yield* sending(transport).pipe(Effect.provide(loggedTo(messages)));
-
-        expect(outcome).toStrictEqual({ outcome: "uncertain" });
-        expect(messages).toMatchObject([["submission uncertain", { reason: "transport" }]]);
-        expect(transport.sent).toHaveLength(1);
-      }),
-    ));
-
-  it("keeps an acceptance without a MessageId uncertain", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const transport = transportReplying(() => awsJson(200, JSON.stringify({})));
-
-        const messages: Array<unknown> = [];
-        const outcome = yield* sending(transport).pipe(Effect.provide(loggedTo(messages)));
-
-        expect(outcome).toStrictEqual({ outcome: "uncertain" });
-        expect(messages).toMatchObject([
-          ["submission uncertain", { reason: "malformed-response" }],
-        ]);
-      }),
-    ));
-
-  it.each([
+  it.effect.each([
     ["a campaign send", campaignSend],
     ["a test send", { kind: "test" } satisfies SendPurpose],
-  ])(
+  ] as const)(
     "logs why %s ended uncertain, without the recipient's address, the body or credentials",
-    (_label, purpose) =>
-      Effect.runPromise(
-        Effect.gen(function* () {
-          const transport = transportReplying(() =>
-            awsJson(500, JSON.stringify({ message: `Unavailable while sending to ${recipient}` })),
-          );
-
-          const messages: Array<unknown> = [];
-
-          const outcome = yield* sending(transport, content, purpose).pipe(
-            Effect.provide(loggedTo(messages)),
-          );
-
-          expect(outcome).toStrictEqual({ outcome: "uncertain" });
-          expect(messages).toStrictEqual([
-            ["submission uncertain", { ...purpose, reason: "transport", cause: "InternalError" }],
-          ]);
-
-          const logged = yield* encodeJson(messages);
-
-          expect(logged).not.toContain(recipient);
-          expect(logged).not.toContain(content.text);
-          expect(logged).not.toContain("not-a-real-secret");
-        }),
-      ),
-  );
-});
-
-describe("Retry.none", () => {
-  it("is applied to the submission itself, not to the binding's construction", () =>
-    Effect.runPromise(
+    ([_label, purpose]) =>
       Effect.gen(function* () {
         const transport = transportReplying(() =>
-          awsJson(429, JSON.stringify({ message: "rate exceeded" }), "TooManyRequestsException"),
+          awsJson(500, JSON.stringify({ message: `Unavailable while sending to ${recipient}` })),
         );
 
-        yield* Effect.gen(function* () {
-          const send = yield* AWS.SES.SendEmail(identity, configurationSet);
+        const messages: Array<unknown> = [];
 
-          return yield* send({
-            Destination: { ToAddresses: ["sam@example.com"] },
-            Content: { Simple: { Subject: { Data: "x" }, Body: { Text: { Data: "y" } } } },
-          }).pipe(Retry.none);
-        }).pipe(Effect.provide(sendEmailLayer(transport)), Effect.exit);
+        const outcome = yield* sending(transport, content, purpose).pipe(
+          Effect.provide(loggedTo(messages)),
+        );
 
-        expect(transport.sent).toHaveLength(1);
+        expect(outcome).toStrictEqual({ outcome: "uncertain" });
+        // Exact, so neither the address, the body nor a credential can be in it.
+        expect(messages).toStrictEqual([
+          ["submission uncertain", { ...purpose, reason: "transport", cause: "InternalError" }],
+        ]);
       }),
-    ));
+  );
 });

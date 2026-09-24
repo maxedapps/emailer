@@ -1,7 +1,7 @@
 import * as scheduler from "@distilled.cloud/aws/scheduler";
+import { describe, expect, it } from "@effect/vitest";
 import type * as AWS from "alchemy/AWS";
 import { Effect, Result } from "effect";
-import { describe, expect, it } from "vitest";
 
 import { campaignSchedule } from "./CampaignSchedule.ts";
 import { decodeDispatchMessage, encodeDispatchMessage } from "../sending/Dispatch.ts";
@@ -50,51 +50,49 @@ const awsDouble = (): AwsDouble => {
 const adapterFor = (aws: AwsDouble) => campaignSchedule(aws.create, Effect.succeed(queueArn));
 
 describe("campaignSchedule", () => {
-  it("creates a generation-named one-shot schedule that deletes itself after it fires", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const aws = awsDouble();
-        const schedules = adapterFor(aws);
+  it.effect("creates a generation-named one-shot schedule that deletes itself after it fires", () =>
+    Effect.gen(function* () {
+      const aws = awsDouble();
+      const schedules = adapterFor(aws);
 
-        yield* schedules.create(campaignId, runToken, sendAt);
+      yield* schedules.create(campaignId, runToken, sendAt);
 
-        expect(aws.created).toHaveLength(1);
+      expect(aws.created).toHaveLength(1);
 
-        const request = aws.created[0];
+      const request = aws.created[0];
 
-        expect(request?.Name).toBe(runToken);
-        expect(request?.ClientToken).toBe(runToken);
-        expect(request?.ScheduleExpression).toBe(`at(${sendAt.slice(0, 19)})`);
-        expect(request?.ScheduleExpressionTimezone).toBe("UTC");
-        expect(request?.ActionAfterCompletion).toBe("DELETE");
-        expect(request?.Target.Arn).toBe(queueArn);
-        expect(request?.Target.Input).toBe(yield* encodeDispatchMessage({ campaignId, runToken }));
-        expect(yield* decodeDispatchMessage(request?.Target.Input ?? "")).toStrictEqual({
-          campaignId,
-          runToken,
-        });
-      }),
-    ));
+      expect(request?.Name).toBe(runToken);
+      expect(request?.ClientToken).toBe(runToken);
+      expect(request?.ScheduleExpression).toBe(`at(${sendAt.slice(0, 19)})`);
+      expect(request?.ScheduleExpressionTimezone).toBe("UTC");
+      expect(request?.ActionAfterCompletion).toBe("DELETE");
+      expect(request?.Target.Arn).toBe(queueArn);
+      expect(request?.Target.Input).toBe(yield* encodeDispatchMessage({ campaignId, runToken }));
+      expect(yield* decodeDispatchMessage(request?.Target.Input ?? "")).toStrictEqual({
+        campaignId,
+        runToken,
+      });
+    }),
+  );
 
-  it("surfaces a create error as schedule unavailable", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const aws = awsDouble();
-        const schedules = adapterFor(aws);
-        const conflict = new scheduler.ConflictException({ message: "exists" });
+  it.effect("surfaces a create error as schedule unavailable", () =>
+    Effect.gen(function* () {
+      const aws = awsDouble();
+      const schedules = adapterFor(aws);
+      const conflict = new scheduler.ConflictException({ message: "exists" });
 
-        aws.failCreate(conflict);
+      aws.failCreate(conflict);
 
-        const attempt = yield* Effect.result(schedules.create(campaignId, runToken, sendAt));
+      const attempt = yield* Effect.result(schedules.create(campaignId, runToken, sendAt));
 
-        expect(Result.isFailure(attempt) ? attempt.failure : undefined).toStrictEqual(
-          new StorageFailure({
-            operationId: "schedule",
-            reason: "unavailable",
-            cause: conflict,
-          }),
-        );
-        expect(aws.created).toHaveLength(1);
-      }),
-    ));
+      expect(Result.isFailure(attempt) ? attempt.failure : undefined).toStrictEqual(
+        new StorageFailure({
+          operationId: "schedule",
+          reason: "unavailable",
+          cause: conflict,
+        }),
+      );
+      expect(aws.created).toHaveLength(1);
+    }),
+  );
 });
