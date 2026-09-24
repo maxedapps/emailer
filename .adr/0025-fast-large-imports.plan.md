@@ -7,7 +7,7 @@
 
 **Done when:**
 
-- `emailer lists import` takes a file of any size, sends 20-contact calls with 8 in flight, and retries transient failures;
+- `emailer lists import` takes a JSON or CSV file of any size, sends 20-contact calls with 8 in flight, and retries transient failures;
 - the import reads the list once per call instead of checking it inside the transaction;
 - the README describes the new behaviour and limits;
 - the live gate passes, and prod runs the result.
@@ -18,7 +18,7 @@
 - the member key layout;
 - `addMember` and `removeMember`, which keep their transactional list check;
 - asynchronous import jobs;
-- import formats other than today's JSON (see Open questions).
+- the throttle-reply decode fix (the empty 500), which belongs to typed-errors T7.
 
 ## Before starting
 
@@ -69,6 +69,7 @@ Status: Not started
 - **`ImportContactsFile`:** the same entry schema, non-empty, no address twice anywhere, and no size cap.
 - **`ImportContactsPayload`:** stays the API body, with the 20-contact cap.
 - Both share the entry schema and the distinct-address check instead of repeating them.
+- The entry schema is exported for T5's per-row checks.
 
 **Verify (`Schemas.test.ts`):**
 
@@ -131,13 +132,51 @@ Status: Not started
 
 **Cost:** none per contact. A file costs what its batches cost.
 
-### T5 — Docs and ADRs
+### T5 — CSV files
+
+Status: Not started
+
+- **Dependency:** `csv-parse` (7.0.2, no dependencies, bundled types), added to the catalog and to `apps/cli`.
+- **Where:** a new `apps/cli/src/CsvContacts.ts`. `lists import`'s file flag reads a `.csv` path through it; any other path stays JSON.
+- **Parsing:** `parse` from `csv-parse/sync` with:
+  - `bom: true`;
+  - `skip_empty_lines: true`;
+  - `info: true`, for each record's line.
+- **Header:**
+  - `email` is required and `name` is optional, both matched case-insensitively;
+  - every other column is an attribute key, verbatim;
+  - a column named twice, or a missing `email` column, is rejected before any row is read.
+- **Rows:**
+  - empty cells are left out;
+  - each row is decoded with the exported entry schema, and a failure reads `line N: <message>`;
+  - the result is checked against `ImportContactsFile`, so duplicates across rows are rejected as in JSON.
+- **Command text:** the `--file` description and an example name CSV.
+
+**Verify (`CsvContacts.test.ts`):**
+
+- header names match regardless of case;
+- a quoted field holding a comma and a line break is read whole;
+- a byte-order mark is stripped;
+- empty cells produce no attribute and no name;
+- a missing `email` column is rejected;
+- a column named twice is rejected;
+- an invalid address names its line;
+- blank lines are skipped;
+- one mailbox on two rows is rejected.
+
+**Verify (`Lists.test.ts`):** a CSV file imports, and its attributes reach the service.
+
+**Cost:** none.
+
+### T6 — Docs and ADRs
 
 Status: Not started
 
 - **README:**
   - drop "An import takes at most 20 contacts per call, so a larger file needs a loop.";
-  - the quickstart's "at most 20 contacts per file" goes;
+  - "JSON imports" becomes "JSON and CSV imports";
+  - the quickstart's "at most 20 contacts per file" goes, and it shows the CSV form next to the JSON one;
+  - the CSV rules: header, `email` / `name`, other columns as attributes, empty cells left out;
   - the commands table: `lists import` creates or finds the file's contacts and adds them to the list;
   - Limits: `lists import` takes any file size, sends 20 contacts per API call, and rejects an address appearing twice in a file;
   - Behavior: about 200 contacts a second per list; transient failures are retried; after an interruption, running the same file again completes it.
@@ -148,7 +187,7 @@ Status: Not started
 
 **Cost:** none.
 
-### T6 — Live gate
+### T7 — Live gate
 
 Status: Not started
 
@@ -160,7 +199,7 @@ Status: Not started
   - run the CLI as `node --env-file=.env.test apps/cli/src/main.ts`, never as `pnpm emailer`, which loads `.env`: in an operator checkout that is prod;
   - before the first call, confirm `EMAILER_API_URL` equals this deploy's `apiUrl` output.
 - **Import:**
-  - write a file of 10,000 labelled simulator addresses;
+  - write a CSV file of 10,000 labelled simulator addresses, with a `name` and one attribute column;
   - import it into a fresh list;
   - start at least a minute after the suite has finished, so its writes and conflicts stay out of the gate's metric window.
 - **Pass criteria:**
@@ -181,20 +220,22 @@ Status: Not started
   - stop at the first unexpected failure instead of repeating.
 - **Teardown:** destroy the stage. The inventory shows no functions, table, queues, log groups or alarms.
 
-### T7 — Prod rollout (after merge, with the user's go-ahead)
+### T8 — Prod rollout (after merge, with the user's go-ahead)
 
 Status: Not started
 
 - Deploy prod as the README describes, and confirm the API function's `CodeSha256` changed.
 - **Smoke test:**
-  - import a three-address labelled simulator file into a throwaway list;
+  - import a three-address labelled simulator CSV file into a throwaway list;
   - check the output;
   - delete the list and the three contacts.
 
 ## Open questions
 
-1. **Input format.** Should `lists import` also take a CSV export, or stay JSON only?
-2. **The empty 500 under throttling.**
-   - **The bug:** a throttled `TransactWriteItems` sometimes fails to decode DynamoDB's error reply ("HttpClientError: Decode error (400 POST dynamodb) … incorrect header check" from undici's gunzip), and the API answers an empty 500.
-   - **Reproduction:** 16 imports in flight into one fresh list throttle within seconds.
-   - **Where to fix it:** fold it into typed-errors T7, which owns the AWS transport and retry layer and its transport test, or add it here as a task after the merge. It does not block this plan, because the CLI retries 500s.
+None. On 2026-09-24 the user settled:
+
+- **Formats:** CSV is supported beside JSON, with extra columns as attributes.
+- **The empty 500 under throttling** belongs to typed-errors T7.
+  - **The bug:** a throttled `TransactWriteItems` sometimes fails to decode DynamoDB's error reply ("HttpClientError: Decode error (400 POST dynamodb) … incorrect header check" from undici's gunzip), and the API answers an empty 500.
+  - **Reproduction:** 16 imports in flight into one fresh list throttle within seconds.
+  - **Here:** this plan relies only on the CLI retrying 500s.
