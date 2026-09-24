@@ -89,11 +89,7 @@ const htmlPart = (html: string | undefined) =>
 
 const tokenOf = Effect.map(HttpRouter.params, (params) => params["token"] ?? "");
 
-interface PreviewSender {
-  readonly sender: string;
-  readonly senderName: Option.Option<string>;
-  readonly postalAddress: string;
-}
+type PreviewSender = Effect.Success<typeof senderSettings>;
 
 /** The From line as a mail client shows it, not in the encoded form SES is sent. */
 const displayedFrom = (settings: PreviewSender): string =>

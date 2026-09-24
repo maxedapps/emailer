@@ -1458,7 +1458,7 @@ describe("settleRecipient", () => {
             sendId,
             contactId,
             {
-              state: "accepted",
+              outcome: "accepted",
               messageId: "0100019",
             },
             now,
@@ -1502,7 +1502,7 @@ describe("settleRecipient", () => {
           sendId,
           contactId,
           {
-            state: "rejected",
+            outcome: "rejected",
             rejectionCode: "message-rejected",
           },
           now,
@@ -1527,7 +1527,13 @@ describe("settleRecipient", () => {
       Effect.gen(function* () {
         const { table, storage } = withStorage({});
 
-        yield* storage.settleRecipient(campaignId, sendId, contactId, { state: "uncertain" }, now);
+        yield* storage.settleRecipient(
+          campaignId,
+          sendId,
+          contactId,
+          { outcome: "uncertain" },
+          now,
+        );
 
         const update = table.transactionRequests[0]?.TransactItems[0]?.Update;
 
@@ -1554,7 +1560,7 @@ describe("settleRecipient", () => {
             sendId,
             contactId,
             {
-              state: "accepted",
+              outcome: "accepted",
               messageId: "0100019",
             },
             now,

@@ -8,6 +8,7 @@
 - Extended by: [ADR-0010](0010-aligned-mail-from-spf-and-dmarc.md) — MAIL FROM, SPF and DMARC records join the retained inventory.
 - Superseded in part: [ADR-0017](0017-adopted-root-domain-sending-identity.md) — the `mail.example.com` domain choice and "created once": the root-domain identity is adopted, not created.
 - Superseded in part: [ADR-0018](0018-optional-dns-management.md) — "published **once**, operationally" and alternative 5: with `EMAILER_DNS` the stack declares the records itself.
+- Amended: 2026-09-24, in the simplification plan (`work/simplify.md` T4) — clerical: the mailer answers an uncertain submission with an `uncertain` outcome, no longer a `SubmissionUncertain` failure, so identity drift is reported as that outcome.
 
 ## Context
 
@@ -49,7 +50,7 @@ The sending identity is **account-level infrastructure, created once and never d
 - **Partly documented path.** The References page says a reference can be passed "anywhere the real thing is accepted", but no Alchemy example passes one into an AWS binding during a Lambda's construction phase (F16). Construction and plan-time resolution through `SendEmail` were demonstrated with a local probe on 2026-09-14. Deploy, the IAM grant and a verifying send are proven by the plan's go/no-go gate, not assumed.
 - **SPF and DMARC.** Published under ADR-0010; see there for the records.
 - **ADR-0004's DKIM-coverage confirmation must be re-established.** The 2026-09-12 check read `List-Unsubscribe` coverage from the `d=example.com` signature, which never verified, and RFC 8058 requires a _valid_ signature. The gate re-confirms coverage on a verifying `mail.example.com` signature.
-- **Changing the domain replaces the identity.** `EMAILER_SENDER_IDENTITY` is the prop whose change plans a replacement, so deploying `EmailerSending` with a different value plans a replacement. That creates a new identity and leaves the old one retained but untracked. If the two stacks' values drift, the Emailer's From check passes on its own value, but the role's grant covers only the referenced identity, so the send is denied (IAM `AccessDenied`, reported as `SubmissionUncertain`) and no mail goes out.
+- **Changing the domain replaces the identity.** `EMAILER_SENDER_IDENTITY` is the prop whose change plans a replacement, so deploying `EmailerSending` with a different value plans a replacement. That creates a new identity and leaves the old one retained but untracked. If the two stacks' values drift, the Emailer's From check passes on its own value, but the role's grant covers only the referenced identity, so the send is denied (IAM `AccessDenied`, reported as an uncertain outcome) and no mail goes out.
 - **IAM scope.** The send binding's grant moves from `identity/*@example.com` to `identity/*@mail.example.com`.
 - **Another project on this account shows the same pattern.** Another project's `mail.other.example.net` identity was recreated nine times across its `prod`, `dev` and `dev-max` stages. It is outside this decision.
 

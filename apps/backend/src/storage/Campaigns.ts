@@ -82,10 +82,14 @@ const decodeStoredCampaignBody = Schema.decodeUnknownEffect(StoredCampaignBody);
 
 const decodeSubmission = Schema.decodeUnknownEffect(Schemas.CampaignSubmission);
 
-export type RecipientSettlement =
-  | { readonly state: "accepted"; readonly messageId: string }
-  | { readonly state: "rejected"; readonly rejectionCode: Schemas.RejectionCode }
-  | { readonly state: "uncertain" };
+/**
+ * What one SES submission came to: the mailer answers it, and a send row is settled from it.
+ * `uncertain` means no definite answer came back, so whether the message went out is unknown.
+ */
+export type SubmissionOutcome =
+  | { readonly outcome: "accepted"; readonly messageId: string }
+  | { readonly outcome: "rejected"; readonly rejectionCode: Schemas.RejectionCode }
+  | { readonly outcome: "uncertain" };
 
 interface CampaignRun {
   readonly listId: string;
@@ -184,8 +188,8 @@ const sendingAndRun = (runToken: string) => ({
   ":run": str(runToken),
 });
 
-const settlementWrite = (settlement: RecipientSettlement) => {
-  switch (settlement.state) {
+const settlementWrite = (settlement: SubmissionOutcome) => {
+  switch (settlement.outcome) {
     case "accepted":
       return {
         expression: "SET #state = :state, finishedAt = :finishedAt, messageId = :messageId",
@@ -583,7 +587,7 @@ export const campaignOperations = (
     id: string,
     sendId: string,
     contactId: string,
-    settlement: RecipientSettlement,
+    settlement: SubmissionOutcome,
     now: string,
   ) {
     const terminal = settlementWrite(settlement);

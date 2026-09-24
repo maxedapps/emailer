@@ -12,23 +12,22 @@ import {
   Result,
 } from "effect";
 import { TestClock } from "effect/testing";
-import { RateLimiter } from "effect/unstable/persistence";
 import { describe, expect, it } from "vitest";
 
 import { unsubscribeLink } from "../consent/Unsubscribe.ts";
 import { memberPageSize, runSlice, SliceOverrun } from "./Dispatching.ts";
 import { CampaignWake } from "./Dispatch.ts";
-import { Mailer, SubmissionUncertain } from "./Mailer.ts";
+import { Mailer } from "./Mailer.ts";
 import { SendGuard } from "./SendGuard.ts";
 import { AudienceStore } from "../storage/Audience.ts";
 import { CampaignStore } from "../storage/Campaigns.ts";
 import { unusedAudience, unusedCampaigns } from "../storage/Testing.ts";
 
 import type { AddressStatus, PauseReason, SkipReason } from "@emailer/api/Schemas";
-import type { SendPurpose, SubmissionOutcome } from "./Mailer.ts";
+import type { SendPurpose } from "./Mailer.ts";
 import type { MessageContent } from "./Message.ts";
 import type { SendAllowance } from "./SendGuard.ts";
-import type { RecipientSettlement } from "../storage/Campaigns.ts";
+import type { SubmissionOutcome } from "../storage/Campaigns.ts";
 
 const campaignId = "0195f0a0-1111-4222-8333-4444444ca409";
 
@@ -62,11 +61,7 @@ const subject = "Release notes";
 
 const text = "Hello there";
 
-const defaultGuard: SendAllowance = {
-  limit: 8,
-  dailyExhausted: false,
-  halted: false,
-};
+const defaultGuard: SendAllowance = { limit: 8 };
 
 const zeros = { accepted: 0, bounced: 0, complained: 0 };
 
@@ -104,7 +99,7 @@ interface World {
   counters: { accepted: number; rejected: number; uncertain: number; skipped: number };
   claims: Array<string>;
   skips: Array<{ readonly contactId: string; readonly reason: SkipReason }>;
-  settlements: Array<{ readonly contactId: string; readonly settlement: RecipientSettlement }>;
+  settlements: Array<{ readonly contactId: string; readonly settlement: SubmissionOutcome }>;
   checkpoints: Array<{
     readonly sliceId: string;
     readonly previous: string | undefined;
@@ -252,19 +247,19 @@ const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> 
             sendId: row.sendId,
             contactId,
             recipient: row.recipient,
-            state: settlement.state,
+            state: settlement.outcome,
           };
 
-          if (settlement.state === "accepted") {
+          if (settlement.outcome === "accepted") {
             world.rows.set(contactId, { ...settled, messageId: settlement.messageId });
-          } else if (settlement.state === "rejected") {
+          } else if (settlement.outcome === "rejected") {
             world.rows.set(contactId, { ...settled, rejectionCode: settlement.rejectionCode });
           } else {
             world.rows.set(contactId, settled);
           }
 
           world.settlements.push({ contactId, settlement });
-          world.counters[settlement.state] += 1;
+          world.counters[settlement.outcome] += 1;
 
           return "settled" as const;
         }),
@@ -307,47 +302,30 @@ const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> 
     }),
   );
 
-interface LimiterDouble {
-  readonly layer: Layer.Layer<RateLimiter.RateLimiter>;
-  readonly consumes: Array<{
-    readonly key: string;
-    readonly window: Duration.Input;
-    readonly limit: number;
-    readonly onExceeded: "delay" | "fail" | undefined;
-    readonly algorithm: "fixed-window" | "token-bucket" | undefined;
-  }>;
+interface GuardDouble {
+  readonly layer: Layer.Layer<SendGuard>;
+  /** The limit each pacing slot was taken with. */
+  readonly slots: Array<number>;
 }
 
-const limiterDouble = (delays: ReadonlyArray<Duration.Duration> = []): LimiterDouble => {
-  const consumes: LimiterDouble["consumes"] = [];
+const guardDouble = (
+  allowance: SendAllowance,
+  delays: ReadonlyArray<Duration.Duration> = [],
+): GuardDouble => {
+  const slots: Array<number> = [];
   const remaining = [...delays];
 
-  const layer = Layer.succeed(RateLimiter.RateLimiter)({
-    [RateLimiter.TypeId]: RateLimiter.TypeId,
-    consume: (options) =>
+  const layer = Layer.succeed(SendGuard)({
+    current: Effect.succeed(allowance),
+    slot: (limit) =>
       Effect.sync(() => {
-        consumes.push({
-          key: options.key,
-          window: options.window,
-          limit: options.limit,
-          onExceeded: options.onExceeded,
-          algorithm: options.algorithm,
-        });
+        slots.push(limit);
 
-        return {
-          delay: remaining.shift() ?? Duration.zero,
-          limit: options.limit,
-          remaining: options.limit,
-          resetAfter: Duration.zero,
-        };
+        return remaining.shift() ?? Duration.zero;
       }),
-    adaptiveConsume: () =>
-      Effect.die(new Error("RateLimiter.adaptiveConsume is not exercised by this test")),
-    adaptiveFeedback: () =>
-      Effect.die(new Error("RateLimiter.adaptiveFeedback is not exercised by this test")),
   });
 
-  return { layer, consumes };
+  return { layer, slots };
 };
 
 interface SentMessage extends MessageContent {
@@ -361,24 +339,16 @@ interface MailerDouble {
   readonly sent: Array<SentMessage>;
 }
 
-const mailerDouble = (
-  outcomes: ReadonlyArray<SubmissionOutcome | SubmissionUncertain> = [],
-): MailerDouble => {
+const mailerDouble = (outcomes: ReadonlyArray<SubmissionOutcome> = []): MailerDouble => {
   const sent: Array<SentMessage> = [];
   const remaining = [...outcomes];
 
   const layer = Layer.succeed(Mailer)({
     send: (recipient, content, unsubscribeUrl, purpose) =>
-      Effect.gen(function* () {
+      Effect.sync(() => {
         sent.push({ recipient, ...content, unsubscribeUrl, purpose });
 
-        const next = remaining.shift();
-
-        if (next instanceof SubmissionUncertain) {
-          return yield* next;
-        }
-
-        return next ?? { outcome: "accepted" as const, messageId: "ses-message" };
+        return remaining.shift() ?? { outcome: "accepted" as const, messageId: "ses-message" };
       }),
   });
 
@@ -418,17 +388,15 @@ interface Scenario {
   readonly guard?: SendAllowance;
   readonly run?: { accepted: number; bounced: number; complained: number };
   readonly delays?: ReadonlyArray<Duration.Duration>;
-  readonly outcomes?: ReadonlyArray<SubmissionOutcome | SubmissionUncertain>;
+  readonly outcomes?: ReadonlyArray<SubmissionOutcome>;
 }
 
 interface Fixture {
   readonly world: World;
   readonly wake: WakeDouble;
   readonly mailer: MailerDouble;
-  readonly limiter: LimiterDouble;
-  readonly layer: Layer.Layer<
-    CampaignWake | AudienceStore | CampaignStore | Mailer | RateLimiter.RateLimiter | SendGuard
-  >;
+  readonly guard: GuardDouble;
+  readonly layer: Layer.Layer<CampaignWake | AudienceStore | CampaignStore | Mailer | SendGuard>;
 }
 
 const fixture = (scenario: Scenario = {}): Fixture => {
@@ -461,20 +429,18 @@ const fixture = (scenario: Scenario = {}): Fixture => {
 
   const wake = wakeDouble();
   const mailer = mailerDouble(scenario.outcomes);
-  const limiter = limiterDouble(scenario.delays);
-  const guard = scenario.guard ?? defaultGuard;
+  const guard = guardDouble(scenario.guard ?? defaultGuard, scenario.delays);
 
   return {
     world,
     wake,
     mailer,
-    limiter,
+    guard,
     layer: Layer.mergeAll(
       storageLayer(world),
       wake.layer,
       mailer.layer,
-      limiter.layer,
-      Layer.succeed(SendGuard)({ current: Effect.succeed(guard) }),
+      guard.layer,
       NodeCrypto.layer,
       configurationOf(scenario.env ?? unsubscribeEnv),
     ),
@@ -528,16 +494,7 @@ describe("runSlice", () => {
             memberA.email,
             memberB.email,
           ]);
-          expect(fix.limiter.consumes).toHaveLength(2);
-          expect(
-            fix.limiter.consumes.every((consumed) => consumed.limit === defaultGuard.limit),
-          ).toBe(true);
-          expect(fix.limiter.consumes[0]).toMatchObject({
-            key: "ses-send",
-            window: "1 second",
-            onExceeded: "delay",
-            algorithm: "fixed-window",
-          });
+          expect(fix.guard.slots).toStrictEqual([defaultGuard.limit, defaultGuard.limit]);
           expect(fix.world.checkpoints).toMatchObject([{ previous: undefined, next: memberC.id }]);
           expect(fix.wake.messages).toStrictEqual([{ campaignId, runToken }]);
           expect(fix.world.completed).toBe(0);
@@ -660,7 +617,7 @@ describe("runSlice", () => {
 
           expect(fix.world.claims).toHaveLength(0);
           expect(fix.mailer.sent).toHaveLength(0);
-          expect(fix.limiter.consumes).toHaveLength(2);
+          expect(fix.guard.slots).toHaveLength(2);
           expect(fix.world.completed).toBe(1);
           expect(fix.wake.messages).toHaveLength(0);
         }),
@@ -841,10 +798,8 @@ describe("runSlice", () => {
           successOf(yield* Fiber.join(fiber));
 
           expect(fix.mailer.sent).toHaveLength(4);
-          expect(fix.limiter.consumes).toHaveLength(4);
-          expect(
-            fix.limiter.consumes.every((consumed) => consumed.limit === defaultGuard.limit),
-          ).toBe(true);
+          expect(fix.guard.slots).toHaveLength(4);
+          expect(fix.guard.slots.every((limit) => limit === defaultGuard.limit)).toBe(true);
           expect(fix.world.counters.rejected).toBe(1);
           expect(fix.world.rows.get(memberA.id)?.state).toBe("rejected");
           expect(fix.world.paused).toStrictEqual([{ reason: "rate-limited", cursor: memberA.id }]);
@@ -871,9 +826,9 @@ describe("runSlice", () => {
           successOf(yield* Fiber.join(fiber));
 
           expect(fix.mailer.sent).toHaveLength(2);
-          expect(fix.limiter.consumes).toHaveLength(2);
+          expect(fix.guard.slots).toHaveLength(2);
           expect(fix.world.settlements).toStrictEqual([
-            { contactId: memberA.id, settlement: { state: "accepted", messageId: "second" } },
+            { contactId: memberA.id, settlement: { outcome: "accepted", messageId: "second" } },
           ]);
           expect(fix.world.paused).toStrictEqual([]);
         }),
@@ -886,7 +841,7 @@ describe("runSlice", () => {
         Effect.gen(function* () {
           const fix = fixture({
             members: [memberA, memberB],
-            outcomes: [new SubmissionUncertain({ reason: "timeout", cause: "slow" })],
+            outcomes: [{ outcome: "uncertain" }],
           });
 
           successOf(yield* runSliceNow(fix));
@@ -896,8 +851,11 @@ describe("runSlice", () => {
             memberB.email,
           ]);
           expect(fix.world.settlements).toStrictEqual([
-            { contactId: memberA.id, settlement: { state: "uncertain" } },
-            { contactId: memberB.id, settlement: { state: "accepted", messageId: "ses-message" } },
+            { contactId: memberA.id, settlement: { outcome: "uncertain" } },
+            {
+              contactId: memberB.id,
+              settlement: { outcome: "accepted", messageId: "ses-message" },
+            },
           ]);
           expect(fix.world.paused).toStrictEqual([]);
           expect(fix.world.completed).toBe(1);
@@ -931,7 +889,7 @@ describe("runSlice", () => {
         Effect.gen(function* () {
           const fix = fixture({
             cursor: memberA.id,
-            guard: { limit: 8, dailyExhausted: true, halted: false },
+            guard: { limit: 8, refusal: "daily-quota" },
           });
 
           successOf(yield* runSliceNow(fix));
@@ -959,13 +917,13 @@ describe("runSlice", () => {
       ),
     ));
 
-  it("consumes the limiter once per attempt with the run's limit", () =>
+  it("takes one pacing slot per attempt with the run's limit", () =>
     Effect.runPromise(
       onTestClock(
         Effect.gen(function* () {
           const fix = fixture({
             members: [memberA, memberB],
-            guard: { limit: 3, dailyExhausted: false, halted: false },
+            guard: { limit: 3 },
             outcomes: [
               { outcome: "rejected", rejectionCode: "message-rejected" },
               { outcome: "accepted", messageId: "ses-message" },
@@ -974,27 +932,27 @@ describe("runSlice", () => {
 
           successOf(yield* runSliceNow(fix));
 
-          expect(fix.limiter.consumes.map((consumed) => consumed.limit)).toStrictEqual([3, 3]);
+          expect(fix.guard.slots).toStrictEqual([3, 3]);
           expect(fix.world.counters.rejected).toBe(1);
           expect(fix.world.counters.accepted).toBe(1);
         }),
       ),
     ));
 
-  it("pauses for reputation before any claim or limiter call", () =>
+  it("pauses for reputation before any claim or pacing slot", () =>
     Effect.runPromise(
       onTestClock(
         Effect.gen(function* () {
           const fix = fixture({
             cursor: memberA.id,
-            guard: { limit: 8, dailyExhausted: false, halted: true },
+            guard: { limit: 8, refusal: "reputation" },
           });
 
           successOf(yield* runSliceNow(fix));
 
           expect(fix.world.claims).toHaveLength(0);
           expect(fix.world.listCalls).toHaveLength(0);
-          expect(fix.limiter.consumes).toHaveLength(0);
+          expect(fix.guard.slots).toHaveLength(0);
           expect(fix.mailer.sent).toHaveLength(0);
           expect(fix.world.paused).toStrictEqual([{ reason: "reputation", cursor: memberA.id }]);
         }),
@@ -1029,7 +987,7 @@ describe("runSlice", () => {
 
           expect(fix.world.claims).toHaveLength(0);
           expect(fix.world.listCalls).toHaveLength(0);
-          expect(fix.limiter.consumes).toHaveLength(0);
+          expect(fix.guard.slots).toHaveLength(0);
           expect(fix.world.paused).toStrictEqual([{ reason: "feedback", cursor: memberA.id }]);
         }),
       ),
@@ -1062,7 +1020,7 @@ describe("runSlice", () => {
 
           expect(fix.world.claims).toHaveLength(0);
           expect(fix.world.listCalls).toHaveLength(0);
-          expect(fix.limiter.consumes).toHaveLength(0);
+          expect(fix.guard.slots).toHaveLength(0);
           expect(fix.world.paused).toStrictEqual([{ reason: "feedback", cursor: memberA.id }]);
         }),
       ),
@@ -1082,13 +1040,13 @@ describe("runSlice", () => {
       ),
     ));
 
-  it("pauses for reputation, not daily quota, when the guard is halted and the quota is exhausted", () =>
+  it("pauses for reputation before the breaker is evaluated", () =>
     Effect.runPromise(
       onTestClock(
         Effect.gen(function* () {
           const fix = fixture({
             cursor: memberA.id,
-            guard: { limit: 8, dailyExhausted: true, halted: true },
+            guard: { limit: 8, refusal: "reputation" },
             run: { accepted: 200, bounced: 200, complained: 0 },
           });
 
@@ -1106,7 +1064,7 @@ describe("runSlice", () => {
         Effect.gen(function* () {
           const fix = fixture({
             cursor: memberA.id,
-            guard: { limit: 8, dailyExhausted: true, halted: false },
+            guard: { limit: 8, refusal: "daily-quota" },
             run: { accepted: 200, bounced: 200, complained: 0 },
           });
 
@@ -1136,7 +1094,7 @@ describe("runSlice", () => {
       ),
     ));
 
-  it("skips members a two-entry filter does not match without a row, a status read, a limiter slot or a submission", () =>
+  it("skips members a two-entry filter does not match without a row, a status read, a pacing slot or a submission", () =>
     Effect.runPromise(
       onTestClock(
         Effect.gen(function* () {
@@ -1156,7 +1114,7 @@ describe("runSlice", () => {
           expect(fix.world.rows.has(memberC.id)).toBe(false);
           expect(fix.world.counters.skipped).toBe(0);
           expect(fix.world.statusCalls).toStrictEqual([memberA.email]);
-          expect(fix.limiter.consumes).toHaveLength(1);
+          expect(fix.guard.slots).toHaveLength(1);
           expect(fix.mailer.sent.map((message) => message.recipient)).toStrictEqual([
             memberA.email,
           ]);
@@ -1183,7 +1141,7 @@ describe("runSlice", () => {
           expect(fix.world.rows.has(memberB.id)).toBe(false);
           expect(fix.world.claims).toHaveLength(0);
           expect(fix.mailer.sent).toHaveLength(0);
-          expect(fix.limiter.consumes).toHaveLength(1);
+          expect(fix.guard.slots).toHaveLength(1);
           expect(fix.world.statusCalls).toStrictEqual([memberA.email]);
           expect(fix.wake.messages).toStrictEqual([{ campaignId, runToken }]);
           expect(fix.world.completed).toBe(0);

@@ -9,6 +9,7 @@ import { sendingIdentity } from "../identity/SendingIdentity.ts";
 import { compose, fromHeader, senderSettings } from "./Message.ts";
 
 import type { MessageContent } from "./Message.ts";
+import type { SubmissionOutcome } from "../storage/Campaigns.ts";
 
 const configurationSetLogicalId = "EmailerMail";
 
@@ -29,11 +30,7 @@ export type SendPurpose =
   | { readonly kind: "campaign"; readonly campaignId: string; readonly sendId: string }
   | { readonly kind: "test" };
 
-export type SubmissionOutcome =
-  | { readonly outcome: "accepted"; readonly messageId: string }
-  | { readonly outcome: "rejected"; readonly rejectionCode: Schemas.RejectionCode };
-
-export class SubmissionUncertain extends Data.TaggedError("SubmissionUncertain")<{
+class SubmissionUncertain extends Data.TaggedError("SubmissionUncertain")<{
   readonly reason: "timeout" | "transport" | "malformed-response";
   readonly cause: unknown;
 }> {}
@@ -58,7 +55,7 @@ export class Mailer extends Context.Service<
       content: MessageContent,
       unsubscribeUrl: string,
       purpose: SendPurpose,
-    ) => Effect.Effect<SubmissionOutcome, SubmissionUncertain>;
+    ) => Effect.Effect<SubmissionOutcome>;
   }
 >()("emailer/backend/Mailer") {}
 
@@ -93,7 +90,7 @@ export const makeSend =
     content: MessageContent,
     unsubscribeUrl: string,
     purpose: SendPurpose,
-  ): Effect.Effect<SubmissionOutcome, SubmissionUncertain> =>
+  ): Effect.Effect<SubmissionOutcome> =>
     Effect.gen(function* () {
       const message = compose(content, unsubscribeUrl, postal);
       const text = { Text: { Data: message.text, Charset: "UTF-8" } };
@@ -141,12 +138,12 @@ export const makeSend =
         ),
         // Callers record only that the outcome is unknown; why is logged here, where it is
         // classified, reduced so neither the recipient nor an SDK payload reaches the log.
-        Effect.tapError((uncertain) =>
+        Effect.catchTag("SubmissionUncertain", (uncertain) =>
           Effect.logWarning("submission uncertain", {
             ...purpose,
             reason: uncertain.reason,
             cause: describeCause(uncertain.cause),
-          }),
+          }).pipe(Effect.as({ outcome: "uncertain" } as const)),
         ),
       );
     });

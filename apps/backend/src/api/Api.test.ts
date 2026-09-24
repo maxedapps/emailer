@@ -8,6 +8,7 @@ import {
   Clock,
   ConfigProvider,
   DateTime,
+  Duration,
   Effect,
   Layer,
   Option,
@@ -17,7 +18,6 @@ import {
   Scope,
 } from "effect";
 import { FetchHttpClient, HttpEffect } from "effect/unstable/http";
-import { RateLimiter } from "effect/unstable/persistence";
 import { describe, expect, it } from "vitest";
 
 import { AccountSuppression } from "../audience/Addresses.ts";
@@ -55,7 +55,6 @@ interface Store {
     | AccountSuppression
     | Mailer
     | SendGuard
-    | RateLimiter.RateLimiter
   >;
   readonly mailed: Array<{
     readonly recipient: string;
@@ -111,7 +110,7 @@ const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store 
     readonly purpose: SendPurpose;
   }> = [];
 
-  let allowance: SendAllowance = { limit: 14, dailyExhausted: false, halted: false };
+  let allowance: SendAllowance = { limit: 14 };
 
   const sending = Layer.mergeAll(
     Layer.succeed(Mailer)({
@@ -122,8 +121,10 @@ const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store 
           return { outcome: "accepted" as const, messageId: `message-${mailed.length}` };
         }),
     }),
-    Layer.succeed(SendGuard)({ current: Effect.sync(() => allowance) }),
-    RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory)),
+    Layer.succeed(SendGuard)({
+      current: Effect.sync(() => allowance),
+      slot: () => Effect.succeed(Duration.zero),
+    }),
   );
 
   const audience = Layer.succeed(AudienceStore)({
@@ -1907,7 +1908,7 @@ describe("test sends", () => {
         const client = yield* makeEmailerClient(baseUrl, Redacted.make(token));
         const campaign = yield* draftFor(client);
 
-        store.holdSending({ limit: 14, dailyExhausted: false, halted: true });
+        store.holdSending({ limit: 14, refusal: "reputation" });
 
         const attempt = yield* Effect.result(
           client.campaigns.test({

@@ -1,19 +1,19 @@
 import * as Schemas from "@emailer/api/Schemas";
 import { ConfigProvider, Duration, Effect, Layer, Result } from "effect";
-import { RateLimiter } from "effect/unstable/persistence";
 import { describe, expect, it } from "vitest";
 
 import { sendTest } from "./TestSends.ts";
 import { unsubscribeLink } from "../consent/Unsubscribe.ts";
-import { Mailer, SubmissionUncertain } from "../sending/Mailer.ts";
+import { Mailer } from "../sending/Mailer.ts";
 import { SendGuard } from "../sending/SendGuard.ts";
 import { AudienceStore } from "../storage/Audience.ts";
 import { CampaignStore } from "../storage/Campaigns.ts";
 import { unusedAudience } from "../storage/Testing.ts";
 
-import type { SendPurpose, SubmissionOutcome } from "../sending/Mailer.ts";
+import type { SendPurpose } from "../sending/Mailer.ts";
 import type { MessageContent } from "../sending/Message.ts";
 import type { SendAllowance } from "../sending/SendGuard.ts";
+import type { SubmissionOutcome } from "../storage/Campaigns.ts";
 import type { AddressStatus } from "@emailer/api/Schemas";
 
 const campaignId = "0195f0a0-1111-4222-8333-4444444ca409";
@@ -30,7 +30,7 @@ const campaign: Schemas.Campaign = {
   submission: { state: "draft" },
 };
 
-const healthy: SendAllowance = { limit: 3, dailyExhausted: false, halted: false };
+const healthy: SendAllowance = { limit: 3 };
 
 const configuration = Layer.succeed(ConfigProvider.ConfigProvider)(
   ConfigProvider.fromEnvRecord({
@@ -51,7 +51,7 @@ const written = (operation: string) =>
 interface Scenario {
   readonly allowance?: SendAllowance;
   readonly statuses?: ReadonlyArray<readonly [string, AddressStatus]>;
-  readonly outcomes?: ReadonlyArray<SubmissionOutcome | SubmissionUncertain>;
+  readonly outcomes?: ReadonlyArray<SubmissionOutcome>;
   readonly members?: ReadonlyArray<Schemas.Contact>;
   readonly nextCursor?: string;
   readonly listMissing?: boolean;
@@ -66,7 +66,7 @@ interface Sent {
 
 const fixture = (scenario: Scenario = {}) => {
   const sent: Array<Sent> = [];
-  const consumes: Array<{ readonly key: string; readonly limit: number }> = [];
+  const slots: Array<number> = [];
   const pageRequests: Array<number> = [];
   const outcomes = [...(scenario.outcomes ?? [])];
   const statuses = new Map(scenario.statuses ?? []);
@@ -114,38 +114,29 @@ const fixture = (scenario: Scenario = {}) => {
     }),
     Layer.succeed(Mailer)({
       send: (recipient, content, unsubscribeUrl, purpose) =>
-        Effect.gen(function* () {
+        Effect.sync(() => {
           sent.push({ recipient, content, unsubscribeUrl, purpose });
 
-          const next = outcomes.shift();
-
-          if (next instanceof SubmissionUncertain) {
-            return yield* next;
-          }
-
-          return next ?? { outcome: "accepted" as const, messageId: `message-${sent.length}` };
+          return (
+            outcomes.shift() ?? {
+              outcome: "accepted" as const,
+              messageId: `message-${sent.length}`,
+            }
+          );
         }),
     }),
-    Layer.succeed(SendGuard)({ current: Effect.succeed(scenario.allowance ?? healthy) }),
-    Layer.succeed(RateLimiter.RateLimiter)({
-      [RateLimiter.TypeId]: RateLimiter.TypeId,
-      consume: (options) =>
+    Layer.succeed(SendGuard)({
+      current: Effect.succeed(scenario.allowance ?? healthy),
+      slot: (limit) =>
         Effect.sync(() => {
-          consumes.push({ key: options.key, limit: options.limit });
+          slots.push(limit);
 
-          return {
-            delay: Duration.zero,
-            limit: options.limit,
-            remaining: options.limit,
-            resetAfter: Duration.zero,
-          };
+          return Duration.zero;
         }),
-      adaptiveConsume: () => Effect.die(new Error("adaptiveConsume is not exercised")),
-      adaptiveFeedback: () => Effect.die(new Error("adaptiveFeedback is not exercised")),
     }),
   );
 
-  return { layer, sent, consumes, pageRequests };
+  return { layer, sent, slots, pageRequests };
 };
 
 const run = (fix: ReturnType<typeof fixture>, payload: Schemas.TestSendPayload) =>
@@ -187,10 +178,7 @@ describe("sendTest", () => {
             purpose: { kind: "test" },
           })),
         );
-        expect(fix.consumes).toStrictEqual([
-          { key: "ses-send", limit: healthy.limit },
-          { key: "ses-send", limit: healthy.limit },
-        ]);
+        expect(fix.slots).toStrictEqual([healthy.limit, healthy.limit]);
       }),
     ));
 
@@ -215,7 +203,7 @@ describe("sendTest", () => {
           { email: "soft@example.com", outcome: "skipped", reason: "bouncing" },
           { email: "ok@example.com", outcome: "accepted", messageId: "message-1" },
         ]);
-        expect(fix.consumes).toHaveLength(1);
+        expect(fix.slots).toHaveLength(1);
       }),
     ));
 
@@ -225,7 +213,7 @@ describe("sendTest", () => {
         const fix = fixture({
           outcomes: [
             { outcome: "rejected", rejectionCode: "rate-limited" },
-            new SubmissionUncertain({ reason: "timeout", cause: "slow" }),
+            { outcome: "uncertain" },
           ],
         });
 
@@ -293,18 +281,18 @@ describe("sendTest", () => {
     ));
 
   it.each([
-    ["a reputation halt", { limit: 3, dailyExhausted: false, halted: true }, "reputation"],
-    ["a spent daily budget", { limit: 3, dailyExhausted: true, halted: false }, "daily-quota"],
-  ] as const)("refuses to send during %s", (_label, allowance, reason) =>
+    ["a reputation halt", "reputation"],
+    ["a spent daily budget", "daily-quota"],
+  ] as const)("refuses to send during %s", (_label, reason) =>
     Effect.runPromise(
       Effect.gen(function* () {
-        const fix = fixture({ allowance });
+        const fix = fixture({ allowance: { limit: 3, refusal: reason } });
 
         const attempt = yield* run(fix, { to: ["a@example.com"] });
 
         expect(failureOf(attempt)).toStrictEqual(new Schemas.SendingPaused({ reason }));
         expect(fix.sent).toHaveLength(0);
-        expect(fix.consumes).toHaveLength(0);
+        expect(fix.slots).toHaveLength(0);
       }),
     ),
   );

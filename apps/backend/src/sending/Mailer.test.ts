@@ -1,12 +1,12 @@
 import * as Retry from "@distilled.cloud/aws/Retry";
 import * as AWS from "alchemy/AWS";
 import { fromCredentials } from "alchemy/AWS/Credentials";
-import { Effect, Layer, Logger, Redacted, Result, Schema } from "effect";
+import { Effect, Layer, Logger, Redacted, Schema } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 import { describe, expect, it } from "vitest";
 
 import { mintToken } from "../consent/Unsubscribe.ts";
-import { makeSend, SubmissionUncertain } from "./Mailer.ts";
+import { makeSend } from "./Mailer.ts";
 import { footerFor, htmlFooterFor } from "./Message.ts";
 
 import type { SendPurpose } from "./Mailer.ts";
@@ -114,10 +114,17 @@ const sending = (
   Effect.gen(function* () {
     const send = yield* AWS.SES.SendEmail(identity, configurationSet);
 
-    return yield* Effect.result(
-      makeSend(send, "news@example.com", postalAddress)(recipient, sent, unsubscribeUrl, purpose),
+    return yield* makeSend(send, "news@example.com", postalAddress)(
+      recipient,
+      sent,
+      unsubscribeUrl,
+      purpose,
     );
   }).pipe(Effect.provide(sendEmailLayer(transport)));
+
+/** Captures what a send logs, which is the only place an uncertain outcome says why. */
+const loggedTo = (messages: Array<unknown>) =>
+  Logger.layer([Logger.make((options) => messages.push(options.message))]);
 
 const acceptedBody = JSON.stringify({ MessageId: "0100018f-deadbeef" });
 
@@ -133,7 +140,7 @@ describe("makeSend", () => {
 
         const outcome = yield* sending(transport);
 
-        expect(Result.isSuccess(outcome) && outcome.success).toStrictEqual({
+        expect(outcome).toStrictEqual({
           outcome: "accepted",
           messageId: "0100018f-deadbeef",
         });
@@ -181,7 +188,7 @@ describe("makeSend", () => {
 
         const outcome = yield* sending(transport, { ...content, html });
 
-        expect(Result.isSuccess(outcome) && outcome.success).toStrictEqual({
+        expect(outcome).toStrictEqual({
           outcome: "accepted",
           messageId: "0100018f-deadbeef",
         });
@@ -273,7 +280,7 @@ describe("makeSend", () => {
 
         const outcome = yield* sending(transport);
 
-        expect(Result.isSuccess(outcome) && outcome.success).toStrictEqual({
+        expect(outcome).toStrictEqual({
           outcome: "rejected",
           rejectionCode: "rate-limited",
         });
@@ -314,7 +321,7 @@ describe("makeSend", () => {
 
         const outcome = yield* sending(transport);
 
-        expect(Result.isSuccess(outcome) && outcome.success).toStrictEqual({
+        expect(outcome).toStrictEqual({
           outcome: "rejected",
           rejectionCode: "message-rejected",
         });
@@ -331,7 +338,7 @@ describe("makeSend", () => {
 
         const outcome = yield* sending(transport);
 
-        expect(Result.isSuccess(outcome) && outcome.success).toStrictEqual({
+        expect(outcome).toStrictEqual({
           outcome: "rejected",
           rejectionCode: "rate-limited",
         });
@@ -348,10 +355,7 @@ describe("makeSend", () => {
 
         const outcome = yield* sending(transport);
 
-        expect(Result.isFailure(outcome) ? outcome.failure : undefined).toBeInstanceOf(
-          SubmissionUncertain,
-        );
-        expect(Result.isFailure(outcome) && outcome.failure.reason).toBe("transport");
+        expect(outcome).toStrictEqual({ outcome: "uncertain" });
       }),
     ));
 
@@ -362,9 +366,11 @@ describe("makeSend", () => {
           throw new TypeError("fetch failed: ECONNREFUSED");
         });
 
-        const outcome = yield* sending(transport);
+        const messages: Array<unknown> = [];
+        const outcome = yield* sending(transport).pipe(Effect.provide(loggedTo(messages)));
 
-        expect(Result.isFailure(outcome) && outcome.failure.reason).toBe("transport");
+        expect(outcome).toStrictEqual({ outcome: "uncertain" });
+        expect(messages).toMatchObject([["submission uncertain", { reason: "transport" }]]);
         expect(transport.sent).toHaveLength(1);
       }),
     ));
@@ -374,51 +380,47 @@ describe("makeSend", () => {
       Effect.gen(function* () {
         const transport = transportReplying(() => awsJson(200, JSON.stringify({})));
 
-        const outcome = yield* sending(transport);
+        const messages: Array<unknown> = [];
+        const outcome = yield* sending(transport).pipe(Effect.provide(loggedTo(messages)));
 
-        expect(Result.isFailure(outcome) && outcome.failure.reason).toBe("malformed-response");
+        expect(outcome).toStrictEqual({ outcome: "uncertain" });
+        expect(messages).toMatchObject([
+          ["submission uncertain", { reason: "malformed-response" }],
+        ]);
       }),
     ));
 
   it.each([
     ["a campaign send", campaignSend],
     ["a test send", { kind: "test" } satisfies SendPurpose],
-  ])("logs why %s ended uncertain, without the recipient's address", (_label, purpose) =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const transport = transportReplying(() =>
-          awsJson(500, JSON.stringify({ message: `Unavailable while sending to ${recipient}` })),
-        );
+  ])(
+    "logs why %s ended uncertain, without the recipient's address, the body or credentials",
+    (_label, purpose) =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const transport = transportReplying(() =>
+            awsJson(500, JSON.stringify({ message: `Unavailable while sending to ${recipient}` })),
+          );
 
-        const messages: Array<unknown> = [];
+          const messages: Array<unknown> = [];
 
-        const outcome = yield* sending(transport, content, purpose).pipe(
-          Effect.provide(Logger.layer([Logger.make((options) => messages.push(options.message))])),
-        );
+          const outcome = yield* sending(transport, content, purpose).pipe(
+            Effect.provide(loggedTo(messages)),
+          );
 
-        expect(Result.isFailure(outcome)).toBe(true);
-        expect(messages).toStrictEqual([
-          ["submission uncertain", { ...purpose, reason: "transport", cause: "InternalError" }],
-        ]);
-        expect(yield* encodeJson(messages)).not.toContain(recipient);
-      }),
-    ),
+          expect(outcome).toStrictEqual({ outcome: "uncertain" });
+          expect(messages).toStrictEqual([
+            ["submission uncertain", { ...purpose, reason: "transport", cause: "InternalError" }],
+          ]);
+
+          const logged = yield* encodeJson(messages);
+
+          expect(logged).not.toContain(recipient);
+          expect(logged).not.toContain(content.text);
+          expect(logged).not.toContain("not-a-real-secret");
+        }),
+      ),
   );
-
-  it("does not put the message body or credentials in the failure it reports", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const transport = transportReplying(() =>
-          awsJson(500, JSON.stringify({ message: "we broke" })),
-        );
-
-        const outcome = yield* sending(transport);
-        const rendered = String(Result.isFailure(outcome) ? outcome.failure : "");
-
-        expect(rendered).not.toContain(content.text);
-        expect(rendered).not.toContain("not-a-real-secret");
-      }),
-    ));
 });
 
 describe("Retry.none", () => {

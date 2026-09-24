@@ -10,7 +10,7 @@ import { CampaignStoreLive } from "../storage/Campaigns.ts";
 import { CampaignWakeLive, decodeDispatchMessage, dispatchQueue } from "./Dispatch.ts";
 import { runSlice } from "./Dispatching.ts";
 import { MailerLive } from "./Mailer.ts";
-import { SendGuardLive, SendPacingLive } from "./SendGuard.ts";
+import { SendGuardLive } from "./SendGuard.ts";
 
 const invocationTimeout = Duration.minutes(5);
 
@@ -42,7 +42,6 @@ const DispatcherLive = Layer.mergeAll(
   CampaignStoreLive,
   MailerLive,
   SendGuardLive,
-  SendPacingLive,
   CampaignWakeLive,
 ).pipe(Layer.provideMerge(NodeCrypto.layer));
 

@@ -22,19 +22,7 @@ export const create = Effect.fn("Campaigns.create")(function* (
   const id = yield* newIdentifier;
   const createdAt = yield* nowIso;
 
-  const campaign = {
-    id,
-    listId: payload.listId,
-    subject: payload.subject,
-    text: payload.text,
-    createdAt,
-    submission: { state: "draft" } as const,
-  };
-
-  const withHtml = payload.html === undefined ? campaign : { ...campaign, html: payload.html };
-
-  const created: Schemas.Campaign =
-    payload.filter === undefined ? withHtml : { ...withHtml, filter: payload.filter };
+  const created: Schemas.Campaign = { id, ...payload, createdAt, submission: { state: "draft" } };
 
   yield* campaigns.createCampaign(created);
 
@@ -151,10 +139,6 @@ export const send = Effect.fn("Campaigns.send")(function* (campaignId: string) {
   switch (control.state) {
     case "draft":
     case "scheduled": {
-      if (control.state === "scheduled") {
-        yield* requireRunToken(control);
-      }
-
       const predecessor = control.runToken;
       const runToken = yield* newIdentifier;
       const now = yield* nowIso;
@@ -236,10 +220,6 @@ export const schedule = Effect.fn("Campaigns.schedule")(function* (
   switch (control.state) {
     case "draft":
     case "scheduled": {
-      if (control.state === "scheduled") {
-        yield* requireRunToken(control);
-      }
-
       const predecessor = control.runToken;
       const runToken = yield* newIdentifier;
 

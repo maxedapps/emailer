@@ -1,13 +1,11 @@
 import * as Schemas from "@emailer/api/Schemas";
-import { Effect, Result } from "effect";
+import { Effect } from "effect";
 
 import { unsubscribeLink } from "../consent/Unsubscribe.ts";
 import { Mailer } from "../sending/Mailer.ts";
-import { consumeSlot, SendGuard } from "../sending/SendGuard.ts";
+import { SendGuard } from "../sending/SendGuard.ts";
 import { AudienceStore } from "../storage/Audience.ts";
 import { CampaignStore } from "../storage/Campaigns.ts";
-
-import type { SubmissionOutcome, SubmissionUncertain } from "../sending/Mailer.ts";
 
 /**
  * A list's members, if a test may reach them all. One member past the limit is requested, and a
@@ -24,19 +22,6 @@ const listRecipients = Effect.fn("TestSends.listRecipients")(function* (listId: 
 
   return page.items.map((member) => member.email);
 });
-
-const outcomeOf = (
-  email: string,
-  sent: Result.Result<SubmissionOutcome, SubmissionUncertain>,
-): Schemas.TestSendOutcome => {
-  if (Result.isFailure(sent)) {
-    return { email, outcome: "uncertain" };
-  }
-
-  return sent.success.outcome === "accepted"
-    ? { email, outcome: "accepted", messageId: sent.success.messageId }
-    : { email, outcome: "rejected", rejectionCode: sent.success.rejectionCode };
-};
 
 /**
  * Sends a `[Test]` copy of a campaign to a few addresses, now, and reports each outcome. It shares
@@ -57,12 +42,8 @@ export const sendTest = Effect.fn("TestSends.sendTest")(function* (
   const recipients = "to" in payload ? payload.to : yield* listRecipients(payload.listId);
   const allowance = yield* guard.current;
 
-  if (allowance.halted) {
-    return yield* new Schemas.SendingPaused({ reason: "reputation" });
-  }
-
-  if (allowance.dailyExhausted) {
-    return yield* new Schemas.SendingPaused({ reason: "daily-quota" });
+  if (allowance.refusal !== undefined) {
+    return yield* new Schemas.SendingPaused({ reason: allowance.refusal });
   }
 
   const content = {
@@ -82,16 +63,13 @@ export const sendTest = Effect.fn("TestSends.sendTest")(function* (
     }
 
     const unsubscribeUrl = yield* unsubscribeLink(email).pipe(Effect.orDie);
-    const delay = yield* consumeSlot(allowance.limit);
+    const delay = yield* guard.slot(allowance.limit);
 
     yield* Effect.sleep(delay);
 
-    outcomes.push(
-      outcomeOf(
-        email,
-        yield* Effect.result(mailer.send(email, content, unsubscribeUrl, { kind: "test" })),
-      ),
-    );
+    const outcome = yield* mailer.send(email, content, unsubscribeUrl, { kind: "test" });
+
+    outcomes.push({ email, ...outcome });
   }
 
   return { recipients: outcomes } satisfies Schemas.TestSendResult;

@@ -220,7 +220,7 @@ describe("queued campaign cancellation", () => {
               campaign.id,
               sendId,
               historic.id,
-              { state: "accepted", messageId: "seeded-not-ses" },
+              { outcome: "accepted", messageId: "seeded-not-ses" },
               claimedAt,
             ),
           ).toBe("settled");
@@ -499,7 +499,7 @@ describe("queued campaign cancellation", () => {
             campaign.id,
             sendId,
             historic.id,
-            { state: "accepted", messageId: "seeded-not-ses" },
+            { outcome: "accepted", messageId: "seeded-not-ses" },
             claimedAt,
           ),
         ).toBe("settled");
