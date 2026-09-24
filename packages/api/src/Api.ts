@@ -37,54 +37,52 @@ const memberQuery = {
   limit: Schema.optional(Schemas.PageSize),
 };
 
+/** Every endpoint can refuse a malformed request and find storage unavailable. */
+const standardErrors = [HttpApiError.BadRequestNoContent, Schemas.StorageUnavailable] as const;
+
+/** Every endpoint that names an entity can also find it missing. */
+const lookupErrors = [...standardErrors, Schemas.NotFound] as const;
+
 class ContactsGroup extends HttpApiGroup.make("contacts")
   .add(
     HttpApiEndpoint.post("create", "/", {
       payload: Schemas.CreateContactPayload,
       success: Schemas.Contact.pipe(HttpApiSchema.status(201)),
-      error: [
-        HttpApiError.BadRequestNoContent,
-        Schemas.EmailAlreadyUsed,
-        Schemas.PayloadTooLarge,
-        Schemas.StorageUnavailable,
-      ],
+      error: [...standardErrors, Schemas.EmailAlreadyUsed, Schemas.PayloadTooLarge],
     }),
     HttpApiEndpoint.get("list", "/", {
       query: listingQuery,
       success: Schemas.page(Schemas.Contact, Schemas.EntityCursor),
-      error: [HttpApiError.BadRequestNoContent, Schemas.StorageUnavailable],
+      error: standardErrors,
     }),
     // A static segment wins over ":id" in the router regardless of declaration order.
     HttpApiEndpoint.get("getByEmail", "/by-email", {
       query: { email: Schemas.EmailAddress },
       success: Schemas.Contact,
-      error: [HttpApiError.BadRequestNoContent, Schemas.NotFound, Schemas.StorageUnavailable],
+      error: lookupErrors,
     }),
     HttpApiEndpoint.get("get", "/:id", {
       params: { id: Schemas.EntityId },
       success: Schemas.Contact,
-      error: [HttpApiError.BadRequestNoContent, Schemas.NotFound, Schemas.StorageUnavailable],
+      error: lookupErrors,
     }),
     HttpApiEndpoint.patch("update", "/:id", {
       params: { id: Schemas.EntityId },
       payload: Schemas.UpdateContactPayload,
       success: Schemas.Contact,
       error: [
-        HttpApiError.BadRequestNoContent,
-        Schemas.NotFound,
+        ...lookupErrors,
         Schemas.EmailAlreadyUsed,
         Schemas.AddressOptedOut,
         Schemas.PayloadTooLarge,
-        Schemas.StorageUnavailable,
       ],
     }),
     HttpApiEndpoint.delete("remove", "/:id", {
       params: { id: Schemas.EntityId },
       success: HttpApiSchema.NoContent,
-      error: [HttpApiError.BadRequestNoContent, Schemas.NotFound, Schemas.StorageUnavailable],
+      error: lookupErrors,
     }),
   )
-  .middleware(Authorization)
   .prefix("/contacts") {}
 
 class ListsGroup extends HttpApiGroup.make("lists")
@@ -92,67 +90,52 @@ class ListsGroup extends HttpApiGroup.make("lists")
     HttpApiEndpoint.post("create", "/", {
       payload: Schemas.CreateListPayload,
       success: Schemas.ContactList.pipe(HttpApiSchema.status(201)),
-      error: [
-        HttpApiError.BadRequestNoContent,
-        Schemas.PayloadTooLarge,
-        Schemas.StorageUnavailable,
-      ],
+      error: [...standardErrors, Schemas.PayloadTooLarge],
     }),
     HttpApiEndpoint.get("get", "/:id", {
       params: { id: Schemas.EntityId },
       success: Schemas.ContactList,
-      error: [HttpApiError.BadRequestNoContent, Schemas.NotFound, Schemas.StorageUnavailable],
+      error: lookupErrors,
     }),
     HttpApiEndpoint.get("list", "/", {
       query: listingQuery,
       success: Schemas.page(Schemas.ContactList, Schemas.EntityCursor),
-      error: [HttpApiError.BadRequestNoContent, Schemas.StorageUnavailable],
+      error: standardErrors,
     }),
     HttpApiEndpoint.patch("update", "/:id", {
       params: { id: Schemas.EntityId },
       payload: Schemas.UpdateListPayload,
       success: Schemas.ContactList,
-      error: [
-        HttpApiError.BadRequestNoContent,
-        Schemas.NotFound,
-        Schemas.PayloadTooLarge,
-        Schemas.StorageUnavailable,
-      ],
+      error: [...lookupErrors, Schemas.PayloadTooLarge],
     }),
     HttpApiEndpoint.delete("remove", "/:id", {
       params: { id: Schemas.EntityId },
       success: HttpApiSchema.NoContent,
-      error: [HttpApiError.BadRequestNoContent, Schemas.NotFound, Schemas.StorageUnavailable],
+      error: lookupErrors,
     }),
     HttpApiEndpoint.get("listMembers", "/:listId/members", {
       params: { listId: Schemas.EntityId },
       query: memberQuery,
       success: Schemas.page(Schemas.Contact, Schemas.EntityId),
-      error: [HttpApiError.BadRequestNoContent, Schemas.NotFound, Schemas.StorageUnavailable],
+      error: lookupErrors,
     }),
     HttpApiEndpoint.put("addContact", "/:listId/members/:contactId", {
       params: { listId: Schemas.EntityId, contactId: Schemas.EntityId },
       success: HttpApiSchema.NoContent,
-      error: [HttpApiError.BadRequestNoContent, Schemas.NotFound, Schemas.StorageUnavailable],
+      error: lookupErrors,
     }),
     HttpApiEndpoint.delete("removeContact", "/:listId/members/:contactId", {
       params: { listId: Schemas.EntityId, contactId: Schemas.EntityId },
       success: HttpApiSchema.NoContent,
-      error: [HttpApiError.BadRequestNoContent, Schemas.NotFound, Schemas.StorageUnavailable],
+      error: lookupErrors,
     }),
     HttpApiEndpoint.post("import", "/:listId/contacts", {
       params: { listId: Schemas.EntityId },
       payload: Schemas.ImportContactsPayload,
       success: Schemas.ImportContactsResult,
-      error: [
-        HttpApiError.BadRequestNoContent,
-        Schemas.NotFound,
-        Schemas.PayloadTooLarge,
-        Schemas.StorageUnavailable,
-      ],
+      error: [...lookupErrors, Schemas.PayloadTooLarge],
     }),
   )
-  .middleware(Authorization)
   .prefix("/lists") {}
 
 class CampaignsGroup extends HttpApiGroup.make("campaigns")
@@ -160,96 +143,67 @@ class CampaignsGroup extends HttpApiGroup.make("campaigns")
     HttpApiEndpoint.post("create", "/", {
       payload: Schemas.CreateCampaignPayload,
       success: Schemas.Campaign.pipe(HttpApiSchema.status(201)),
-      error: [
-        HttpApiError.BadRequestNoContent,
-        Schemas.NotFound,
-        Schemas.PayloadTooLarge,
-        Schemas.StorageUnavailable,
-      ],
+      error: [...lookupErrors, Schemas.PayloadTooLarge],
     }),
     HttpApiEndpoint.get("list", "/", {
       query: listingQuery,
       success: Schemas.page(Schemas.CampaignSummary, Schemas.EntityCursor),
-      error: [HttpApiError.BadRequestNoContent, Schemas.StorageUnavailable],
+      error: standardErrors,
     }),
     HttpApiEndpoint.get("get", "/:id", {
       params: { id: Schemas.EntityId },
       success: Schemas.Campaign,
-      error: [HttpApiError.BadRequestNoContent, Schemas.NotFound, Schemas.StorageUnavailable],
+      error: lookupErrors,
     }),
     HttpApiEndpoint.patch("update", "/:id", {
       params: { id: Schemas.EntityId },
       payload: Schemas.UpdateCampaignPayload,
       success: Schemas.Campaign,
-      error: [
-        HttpApiError.BadRequestNoContent,
-        Schemas.NotFound,
-        Schemas.CampaignStateConflict,
-        Schemas.PayloadTooLarge,
-        Schemas.StorageUnavailable,
-      ],
+      error: [...lookupErrors, Schemas.CampaignStateConflict, Schemas.PayloadTooLarge],
     }),
     HttpApiEndpoint.delete("remove", "/:id", {
       params: { id: Schemas.EntityId },
       success: HttpApiSchema.NoContent,
-      error: [
-        HttpApiError.BadRequestNoContent,
-        Schemas.NotFound,
-        Schemas.CampaignStateConflict,
-        Schemas.StorageUnavailable,
-      ],
+      error: [...lookupErrors, Schemas.CampaignStateConflict],
     }),
     HttpApiEndpoint.post("preview", "/:id/preview", {
       params: { id: Schemas.EntityId },
       success: Schemas.PreviewLink,
-      error: [HttpApiError.BadRequestNoContent, Schemas.NotFound, Schemas.StorageUnavailable],
+      error: lookupErrors,
     }),
     HttpApiEndpoint.post("test", "/:id/test", {
       params: { id: Schemas.EntityId },
       payload: Schemas.TestSendPayload,
       success: Schemas.TestSendResult,
       error: [
-        HttpApiError.BadRequestNoContent,
-        Schemas.NotFound,
+        ...lookupErrors,
         Schemas.TestAudienceTooLarge,
         Schemas.SendingPaused,
         Schemas.PayloadTooLarge,
-        Schemas.StorageUnavailable,
       ],
     }),
     HttpApiEndpoint.post("send", "/:id/send", {
       params: { id: Schemas.EntityId },
       success: Schemas.Campaign,
-      error: [HttpApiError.BadRequestNoContent, Schemas.NotFound, Schemas.StorageUnavailable],
+      error: lookupErrors,
     }),
     HttpApiEndpoint.post("resume", "/:id/resume", {
       params: { id: Schemas.EntityId },
       success: Schemas.Campaign,
-      error: [HttpApiError.BadRequestNoContent, Schemas.NotFound, Schemas.StorageUnavailable],
+      error: lookupErrors,
     }),
     HttpApiEndpoint.post("schedule", "/:id/schedule", {
       params: { id: Schemas.EntityId },
       payload: Schemas.ScheduleCampaignPayload,
       success: Schemas.Campaign,
-      error: [
-        HttpApiError.BadRequestNoContent,
-        Schemas.NotFound,
-        Schemas.SendAtNotInFuture,
-        Schemas.StorageUnavailable,
-      ],
+      error: [...lookupErrors, Schemas.SendAtNotInFuture],
     }),
     HttpApiEndpoint.post("cancel", "/:id/cancel", {
       params: { id: Schemas.EntityId },
       success: Schemas.Campaign,
-      error: [
-        HttpApiError.BadRequestNoContent,
-        Schemas.NotFound,
-        Schemas.CampaignStateConflict,
-        Schemas.StorageUnavailable,
-      ],
+      error: [...lookupErrors, Schemas.CampaignStateConflict],
     }),
   )
-  .middleware(Authorization)
   .prefix("/campaigns") {}
 
 class AddressesGroup extends HttpApiGroup.make("addresses")
@@ -257,19 +211,19 @@ class AddressesGroup extends HttpApiGroup.make("addresses")
     HttpApiEndpoint.get("status", "/status", {
       query: { email: Schemas.ListedEmailAddress },
       success: Schemas.AddressRecord,
-      error: [HttpApiError.BadRequestNoContent, Schemas.StorageUnavailable],
+      error: standardErrors,
     }),
     HttpApiEndpoint.post("unsuppress", "/unsuppress", {
       payload: Schema.Struct({ email: Schemas.ListedEmailAddress }),
       success: Schemas.AddressRecord,
-      error: [HttpApiError.BadRequestNoContent, Schemas.StorageUnavailable],
+      error: standardErrors,
     }),
   )
-  .middleware(Authorization)
   .prefix("/addresses") {}
 
 export class EmailerApi extends HttpApi.make("emailer")
   .add(ContactsGroup)
   .add(ListsGroup)
   .add(CampaignsGroup)
-  .add(AddressesGroup) {}
+  .add(AddressesGroup)
+  .middleware(Authorization) {}

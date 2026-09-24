@@ -1,11 +1,11 @@
 import type * as Schemas from "@emailer/api/Schemas";
-import { Clock, Data, Duration, Effect, Option, Result } from "effect";
+import { Clock, Data, Duration, Effect } from "effect";
 
 import { unsubscribeLink } from "../consent/Unsubscribe.ts";
 import { newIdentifier, nowIso } from "../Identifiers.ts";
 import { CampaignWake } from "./Dispatch.ts";
 import { Mailer, submissionTimeout } from "./Mailer.ts";
-import { consumeSlot, SendGuard } from "./SendGuard.ts";
+import { SendGuard } from "./SendGuard.ts";
 import { AudienceStore } from "../storage/Audience.ts";
 import { CampaignStore } from "../storage/Campaigns.ts";
 import { operationTimeout } from "../storage/Items.ts";
@@ -13,7 +13,6 @@ import { operationTimeout } from "../storage/Items.ts";
 import type { DispatchMessage } from "./Dispatch.ts";
 import type { SendPurpose } from "./Mailer.ts";
 import type { MessageContent } from "./Message.ts";
-import type { RecipientSettlement } from "../storage/Campaigns.ts";
 
 /**
  * Members per invocation. One page is the only loop shape, so every two-page
@@ -80,14 +79,8 @@ export const runSlice = Effect.fn("Dispatching.runSlice")(function* (
   const run = begun.campaign.run;
   const guard = yield* guards.current;
 
-  if (guard.halted) {
-    yield* campaigns.pauseRun(message.campaignId, message.runToken, "reputation", previous);
-
-    return;
-  }
-
-  if (guard.dailyExhausted) {
-    yield* campaigns.pauseRun(message.campaignId, message.runToken, "daily-quota", previous);
+  if (guard.refusal !== undefined) {
+    yield* campaigns.pauseRun(message.campaignId, message.runToken, guard.refusal, previous);
 
     return;
   }
@@ -103,15 +96,17 @@ export const runSlice = Effect.fn("Dispatching.runSlice")(function* (
     return;
   }
 
-  const listed = yield* audience.listMembers(listId, memberPageSize, previous);
+  // A list deleted mid-run leaves nobody to send to, so the run completes.
+  const page = yield* audience
+    .listMembers(listId, memberPageSize, previous)
+    .pipe(Effect.catchTag("NotFound", () => Effect.undefined));
 
-  if (Option.isNone(listed)) {
+  if (page === undefined) {
     yield* campaigns.completeRun(message.campaignId, message.runToken, yield* nowIso);
 
     return;
   }
 
-  const page = listed.value;
   const { text, html } = yield* campaigns.getCampaignBody(message.campaignId);
   const content: MessageContent = { subject, text, html };
   // ExclusiveStartKey of the last member this slice finished (skip, settle, or
@@ -164,7 +159,7 @@ export const runSlice = Effect.fn("Dispatching.runSlice")(function* (
       continue;
     }
 
-    const delay = yield* consumeSlot(guard.limit);
+    const delay = yield* guards.slot(guard.limit);
     const remaining = yield* remainingUntil(deadline);
 
     if (Duration.isGreaterThan(reservationFor(delay), remaining)) {
@@ -242,30 +237,21 @@ const submitClaimed = Effect.fn("Dispatching.submitClaimed")(function* (input: {
 }) {
   const mailer = yield* Mailer;
   const campaigns = yield* CampaignStore;
+  const guards = yield* SendGuard;
   const { recipient, content, campaignId, sendId, contactId, runToken, limit } = input;
   const purpose: SendPurpose = { kind: "campaign", campaignId, sendId };
 
   for (let attempt = 0; ; attempt += 1) {
-    const delay = attempt === 0 ? input.firstDelay : yield* consumeSlot(limit);
+    const delay = attempt === 0 ? input.firstDelay : yield* guards.slot(limit);
 
     yield* Effect.sleep(delay);
 
-    const sent = yield* Effect.result(
-      mailer.send(recipient, content, input.unsubscribeUrl, purpose),
-    );
-
+    const settlement = yield* mailer.send(recipient, content, input.unsubscribeUrl, purpose);
     const finishedAt = yield* nowIso;
-
-    const settlement: RecipientSettlement = Result.isFailure(sent)
-      ? { state: "uncertain" }
-      : sent.success.outcome === "accepted"
-        ? { state: "accepted", messageId: sent.success.messageId }
-        : { state: "rejected", rejectionCode: sent.success.rejectionCode };
-
     const backoff = rateLimitedBackoffs[attempt];
 
     if (
-      settlement.state === "rejected" &&
+      settlement.outcome === "rejected" &&
       settlement.rejectionCode === "rate-limited" &&
       backoff !== undefined
     ) {
@@ -276,7 +262,7 @@ const submitClaimed = Effect.fn("Dispatching.submitClaimed")(function* (input: {
     yield* campaigns.settleRecipient(campaignId, sendId, contactId, settlement, finishedAt);
 
     if (
-      settlement.state === "rejected" &&
+      settlement.outcome === "rejected" &&
       (settlement.rejectionCode === "rate-limited" || settlement.rejectionCode === "sending-paused")
     ) {
       yield* campaigns.pauseRun(campaignId, runToken, settlement.rejectionCode, contactId);

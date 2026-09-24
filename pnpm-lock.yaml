@@ -116,6 +116,9 @@ catalogs:
     '@effect/tsgo':
       specifier: 0.45.0
       version: 0.45.0
+    '@effect/vitest':
+      specifier: 4.0.0-rc.117
+      version: 4.0.0-rc.117
     '@oxlint/plugins':
       specifier: 1.82.0
       version: 1.82.0
@@ -174,6 +177,9 @@ importers:
       '@effect/tsgo':
         specifier: 'catalog:'
         version: 0.45.0
+      '@effect/vitest':
+        specifier: 'catalog:'
+        version: 4.0.0-rc.117(effect@4.0.0-rc.117)(vitest@5.0.1(@types/node@24.13.6)(vite@8.3.0(@types/node@24.13.6)(jiti@2.7.0)(yaml@2.9.0)))
       '@oxlint/plugins':
         specifier: 'catalog:'
         version: 1.82.0

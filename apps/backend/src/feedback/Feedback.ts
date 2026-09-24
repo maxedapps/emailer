@@ -1,6 +1,7 @@
 import { NodeCrypto } from "@effect/platform-node";
+import { Stack } from "alchemy";
 import * as AWS from "alchemy/AWS";
-import { Config, Duration, Effect, Layer, Stream } from "effect";
+import { Config, Duration, Effect, Layer, Schema, Stream } from "effect";
 
 import { reportedAndFatal } from "../Diagnostics.ts";
 import { classify, decodeEmailEvent } from "./FeedbackClassification.ts";
@@ -9,40 +10,104 @@ import { lambdaBasics } from "../Lambda.ts";
 import { configurationSet } from "../sending/Mailer.ts";
 import { FeedbackStore, FeedbackStoreLive } from "../storage/Feedback.ts";
 
-import type { ClassifiedFeedback, EmailEvent } from "./FeedbackClassification.ts";
+import type { EmailEvent } from "./FeedbackClassification.ts";
 
 const invocationTimeout = Duration.seconds(30);
 
 /**
- * Where Lambda puts an event it accepted and could not process after its retries.
- *
- * Without it the event is simply gone: a suppression that fails to persist because the table is
- * briefly unavailable takes the bounce with it, and nothing records that it happened. The
- * queue does not repair anything by itself — `ReplayFeedback.ts` is the repair — but it keeps the
- * original event long enough for someone to act on it.
- *
- * Fourteen days is the maximum SQS allows, and the point here is retention rather than throughput.
- * The visibility timeout is longer than the replay's own invoke bound so that a message being
- * replayed is not handed to a second operator mid-flight.
+ * Where SQS parks a feedback event the consumer accepted and could not process after its retries.
+ * Five receives is the AWS starting point. Without it, a suppression that fails to persist because
+ * the table is briefly unavailable would take the bounce with it. Recovery is an SQS redrive of
+ * that message. Fourteen days is the maximum SQS allows, and the point here is retention rather
+ * than throughput.
  */
 export const feedbackFailures = AWS.SQS.Queue("FeedbackFailures", {
   messageRetentionPeriod: Duration.days(14),
-  visibilityTimeout: Duration.seconds(120),
   sqsManagedSseEnabled: true,
 });
+
+/** Named, so the queue policy below can state the queue's ARN without waiting on the queue. */
+const feedbackEventsName = Effect.map(Stack, ({ stage }) => `emailer-${stage}-feedback-events`);
+
+/**
+ * Standard queue of SES feedback events. Visibility is 3 minutes so a 30-second feedback
+ * invocation is covered by AWS's 6×-timeout recommendation. Source retention is the SQS default of
+ * four days, shorter than the dead-letter queue.
+ */
+const feedbackEvents = AWS.SQS.Queue(
+  "FeedbackEvents",
+  Effect.gen(function* () {
+    const failures = yield* feedbackFailures;
+
+    return {
+      queueName: yield* feedbackEventsName,
+      visibilityTimeout: Duration.minutes(3),
+      redrivePolicy: {
+        deadLetterTargetArn: failures.queueArn,
+        maxReceiveCount: 5,
+      },
+      sqsManagedSseEnabled: true,
+      messageRetentionPeriod: Duration.days(4),
+    };
+  }),
+);
+
+/**
+ * The default-bus rule that puts SES bounce, complaint and delivery-delay events on the queue, and
+ * the queue policy that lets EventBridge send them. Deploy-time only, like `feedbackPublishing`:
+ * `alchemy.run.ts` yields this and the function's constructor does not.
+ *
+ * `events(...).toQueue(...)` would write the queue's policy against its own ARN output and the
+ * rule's, while the rule targets the queue: cycles Alchemy beta.79 cannot create on a fresh stage,
+ * since neither a queue nor a rule can be created ahead of its inputs. Both are named instead, so
+ * the policy states both ARNs up front and the queue is created before the rule.
+ */
+export const feedbackRouting = Effect.gen(function* () {
+  const queue = yield* feedbackEvents;
+  const { stage } = yield* Stack;
+  const { accountId, region } = yield* AWS.AWSEnvironment.current;
+  const ruleName = `emailer-${stage}-ses-feedback`;
+  const queueArn = `arn:aws:sqs:${region}:${accountId}:${yield* feedbackEventsName}`;
+
+  yield* AWS.EventBridge.Rule("SESFeedbackEvents", {
+    name: ruleName,
+    eventPattern: {
+      source: ["aws.ses"],
+      "detail-type": ["Email Bounced", "Email Complaint Received", "Email Delivery Delayed"],
+    },
+    targets: [{ Id: "FeedbackEvents", Arn: queue.queueArn }],
+  });
+
+  yield* queue.bind`Allow(SESFeedbackEvents, SendMessage(${queue}))`({
+    policyStatements: [
+      {
+        Effect: "Allow",
+        Principal: { Service: "events.amazonaws.com" },
+        Action: ["sqs:SendMessage"],
+        Resource: [queueArn],
+        Condition: {
+          ArnEquals: {
+            "aws:SourceArn": [`arn:aws:events:${region}:${accountId}:rule/${ruleName}`],
+          },
+        },
+      },
+    ],
+  });
+});
+
+/**
+ * The EventBridge event as the rule delivers it. `detail` is decoded separately, so an SES event
+ * this system does not model is ignored rather than failing the whole message.
+ */
+const decodeEnvelope = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(Schema.Struct({ id: Schema.String, detail: Schema.Unknown })),
+);
 
 const configurationSetTag = "ses:configuration-set";
 
 const campaignTag = "campaignId";
 
 export const expectedConfigurationSet = Config.String("EMAILER_CONFIGURATION_SET");
-
-const countsOf = (classified: ClassifiedFeedback) => ({
-  bounced: classified.classification === "permanent-bounce" ? classified.recipients.length : 0,
-  complained: classified.classification === "complaint" ? classified.recipients.length : 0,
-  echoes: classified.classification === "suppression-echo" ? classified.recipients.length : 0,
-  transient: classified.classification === "transient-bounce" ? classified.recipients.length : 0,
-});
 
 const record = (event: EmailEvent) =>
   Effect.gen(function* () {
@@ -124,43 +189,49 @@ const record = (event: EmailEvent) =>
       kind: classified.kind,
       recipients: classified.recipients.length,
       suppressed: classified.suppress,
-      ...countsOf(classified),
+      classification: classified.classification,
     });
   });
 
-export const handleEvent = Effect.fn("Feedback.handleEvent")((
+const handleEvent = Effect.fn("Feedback.handleEvent")((
   expected: string,
-  detail: AWS.SES.EmailEventDetail,
+  event: EmailEvent,
   envelopeId: string,
 ) => {
-  const messageId = detail.mail?.messageId;
-
-  if (detail.mail?.tags?.[configurationSetTag]?.[0] !== expected) {
+  if (event.mail.tags?.[configurationSetTag]?.[0] !== expected) {
     return Effect.logInfo("feedback event from another configuration set", {
       envelopeId,
-      messageId,
+      messageId: event.mail.messageId,
     });
   }
 
-  return decodeEmailEvent(detail).pipe(
-    Effect.matchEffect({
-      onFailure: () =>
-        Effect.logWarning("feedback event ignored", {
-          envelopeId,
-          messageId,
-          eventType: detail.eventType,
-          reason: "undecodable",
-        }),
-      onSuccess: record,
-    }),
-  );
+  return record(event);
 });
+
+/**
+ * One queue message: the EventBridge envelope around an SES event. A body that is not an envelope
+ * fails the invocation, so SQS dead-letters it like any other failure.
+ */
+export const handleMessage = (expected: string, body: string) =>
+  decodeEnvelope(body).pipe(
+    Effect.flatMap((envelope) =>
+      decodeEmailEvent(envelope.detail).pipe(
+        Effect.matchEffect({
+          onFailure: () =>
+            Effect.logWarning("feedback event ignored", {
+              envelopeId: envelope.id,
+              reason: "undecodable",
+            }),
+          onSuccess: (event) => handleEvent(expected, event, envelope.id),
+        }),
+      ),
+    ),
+  );
 
 const feedbackProps = Effect.gen(function* () {
   const { logGroupName, ...basics } = yield* lambdaBasics("Feedback", "feedback");
 
   const mail = yield* configurationSet;
-  const failures = yield* feedbackFailures;
 
   return {
     ...basics,
@@ -168,10 +239,6 @@ const feedbackProps = Effect.gen(function* () {
     memorySize: 256,
     timeout: invocationTimeout,
     functionUrl: false,
-    // Lambda's own retry schedule is unchanged; this is what happens after it gives up. It covers
-    // events Lambda accepted, and nothing upstream of that: an event SES or EventBridge never
-    // delivered was never Lambda's to retain.
-    eventInvokeConfig: { destinationConfig: { OnFailure: { Destination: failures.queueArn } } },
     env: {
       EMAILER_LOG_GROUP: logGroupName,
       EMAILER_CONFIGURATION_SET: mail.configurationSetName,
@@ -188,24 +255,14 @@ export default class FeedbackFunction extends AWS.Lambda.Function<FeedbackFuncti
   Effect.gen(function* () {
     const services = yield* Layer.build(FeedbackLive);
 
-    // Constructed, never called. `OnFailure` names the queue but grants nothing, so without this
-    // binding Lambda would be unable to deliver the failure record and the retention would be a
-    // configuration that quietly does not work. Delivery is Lambda's to perform; duplicating it
-    // here would write the event twice.
-    yield* AWS.SQS.SendMessage(yield* feedbackFailures);
+    yield* AWS.SQS.consumeQueueMessages(yield* feedbackEvents, { batchSize: 1 }, (records) =>
+      Effect.gen(function* () {
+        const expected = yield* expectedConfigurationSet;
 
-    yield* AWS.SES.consumeEmailEvents(
-      { kinds: ["bounce", "complaint", "delivery-delay"] },
-      (events) =>
-        Effect.gen(function* () {
-          const expected = yield* expectedConfigurationSet;
-
-          yield* Stream.runForEach(events, (event) =>
-            handleEvent(expected, event.detail, event.id),
-          );
-        }).pipe(Effect.provideContext(services), reportedAndFatal),
+        yield* Stream.runForEach(records, (message) => handleMessage(expected, message.body));
+      }).pipe(Effect.provideContext(services), reportedAndFatal),
     );
 
     return {};
-  }).pipe(Effect.provide(Layer.mergeAll(AWS.Lambda.EventSource, AWS.SQS.SendMessageHttp))),
+  }).pipe(Effect.provide(AWS.Lambda.QueueEventSource)),
 ) {}

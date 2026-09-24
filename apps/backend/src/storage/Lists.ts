@@ -1,5 +1,5 @@
 import * as Schemas from "@emailer/api/Schemas";
-import { Effect, Option, Schema } from "effect";
+import { Effect, Schema, Struct } from "effect";
 
 import { corrupt } from "./Errors.ts";
 import {
@@ -35,7 +35,7 @@ const decodeStoredList = Schema.decodeUnknownEffect(StoredList);
 export const listOperations = (
   primitives: ReadPrimitives & WritePrimitives & UpdatePrimitives & PagePrimitives,
 ) => {
-  const { readEntityPage, readItem, recordOnce, updateRecord } = primitives;
+  const { readEntityPage, readItem, recordOnce, updateIf } = primitives;
 
   // A fresh identifier as the key: an item already there is this request landing again.
   const createList = Effect.fn("Storage.createList")((list: Schemas.ContactList) =>
@@ -53,16 +53,12 @@ export const listOperations = (
     const response = yield* readItem("getList", listKey(listId));
 
     if (response.Item === undefined) {
-      return Option.none<Schemas.ContactList>();
+      return yield* new Schemas.NotFound({ entity: "list" });
     }
 
     const stored = yield* decodeStoredList(response.Item).pipe(Effect.mapError(corrupt("getList")));
 
-    return Option.some<Schemas.ContactList>({
-      id: stored.id,
-      name: stored.name,
-      createdAt: stored.createdAt,
-    });
+    return Struct.omit(stored, ["v"]);
   });
 
   const listLists = Effect.fn("Storage.listLists")(function* (
@@ -70,40 +66,41 @@ export const listOperations = (
     cursor: string | undefined,
   ) {
     const page = yield* readEntityPage("listLists", listKind, listKey, limit, cursor);
-    const lists: Array<Schemas.ContactList> = [];
 
-    for (const item of page.items) {
-      const stored = yield* decodeStoredList(item).pipe(Effect.mapError(corrupt("listLists")));
+    const lists = yield* Effect.forEach(page.items, (item) =>
+      decodeStoredList(item).pipe(
+        Effect.mapError(corrupt("listLists")),
+        Effect.map((stored) => Struct.omit(stored, ["v"])),
+      ),
+    );
 
-      lists.push({ id: stored.id, name: stored.name, createdAt: stored.createdAt });
-    }
-
-    return { items: lists, nextCursor: page.nextCursor } satisfies StoredPage<
-      Schemas.ContactList,
-      string
-    >;
+    return { ...page, items: lists } satisfies StoredPage<Schemas.ContactList, string>;
   });
 
   /**
    * A rename touches `name` and nothing else. `gsi1sk` is built from `createdAt` and `id`, both
-   * immutable, so the list keeps its place in created order and no index entry has to move.
+   * immutable, so the list keeps its place in created order and no index entry has to move. A
+   * failed condition means the list is not there.
    */
   const renameList = Effect.fn("Storage.renameList")(function* (listId: string, name: string) {
-    const found = yield* getList(listId);
-
-    if (Option.isNone(found)) {
-      return Option.none<Schemas.ContactList>();
-    }
-
-    yield* updateRecord("renameList", {
+    const outcome = yield* updateIf("renameList", {
       Key: listKey(listId),
       UpdateExpression: "SET #name = :name",
       ConditionExpression: "attribute_exists(pk)",
       ExpressionAttributeNames: { "#name": "name" },
       ExpressionAttributeValues: { ":name": str(name) },
+      ReturnValues: "ALL_NEW",
     });
 
-    return Option.some<Schemas.ContactList>({ ...found.value, name });
+    if (!outcome.applied) {
+      return yield* new Schemas.NotFound({ entity: "list" });
+    }
+
+    const stored = yield* decodeStoredList(outcome.attributes).pipe(
+      Effect.mapError(corrupt("renameList")),
+    );
+
+    return Struct.omit(stored, ["v"]);
   });
 
   return { createList, getList, listLists, renameList } as const;

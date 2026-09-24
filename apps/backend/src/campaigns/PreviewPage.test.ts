@@ -1,7 +1,7 @@
+import { describe, expect, it } from "@effect/vitest";
 import * as Schemas from "@emailer/api/Schemas";
 import { Clock, ConfigProvider, Effect, Layer, Option, Redacted, Scope } from "effect";
 import { HttpEffect } from "effect/unstable/http";
-import { describe, expect, it } from "vitest";
 
 import { footerFor } from "../sending/Message.ts";
 import { CampaignReader } from "../storage/Campaigns.ts";
@@ -43,7 +43,7 @@ const tokenFor = (id: string, offset = 3600, key = signingKey) =>
     mintPreviewToken(Redacted.make(key), id, expiresAt),
   );
 
-const pageFor = (stored: Option.Option<Schemas.Campaign>, token: string, sender = settings) => {
+const pageFor = (stored: Schemas.Campaign | undefined, token: string, sender = settings) => {
   const reads: Array<string> = [];
   const scope = Scope.makeUnsafe();
 
@@ -58,8 +58,12 @@ const pageFor = (stored: Option.Option<Schemas.Campaign>, token: string, sender 
     handle.pipe(
       Effect.provideService(CampaignReader, {
         getCampaign: (id) =>
-          Effect.sync(() => {
+          Effect.gen(function* () {
             reads.push(id);
+
+            if (stored === undefined) {
+              return yield* new Schemas.NotFound({ entity: "campaign" });
+            }
 
             return stored;
           }),
@@ -78,100 +82,91 @@ const pageFor = (stored: Option.Option<Schemas.Campaign>, token: string, sender 
   });
 };
 
+// Live throughout: the web handler runs on its own runtime and reads the real clock, so tokens are
+// minted against real time. On the test clock every token would arrive already expired.
 describe("GET /previews/:token", () => {
-  it("renders the current campaign with all four protective headers", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { response, reads } = yield* pageFor(
-          Option.some(campaign),
-          yield* tokenFor(campaignId),
-        );
+  it.live("renders the current campaign with all four protective headers", () =>
+    Effect.gen(function* () {
+      const { response, reads } = yield* pageFor(campaign, yield* tokenFor(campaignId));
 
-        expect(response.status).toBe(200);
-        expect(response.headers.get("content-type")).toContain("text/html");
-        expect(response.headers.get("content-security-policy")).toContain("sandbox");
-        expect(response.headers.get("content-security-policy")).toContain("default-src 'none'");
-        expect(response.headers.get("referrer-policy")).toBe("no-referrer");
-        expect(response.headers.get("x-robots-tag")).toBe("noindex, nofollow");
-        expect(response.headers.get("cache-control")).toBe("no-store");
-        expect(reads).toStrictEqual([campaignId]);
-      }),
-    ));
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toContain("text/html");
+      expect(response.headers.get("content-security-policy")).toContain("sandbox");
+      expect(response.headers.get("content-security-policy")).toContain("default-src 'none'");
+      expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+      expect(response.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(reads).toStrictEqual([campaignId]);
+    }),
+  );
 
-  it("shows From, the escaped subject, the HTML in a sandboxed srcdoc and the text part", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { body } = yield* pageFor(Option.some(campaign), yield* tokenFor(campaignId));
+  it.live("shows From, the escaped subject, the HTML in a sandboxed srcdoc and the text part", () =>
+    Effect.gen(function* () {
+      const { body } = yield* pageFor(campaign, yield* tokenFor(campaignId));
 
-        expect(body).toContain("<dd>news@example.com</dd>");
-        expect(body).toContain("<dd>Deals &amp; &quot;news&quot; &lt;b&gt;</dd>");
-        expect(body).not.toContain("<b>");
-        expect(body).toContain(
-          '<iframe title="HTML part" sandbox="allow-popups allow-popups-to-escape-sandbox" srcdoc="&lt;html&gt;&lt;head&gt;&lt;base target=&quot;_blank&quot;&gt;',
-        );
-        expect(body).toContain("&lt;p&gt;Hello &amp;amp; welcome&lt;/p&gt;");
-        expect(body).toContain(
-          `<pre>Hello &lt;there&gt;${footerFor(placeholderUnsubscribeUrl, settings.postalAddress)}</pre>`,
-        );
-      }),
-    ));
+      expect(body).toContain("<dd>news@example.com</dd>");
+      expect(body).toContain("<dd>Deals &amp; &quot;news&quot; &lt;b&gt;</dd>");
+      expect(body).not.toContain("<b>");
+      expect(body).toContain(
+        '<iframe title="HTML part" sandbox="allow-popups allow-popups-to-escape-sandbox" srcdoc="&lt;html&gt;&lt;head&gt;&lt;base target=&quot;_blank&quot;&gt;',
+      );
+      expect(body).toContain("&lt;p&gt;Hello &amp;amp; welcome&lt;/p&gt;");
+      expect(body).toContain(
+        `<pre>Hello &lt;there&gt;${footerFor(placeholderUnsubscribeUrl, settings.postalAddress)}</pre>`,
+      );
+    }),
+  );
 
-  it("shows the sender's name as a mail client would, not encoded", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { body } = yield* pageFor(Option.some(campaign), yield* tokenFor(campaignId), {
-          ...settings,
-          senderName: Option.some("Café Example"),
-        });
+  it.live("shows the sender's name as a mail client would, not encoded", () =>
+    Effect.gen(function* () {
+      const { body } = yield* pageFor(campaign, yield* tokenFor(campaignId), {
+        ...settings,
+        senderName: Option.some("Café Example"),
+      });
 
-        expect(body).toContain("<dd>Café Example &lt;news@example.com&gt;</dd>");
-      }),
-    ));
+      expect(body).toContain("<dd>Café Example &lt;news@example.com&gt;</dd>");
+    }),
+  );
 
-  it("composes the footer with the placeholder link, never a real one", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { body } = yield* pageFor(Option.some(campaign), yield* tokenFor(campaignId));
+  it.live("composes the footer with the placeholder link, never a real one", () =>
+    Effect.gen(function* () {
+      const { body } = yield* pageFor(campaign, yield* tokenFor(campaignId));
 
-        expect(body).toContain(placeholderUnsubscribeUrl);
-        expect(body).not.toContain("/unsubscribe/v1.");
-      }),
-    ));
+      expect(body).toContain(placeholderUnsubscribeUrl);
+      expect(body).not.toContain("/unsubscribe/v1.");
+    }),
+  );
 
-  it("says there is no HTML part when the campaign has none", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { html: _html, ...textOnly } = campaign;
-        const { body } = yield* pageFor(Option.some(textOnly), yield* tokenFor(campaignId));
+  it.live("says there is no HTML part when the campaign has none", () =>
+    Effect.gen(function* () {
+      const { html: _html, ...textOnly } = campaign;
+      const { body } = yield* pageFor(textOnly, yield* tokenFor(campaignId));
 
-        expect(body).not.toContain("<iframe");
-        expect(body).toContain("This campaign has no HTML part");
-      }),
-    ));
+      expect(body).not.toContain("<iframe");
+      expect(body).toContain("This campaign has no HTML part");
+    }),
+  );
 
-  it.each([
+  it.live.each([
     ["an expired token", tokenFor(campaignId, -1)],
     ["a forged token", tokenFor(campaignId, 3600, "another key")],
     ["a truncated token", Effect.map(tokenFor(campaignId), (token) => token.slice(0, -1))],
-  ])("answers %s with 404 without reading storage", (_label, presented) =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { response, body, reads } = yield* pageFor(Option.some(campaign), yield* presented);
+  ] as const)("answers %s with 404 without reading storage", ([_label, presented]) =>
+    Effect.gen(function* () {
+      const { response, body, reads } = yield* pageFor(campaign, yield* presented);
 
-        expect(response.status).toBe(404);
-        expect(body).toContain("This preview link is not valid or has expired.");
-        expect(response.headers.get("cache-control")).toBe("no-store");
-        expect(reads).toHaveLength(0);
-      }),
-    ),
+      expect(response.status).toBe(404);
+      expect(body).toContain("This preview link is not valid or has expired.");
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(reads).toHaveLength(0);
+    }),
   );
 
-  it("answers 404 for a campaign deleted since the link was made", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { response } = yield* pageFor(Option.none(), yield* tokenFor(campaignId));
+  it.live("answers 404 for a campaign deleted since the link was made", () =>
+    Effect.gen(function* () {
+      const { response } = yield* pageFor(undefined, yield* tokenFor(campaignId));
 
-        expect(response.status).toBe(404);
-      }),
-    ));
+      expect(response.status).toBe(404);
+    }),
+  );
 });

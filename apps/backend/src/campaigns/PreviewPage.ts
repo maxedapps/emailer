@@ -89,11 +89,7 @@ const htmlPart = (html: string | undefined) =>
 
 const tokenOf = Effect.map(HttpRouter.params, (params) => params["token"] ?? "");
 
-interface PreviewSender {
-  readonly sender: string;
-  readonly senderName: Option.Option<string>;
-  readonly postalAddress: string;
-}
+type PreviewSender = Effect.Success<typeof senderSettings>;
 
 /** The From line as a mail client shows it, not in the encoded form SES is sent. */
 const displayedFrom = (settings: PreviewSender): string =>
@@ -122,12 +118,7 @@ const showPreview = (settings: PreviewSender) =>
 
       const reader = yield* CampaignReader;
       const campaign = yield* reader.getCampaign(campaignId.value);
-
-      if (Option.isNone(campaign)) {
-        return notFound;
-      }
-
-      const message = compose(campaign.value, placeholderUnsubscribeUrl, settings.postalAddress);
+      const message = compose(campaign, placeholderUnsubscribeUrl, settings.postalAddress);
 
       return respond(
         200,
@@ -141,7 +132,11 @@ const showPreview = (settings: PreviewSender) =>
 <section><h2>Plain text</h2><pre>${escapeHtml(message.text)}</pre></section>`,
         ),
       );
-    }).pipe(reportedAndFatal),
+    }).pipe(
+      // A campaign deleted since the link was signed.
+      Effect.catchTag("NotFound", () => Effect.succeed(notFound)),
+      reportedAndFatal,
+    ),
   );
 
 // The token is longer than the router's default parameter cap of 100 characters.

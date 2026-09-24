@@ -18,13 +18,11 @@ import { dataTable } from "./Table.ts";
 import type { TableOperations } from "./Items.ts";
 import type { TransactionPrimitives, TransactionTokens } from "./Primitives.ts";
 
-export type FeedbackKind = "bounce" | "complaint";
-
 export type FeedbackOutcome = "suppressed" | "recorded";
 
 const feedbackKey = (
   campaignId: string,
-  kind: FeedbackKind,
+  kind: Schemas.SuppressionReason,
   feedbackId: string,
   recipient: string,
 ) => ({
@@ -38,7 +36,7 @@ const feedbackKey = (
  */
 export interface FeedbackRow {
   readonly campaignId: string;
-  readonly kind: FeedbackKind;
+  readonly kind: Schemas.SuppressionReason;
   readonly feedbackId: string;
   readonly recipient: string;
   readonly messageId: string;

@@ -1,7 +1,7 @@
+import { describe, expect, it } from "@effect/vitest";
 import { Option, Redacted } from "effect";
 // oxlint-disable-next-line effecttsgo/node-builtin-import
 import { createHmac } from "node:crypto";
-import { describe, expect, it } from "vitest";
 
 import * as SignedToken from "./SignedToken.ts";
 
@@ -58,7 +58,6 @@ describe("tokensMatch", () => {
     ["a", "one byte"],
     [`${validToken}xx`, "longer"],
   ])("answers false rather than throwing for a %s credential", (supplied) => {
-    expect(() => SignedToken.tokensMatch(validToken, supplied)).not.toThrow();
     expect(SignedToken.tokensMatch(validToken, supplied)).toBe(false);
   });
 });
@@ -86,6 +85,8 @@ describe("signed tokens", () => {
     ["a tampered field", minted.replace("1790000000", "1790000001")],
     ["a tampered digest", `${minted.slice(0, -1)}${minted.endsWith("a") ? "b" : "a"}`],
     ["an uppercase digest", minted.toUpperCase()],
+    ["a truncated digest", minted.slice(0, -4)],
+    ["a missing separator", minted.replace(".", "")],
     ["an unknown version", `v2${minted.slice(2)}`],
     ["a token signed under another key", SignedToken.sign(Redacted.make("another key"), fields)],
     ["too few fields", SignedToken.sign(signingKey, fields.slice(0, 1))],

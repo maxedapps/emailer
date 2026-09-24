@@ -1,36 +1,34 @@
 import { NodeCrypto } from "@effect/platform-node";
+import { describe, expect, it } from "@effect/vitest";
 import * as Schemas from "@emailer/api/Schemas";
 import {
   Clock,
   ConfigProvider,
+  Crypto,
   Duration,
   Effect,
   Exit,
   Fiber,
   Layer,
   Logger,
-  Option,
   Result,
 } from "effect";
 import { TestClock } from "effect/testing";
-import { RateLimiter } from "effect/unstable/persistence";
-import { describe, expect, it } from "vitest";
 
 import { unsubscribeLink } from "../consent/Unsubscribe.ts";
 import { memberPageSize, runSlice, SliceOverrun } from "./Dispatching.ts";
 import { CampaignWake } from "./Dispatch.ts";
-import { Mailer, SubmissionUncertain } from "./Mailer.ts";
+import { Mailer } from "./Mailer.ts";
 import { SendGuard } from "./SendGuard.ts";
 import { AudienceStore } from "../storage/Audience.ts";
 import { CampaignStore } from "../storage/Campaigns.ts";
 import { unusedAudience, unusedCampaigns } from "../storage/Testing.ts";
 
-import type { PauseReason } from "@emailer/api/Schemas";
-import type { SendPurpose, SubmissionOutcome } from "./Mailer.ts";
+import type { AddressStatus, PauseReason, SkipReason } from "@emailer/api/Schemas";
+import type { SendPurpose } from "./Mailer.ts";
 import type { MessageContent } from "./Message.ts";
 import type { SendAllowance } from "./SendGuard.ts";
-import type { AddressStatus } from "../storage/Addresses.ts";
-import type { RecipientSettlement, SkipReason } from "../storage/Campaigns.ts";
+import type { SubmissionOutcome } from "../storage/Campaigns.ts";
 
 const campaignId = "0195f0a0-1111-4222-8333-4444444ca409";
 
@@ -64,13 +62,7 @@ const subject = "Release notes";
 
 const text = "Hello there";
 
-const defaultGuard: SendAllowance = {
-  limit: 8,
-  dailyExhausted: false,
-  halted: false,
-};
-
-const zeros = { accepted: 0, bounced: 0, complained: 0 };
+const defaultGuard: SendAllowance = { limit: 8 };
 
 const sliceTimeout = Duration.minutes(5);
 
@@ -92,82 +84,64 @@ interface RecipientRow {
   readonly messageId?: string;
 }
 
+interface RunFeedback {
+  readonly accepted: number;
+  readonly bounced: number;
+  readonly complained: number;
+}
+
 interface World {
   readonly runToken: string;
-  beginOutcome: "running" | "stale";
-  checkpointOutcome: "updated" | "condition-failed";
+  readonly beginOutcome: "running" | "stale";
+  readonly checkpointOutcome: "updated" | "condition-failed";
   cursor: string | undefined;
-  html: string | undefined;
-  listMissing: boolean;
-  members: ReadonlyArray<Schemas.Contact>;
-  nextCursor: string | undefined;
-  statuses: Map<string, AddressStatus>;
-  rows: Map<string, RecipientRow>;
-  counters: { accepted: number; rejected: number; uncertain: number; skipped: number };
-  claims: Array<string>;
-  skips: Array<{ readonly contactId: string; readonly reason: SkipReason }>;
-  settlements: Array<{ readonly contactId: string; readonly settlement: RecipientSettlement }>;
-  checkpoints: Array<{
+  readonly html: string | undefined;
+  readonly listMissing: boolean;
+  readonly members: ReadonlyArray<Schemas.Contact>;
+  readonly nextCursor: string | undefined;
+  readonly statuses: ReadonlyMap<string, AddressStatus>;
+  readonly rows: Map<string, RecipientRow>;
+  readonly counters: { accepted: number; rejected: number; uncertain: number; skipped: number };
+  readonly claims: Array<string>;
+  readonly skips: Array<{ readonly contactId: string; readonly reason: SkipReason }>;
+  readonly settlements: Array<{
+    readonly contactId: string;
+    readonly settlement: SubmissionOutcome;
+  }>;
+  readonly checkpoints: Array<{
     readonly sliceId: string;
     readonly previous: string | undefined;
     readonly next: string;
   }>;
-  paused: Array<{ readonly reason: PauseReason; readonly cursor: string | undefined }>;
+  readonly paused: Array<{ readonly reason: PauseReason; readonly cursor: string | undefined }>;
   completed: number;
-  listCalls: Array<{
+  readonly listCalls: Array<{
     readonly listId: string;
     readonly limit: number;
     readonly cursor: string | undefined;
   }>;
-  statusCalls: Array<string>;
-  filter: Schemas.ContactAttributes | undefined;
-  run: { accepted: number; bounced: number; complained: number };
+  readonly statusCalls: Array<string>;
+  readonly filter: Schemas.ContactAttributes | undefined;
+  readonly run: RunFeedback;
 }
-
-const emptyCounters = () => ({
-  accepted: 0,
-  rejected: 0,
-  uncertain: 0,
-  skipped: 0,
-});
-
-const emptyWorld = (): World => ({
-  runToken,
-  beginOutcome: "running",
-  checkpointOutcome: "updated",
-  cursor: undefined,
-  html: undefined,
-  listMissing: false,
-  members: [memberA],
-  nextCursor: undefined,
-  statuses: new Map(),
-  rows: new Map(),
-  counters: emptyCounters(),
-  claims: [],
-  skips: [],
-  settlements: [],
-  checkpoints: [],
-  paused: [],
-  completed: 0,
-  listCalls: [],
-  statusCalls: [],
-  filter: undefined,
-  run: { ...zeros },
-});
 
 const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> =>
   Layer.mergeAll(
     Layer.succeed(AudienceStore)({
       ...unusedAudience,
       listMembers: (id, limit, cursor) =>
-        Effect.sync(() => {
+        Effect.gen(function* () {
           world.listCalls.push({ listId: id, limit, cursor });
 
           if (world.listMissing) {
-            return Option.none();
+            return yield* new Schemas.NotFound({ entity: "list" });
           }
 
-          return Option.some({ items: world.members, nextCursor: world.nextCursor });
+          const items = [...world.members];
+
+          return world.nextCursor === undefined
+            ? { items }
+            : { items, nextCursor: world.nextCursor };
         }),
       addressStatus: (email) =>
         Effect.sync(() => {
@@ -250,19 +224,19 @@ const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> 
             sendId: row.sendId,
             contactId,
             recipient: row.recipient,
-            state: settlement.state,
+            state: settlement.outcome,
           };
 
-          if (settlement.state === "accepted") {
+          if (settlement.outcome === "accepted") {
             world.rows.set(contactId, { ...settled, messageId: settlement.messageId });
-          } else if (settlement.state === "rejected") {
+          } else if (settlement.outcome === "rejected") {
             world.rows.set(contactId, { ...settled, rejectionCode: settlement.rejectionCode });
           } else {
             world.rows.set(contactId, settled);
           }
 
           world.settlements.push({ contactId, settlement });
-          world.counters[settlement.state] += 1;
+          world.counters[settlement.outcome] += 1;
 
           return "settled" as const;
         }),
@@ -305,47 +279,30 @@ const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> 
     }),
   );
 
-interface LimiterDouble {
-  readonly layer: Layer.Layer<RateLimiter.RateLimiter>;
-  readonly consumes: Array<{
-    readonly key: string;
-    readonly window: Duration.Input;
-    readonly limit: number;
-    readonly onExceeded: "delay" | "fail" | undefined;
-    readonly algorithm: "fixed-window" | "token-bucket" | undefined;
-  }>;
+interface GuardDouble {
+  readonly layer: Layer.Layer<SendGuard>;
+  /** The limit each pacing slot was taken with. */
+  readonly slots: Array<number>;
 }
 
-const limiterDouble = (delays: ReadonlyArray<Duration.Duration> = []): LimiterDouble => {
-  const consumes: LimiterDouble["consumes"] = [];
+const guardDouble = (
+  allowance: SendAllowance,
+  delays: ReadonlyArray<Duration.Duration> = [],
+): GuardDouble => {
+  const slots: Array<number> = [];
   const remaining = [...delays];
 
-  const layer = Layer.succeed(RateLimiter.RateLimiter)({
-    [RateLimiter.TypeId]: RateLimiter.TypeId,
-    consume: (options) =>
+  const layer = Layer.succeed(SendGuard)({
+    current: Effect.succeed(allowance),
+    slot: (limit) =>
       Effect.sync(() => {
-        consumes.push({
-          key: options.key,
-          window: options.window,
-          limit: options.limit,
-          onExceeded: options.onExceeded,
-          algorithm: options.algorithm,
-        });
+        slots.push(limit);
 
-        return {
-          delay: remaining.shift() ?? Duration.zero,
-          limit: options.limit,
-          remaining: options.limit,
-          resetAfter: Duration.zero,
-        };
+        return remaining.shift() ?? Duration.zero;
       }),
-    adaptiveConsume: () =>
-      Effect.die(new Error("RateLimiter.adaptiveConsume is not exercised by this test")),
-    adaptiveFeedback: () =>
-      Effect.die(new Error("RateLimiter.adaptiveFeedback is not exercised by this test")),
   });
 
-  return { layer, consumes };
+  return { layer, slots };
 };
 
 interface SentMessage extends MessageContent {
@@ -359,24 +316,16 @@ interface MailerDouble {
   readonly sent: Array<SentMessage>;
 }
 
-const mailerDouble = (
-  outcomes: ReadonlyArray<SubmissionOutcome | SubmissionUncertain> = [],
-): MailerDouble => {
+const mailerDouble = (outcomes: ReadonlyArray<SubmissionOutcome> = []): MailerDouble => {
   const sent: Array<SentMessage> = [];
   const remaining = [...outcomes];
 
   const layer = Layer.succeed(Mailer)({
     send: (recipient, content, unsubscribeUrl, purpose) =>
-      Effect.gen(function* () {
+      Effect.sync(() => {
         sent.push({ recipient, ...content, unsubscribeUrl, purpose });
 
-        const next = remaining.shift();
-
-        if (next instanceof SubmissionUncertain) {
-          return yield* next;
-        }
-
-        return next ?? { outcome: "accepted" as const, messageId: "ses-message" };
+        return remaining.shift() ?? { outcome: "accepted" as const, messageId: "ses-message" };
       }),
   });
 
@@ -407,72 +356,78 @@ interface Scenario {
   readonly nextCursor?: string;
   readonly cursor?: string;
   readonly filter?: Schemas.ContactAttributes;
-  readonly html?: string;
+  readonly html?: string | undefined;
   readonly beginOutcome?: "running" | "stale";
   readonly checkpointOutcome?: "updated" | "condition-failed";
   readonly listMissing?: boolean;
   readonly statuses?: ReadonlyArray<readonly [string, AddressStatus]>;
-  readonly claimed?: ReadonlyArray<string>;
+  /** Members a previous delivery of the slice already claimed. */
+  readonly claimed?: ReadonlyArray<Schemas.Contact>;
   readonly guard?: SendAllowance;
-  readonly run?: { accepted: number; bounced: number; complained: number };
+  readonly run?: RunFeedback;
   readonly delays?: ReadonlyArray<Duration.Duration>;
-  readonly outcomes?: ReadonlyArray<SubmissionOutcome | SubmissionUncertain>;
+  readonly outcomes?: ReadonlyArray<SubmissionOutcome>;
 }
 
 interface Fixture {
   readonly world: World;
   readonly wake: WakeDouble;
   readonly mailer: MailerDouble;
-  readonly limiter: LimiterDouble;
+  readonly guard: GuardDouble;
   readonly layer: Layer.Layer<
-    CampaignWake | AudienceStore | CampaignStore | Mailer | RateLimiter.RateLimiter | SendGuard
+    CampaignWake | AudienceStore | CampaignStore | Mailer | SendGuard | Crypto.Crypto
   >;
 }
 
 const fixture = (scenario: Scenario = {}): Fixture => {
-  const world = emptyWorld();
-
-  world.members = scenario.members ?? [memberA];
-  world.nextCursor = scenario.nextCursor;
-  world.cursor = scenario.cursor;
-  world.filter = scenario.filter;
-  world.html = scenario.html;
-  world.beginOutcome = scenario.beginOutcome ?? "running";
-  world.checkpointOutcome = scenario.checkpointOutcome ?? "updated";
-  world.listMissing = scenario.listMissing ?? false;
-  world.run = scenario.run ?? { ...zeros };
-
-  for (const [email, status] of scenario.statuses ?? []) {
-    world.statuses.set(email, status);
-  }
-
-  for (const contactId of scenario.claimed ?? []) {
-    const member = world.members.find((item) => item.id === contactId);
-
-    world.rows.set(contactId, {
-      sendId: "already-claimed",
-      contactId,
-      recipient: member?.email ?? "unknown@example.com",
-      state: "unconfirmed",
-    });
-  }
+  const world: World = {
+    runToken,
+    beginOutcome: scenario.beginOutcome ?? "running",
+    checkpointOutcome: scenario.checkpointOutcome ?? "updated",
+    cursor: scenario.cursor,
+    html: scenario.html,
+    listMissing: scenario.listMissing ?? false,
+    members: scenario.members ?? [memberA],
+    nextCursor: scenario.nextCursor,
+    statuses: new Map(scenario.statuses ?? []),
+    rows: new Map(
+      (scenario.claimed ?? []).map((member): [string, RecipientRow] => [
+        member.id,
+        {
+          sendId: "already-claimed",
+          contactId: member.id,
+          recipient: member.email,
+          state: "unconfirmed",
+        },
+      ]),
+    ),
+    counters: { accepted: 0, rejected: 0, uncertain: 0, skipped: 0 },
+    claims: [],
+    skips: [],
+    settlements: [],
+    checkpoints: [],
+    paused: [],
+    completed: 0,
+    listCalls: [],
+    statusCalls: [],
+    filter: scenario.filter,
+    run: scenario.run ?? { accepted: 0, bounced: 0, complained: 0 },
+  };
 
   const wake = wakeDouble();
   const mailer = mailerDouble(scenario.outcomes);
-  const limiter = limiterDouble(scenario.delays);
-  const guard = scenario.guard ?? defaultGuard;
+  const guard = guardDouble(scenario.guard ?? defaultGuard, scenario.delays);
 
   return {
     world,
     wake,
     mailer,
-    limiter,
+    guard,
     layer: Layer.mergeAll(
       storageLayer(world),
       wake.layer,
       mailer.layer,
-      limiter.layer,
-      Layer.succeed(SendGuard)({ current: Effect.succeed(guard) }),
+      guard.layer,
       NodeCrypto.layer,
       configurationOf(scenario.env ?? unsubscribeEnv),
     ),
@@ -487,9 +442,6 @@ const runSliceNow = (fix: Fixture, extraDeadline = sliceTimeout) =>
       runSlice({ campaignId, runToken }, now + Duration.toMillis(extraDeadline)),
     ).pipe(Effect.provide(fix.layer));
   });
-
-const onTestClock = <A, E, R>(operation: Effect.Effect<A, E, R>) =>
-  operation.pipe(Effect.provide(Layer.mergeAll(TestClock.layer(), NodeCrypto.layer)));
 
 const successOf = <A, E>(attempt: Result.Result<A, E>): A => {
   if (Result.isFailure(attempt)) {
@@ -508,684 +460,509 @@ const failureOf = <A, E>(attempt: Result.Result<A, E>): E => {
 };
 
 describe("runSlice", () => {
-  it("settles each member of a page, increments counters, and enqueues one continuation", () =>
-    Effect.runPromise(
-      onTestClock(
-        Effect.gen(function* () {
-          const fix = fixture({ members: [memberA, memberB], nextCursor: memberC.id });
-
-          successOf(yield* runSliceNow(fix));
-
-          expect(fix.world.listCalls).toStrictEqual([
-            { listId, limit: memberPageSize, cursor: undefined },
-          ]);
-          expect(fix.world.claims).toStrictEqual([memberA.id, memberB.id]);
-          expect(fix.world.settlements).toHaveLength(2);
-          expect(fix.world.counters.accepted).toBe(2);
-          expect(fix.mailer.sent.map((message) => message.recipient)).toStrictEqual([
-            memberA.email,
-            memberB.email,
-          ]);
-          expect(fix.limiter.consumes).toHaveLength(2);
-          expect(
-            fix.limiter.consumes.every((consumed) => consumed.limit === defaultGuard.limit),
-          ).toBe(true);
-          expect(fix.limiter.consumes[0]).toMatchObject({
-            key: "ses-send",
-            window: "1 second",
-            onExceeded: "delay",
-            algorithm: "fixed-window",
-          });
-          expect(fix.world.checkpoints).toMatchObject([{ previous: undefined, next: memberC.id }]);
-          expect(fix.wake.messages).toStrictEqual([{ campaignId, runToken }]);
-          expect(fix.world.completed).toBe(0);
-        }),
-      ),
-    ));
-
-  it("hands the mailer the body the store's body read returned", () =>
-    Effect.runPromise(
-      onTestClock(
-        Effect.gen(function* () {
-          const fix = fixture({ members: [memberA] });
-
-          successOf(yield* runSliceNow(fix));
-
-          expect(fix.mailer.sent.map((message) => message.text)).toStrictEqual([text]);
-        }),
-      ),
-    ));
-
-  it("sends as the campaign, under the send id of the row it claimed", () =>
-    Effect.runPromise(
-      onTestClock(
-        Effect.gen(function* () {
-          const fix = fixture({ members: [memberA] });
-
-          successOf(yield* runSliceNow(fix));
-
-          expect(fix.mailer.sent.map((message) => message.purpose)).toStrictEqual([
-            { kind: "campaign", campaignId, sendId: fix.world.rows.get(memberA.id)?.sendId },
-          ]);
-          expect(fix.mailer.sent[0]?.subject).toBe(subject);
-          expect(fix.mailer.sent[0]?.unsubscribeUrl).toBe(
-            yield* unsubscribeLink(memberA.email).pipe(
-              Effect.provide(configurationOf(unsubscribeEnv)),
-            ),
-          );
-        }),
-      ),
-    ));
-
-  it("completes the last page and enqueues nothing", () =>
-    Effect.runPromise(
-      onTestClock(
-        Effect.gen(function* () {
-          const fix = fixture({ members: [memberA] });
-
-          successOf(yield* runSliceNow(fix));
-
-          expect(fix.world.counters.accepted).toBe(1);
-          expect(fix.world.completed).toBe(1);
-          expect(fix.world.checkpoints).toHaveLength(0);
-          expect(fix.wake.messages).toHaveLength(0);
-        }),
-      ),
-    ));
-
-  it("submits the campaign html on the outgoing message", () =>
-    Effect.runPromise(
-      onTestClock(
-        Effect.gen(function* () {
-          const html = "<p>Hello there</p>";
-          const fix = fixture({ html });
-
-          successOf(yield* runSliceNow(fix));
-
-          expect(fix.mailer.sent).toHaveLength(1);
-          expect(fix.mailer.sent[0]?.html).toBe(html);
-        }),
-      ),
-    ));
-
-  it("submits html undefined when the campaign has no html", () =>
-    Effect.runPromise(
-      onTestClock(
-        Effect.gen(function* () {
-          const fix = fixture();
-
-          successOf(yield* runSliceNow(fix));
-
-          expect(fix.mailer.sent).toHaveLength(1);
-          expect(fix.mailer.sent[0]?.html).toBeUndefined();
-        }),
-      ),
-    ));
-
-  it("skips unsubscribed and suppressed members", () =>
-    Effect.runPromise(
-      onTestClock(
-        Effect.gen(function* () {
-          const fix = fixture({
-            members: [memberA, memberB, memberC],
-            statuses: [
-              [memberA.email, "unsubscribed"],
-              [memberB.email, "suppressed"],
-            ],
-          });
-
-          successOf(yield* runSliceNow(fix));
-
-          expect(fix.world.skips).toStrictEqual([
-            { contactId: memberA.id, reason: "unsubscribed" },
-            { contactId: memberB.id, reason: "suppressed" },
-          ]);
-          expect(fix.world.counters.skipped).toBe(2);
-          expect(fix.world.counters.accepted).toBe(1);
-          expect(fix.mailer.sent).toHaveLength(1);
-          expect(fix.world.completed).toBe(1);
-        }),
-      ),
-    ));
-
-  it("claims nothing and submits nothing on a redelivered slice, then completes", () =>
-    Effect.runPromise(
-      onTestClock(
-        Effect.gen(function* () {
-          const fix = fixture({ members: [memberA, memberB], claimed: [memberA.id, memberB.id] });
-
-          successOf(yield* runSliceNow(fix));
-
-          expect(fix.world.claims).toHaveLength(0);
-          expect(fix.mailer.sent).toHaveLength(0);
-          expect(fix.limiter.consumes).toHaveLength(2);
-          expect(fix.world.completed).toBe(1);
-          expect(fix.wake.messages).toHaveLength(0);
-        }),
-      ),
-    ));
-
-  it("submits nothing when the run token is stale", () =>
-    Effect.runPromise(
-      onTestClock(
-        Effect.gen(function* () {
-          const fix = fixture({ beginOutcome: "stale" });
-          const entries: Array<{ readonly level: string; readonly message: unknown }> = [];
-          const now = yield* Clock.currentTimeMillis;
-
-          const attempt = yield* Effect.result(
-            runSlice({ campaignId, runToken }, now + Duration.toMillis(sliceTimeout)),
-          ).pipe(
-            Effect.provide(
-              Layer.mergeAll(
-                fix.layer,
-                Logger.layer([
-                  Logger.make((options) => {
-                    entries.push({ level: options.logLevel, message: options.message });
-                  }),
-                ]),
-              ),
-            ),
-          );
-
-          successOf(attempt);
-
-          expect(fix.world.claims).toHaveLength(0);
-          expect(fix.mailer.sent).toHaveLength(0);
-          expect(fix.world.listCalls).toHaveLength(0);
-          expect(fix.world.settlements).toHaveLength(0);
-          expect(fix.world.completed).toBe(0);
-          expect(fix.wake.messages).toHaveLength(0);
-
-          const stale = entries.filter((entry) => {
-            // SAFETY: Effect.logInfo(message, data) reaches a logger as [message, data].
-            const recorded = entry.message as ReadonlyArray<unknown> | string | undefined;
-
-            return Array.isArray(recorded)
-              ? recorded[0] === "stale wake discarded"
-              : recorded === "stale wake discarded";
-          });
-
-          expect(stale).toHaveLength(1);
-          expect(stale[0]?.level).toBe("Info");
-          expect(stale[0]?.message).toStrictEqual([
-            "stale wake discarded",
-            { campaignId, runToken, disposition: "stale" },
-          ]);
-        }),
-      ),
-    ));
-
-  it("checkpoints at the last processed member when a later delay would overrun", () =>
-    Effect.runPromise(
-      onTestClock(
-        Effect.gen(function* () {
-          const fix = fixture({
-            members: [memberA, memberB],
-            delays: [Duration.zero, Duration.hours(1)],
-          });
-
-          successOf(yield* runSliceNow(fix));
-
-          expect(fix.world.counters.accepted).toBe(1);
-          expect(fix.world.claims).toStrictEqual([memberA.id]);
-          expect(fix.mailer.sent).toHaveLength(1);
-          expect(fix.world.checkpoints).toMatchObject([{ previous: undefined, next: memberA.id }]);
-          expect(fix.wake.messages).toStrictEqual([{ campaignId, runToken }]);
-          expect(fix.world.completed).toBe(0);
-        }),
-      ),
-    ));
-
-  it("submits the unclaimed member on the slice after a budget overrun", () =>
-    Effect.runPromise(
-      onTestClock(
-        Effect.gen(function* () {
-          const continuation = fixture({
-            members: [memberA, memberB],
-            claimed: [memberA.id],
-          });
-
-          successOf(yield* runSliceNow(continuation));
-
-          expect(continuation.world.claims).toStrictEqual([memberB.id]);
-          expect(continuation.mailer.sent).toHaveLength(1);
-          expect(continuation.mailer.sent[0]?.recipient).toBe(memberB.email);
-          expect(continuation.world.completed).toBe(1);
-        }),
-      ),
-    ));
-
-  it("fails the invocation when the first member already overruns", () =>
-    Effect.runPromise(
-      onTestClock(
-        Effect.gen(function* () {
-          const fix = fixture({ delays: [Duration.hours(1)] });
-
-          const attempt = yield* runSliceNow(fix);
-
-          expect(failureOf(attempt)).toBeInstanceOf(SliceOverrun);
-          expect(fix.world.claims).toHaveLength(0);
-          expect(fix.mailer.sent).toHaveLength(0);
-          expect(fix.world.checkpoints).toHaveLength(0);
-          expect(fix.wake.messages).toHaveLength(0);
-        }),
-      ),
-    ));
-
-  it("claims no recipient when the unsubscribe link cannot be minted", () =>
-    Effect.runPromise(
-      onTestClock(
-        Effect.gen(function* () {
-          const fix = fixture({
-            env: { EMAILER_UNSUBSCRIBE_SECRET: unsubscribeEnv.EMAILER_UNSUBSCRIBE_SECRET },
-          });
-
-          const now = yield* Clock.currentTimeMillis;
-
-          const exit = yield* Effect.exit(
-            runSlice({ campaignId, runToken }, now + Duration.toMillis(sliceTimeout)),
-          ).pipe(Effect.provide(fix.layer));
-
-          expect(Exit.hasDies(exit)).toBe(true);
-          expect(fix.world.claims).toHaveLength(0);
-          expect(fix.world.rows.size).toBe(0);
-          expect(fix.mailer.sent).toHaveLength(0);
-        }),
-      ),
-    ));
-
-  it("enqueues nothing when a checkpoint is lost", () =>
-    Effect.runPromise(
-      onTestClock(
-        Effect.gen(function* () {
-          const fix = fixture({
-            members: [memberA],
-            nextCursor: memberB.id,
-            checkpointOutcome: "condition-failed",
-          });
-
-          successOf(yield* runSliceNow(fix));
-
-          expect(fix.world.counters.accepted).toBe(1);
-          expect(fix.world.checkpoints).toHaveLength(1);
-          expect(fix.wake.messages).toHaveLength(0);
-          expect(fix.world.completed).toBe(0);
-        }),
-      ),
-    ));
-
-  it("retries rate-limited submissions with 1s, 2s, 4s backoff then pauses", () =>
-    Effect.runPromise(
-      onTestClock(
-        Effect.gen(function* () {
-          const fix = fixture({
-            outcomes: [
-              { outcome: "rejected", rejectionCode: "rate-limited" },
-              { outcome: "rejected", rejectionCode: "rate-limited" },
-              { outcome: "rejected", rejectionCode: "rate-limited" },
-              { outcome: "rejected", rejectionCode: "rate-limited" },
-            ],
-          });
-
-          const fiber = yield* Effect.forkChild(runSliceNow(fix));
-
-          yield* TestClock.adjust("6999 millis");
-
-          expect(fix.mailer.sent).toHaveLength(3);
-
-          yield* TestClock.adjust("1 millis");
-
-          successOf(yield* Fiber.join(fiber));
-
-          expect(fix.mailer.sent).toHaveLength(4);
-          expect(fix.limiter.consumes).toHaveLength(4);
-          expect(
-            fix.limiter.consumes.every((consumed) => consumed.limit === defaultGuard.limit),
-          ).toBe(true);
-          expect(fix.world.counters.rejected).toBe(1);
-          expect(fix.world.rows.get(memberA.id)?.state).toBe("rejected");
-          expect(fix.world.paused).toStrictEqual([{ reason: "rate-limited", cursor: memberA.id }]);
-          expect(fix.wake.messages).toHaveLength(0);
-        }),
-      ),
-    ));
-
-  it("recovers from one rate-limited submission after a 1s backoff", () =>
-    Effect.runPromise(
-      onTestClock(
-        Effect.gen(function* () {
-          const fix = fixture({
-            outcomes: [
-              { outcome: "rejected", rejectionCode: "rate-limited" },
-              { outcome: "accepted", messageId: "second" },
-            ],
-          });
-
-          const fiber = yield* Effect.forkChild(runSliceNow(fix));
-
-          yield* TestClock.adjust("1 second");
-
-          successOf(yield* Fiber.join(fiber));
-
-          expect(fix.mailer.sent).toHaveLength(2);
-          expect(fix.limiter.consumes).toHaveLength(2);
-          expect(fix.world.settlements).toStrictEqual([
-            { contactId: memberA.id, settlement: { state: "accepted", messageId: "second" } },
-          ]);
-          expect(fix.world.paused).toStrictEqual([]);
-        }),
-      ),
-    ));
-
-  it("settles an uncertain submission without resending it and moves on", () =>
-    Effect.runPromise(
-      onTestClock(
-        Effect.gen(function* () {
-          const fix = fixture({
-            members: [memberA, memberB],
-            outcomes: [new SubmissionUncertain({ reason: "timeout", cause: "slow" })],
-          });
-
-          successOf(yield* runSliceNow(fix));
-
-          expect(fix.mailer.sent.map((message) => message.recipient)).toStrictEqual([
-            memberA.email,
-            memberB.email,
-          ]);
-          expect(fix.world.settlements).toStrictEqual([
-            { contactId: memberA.id, settlement: { state: "uncertain" } },
-            { contactId: memberB.id, settlement: { state: "accepted", messageId: "ses-message" } },
-          ]);
-          expect(fix.world.paused).toStrictEqual([]);
-          expect(fix.world.completed).toBe(1);
-        }),
-      ),
-    ));
-
-  it("pauses on sending-paused after settling the recipient rejected", () =>
-    Effect.runPromise(
-      onTestClock(
-        Effect.gen(function* () {
-          const fix = fixture({
-            outcomes: [{ outcome: "rejected", rejectionCode: "sending-paused" }],
-          });
-
-          successOf(yield* runSliceNow(fix));
-
-          expect(fix.world.counters.rejected).toBe(1);
-          expect(fix.world.paused).toStrictEqual([
-            { reason: "sending-paused", cursor: memberA.id },
-          ]);
-          expect(fix.wake.messages).toHaveLength(0);
-          expect(fix.world.completed).toBe(0);
-        }),
-      ),
-    ));
-
-  it("pauses for the daily quota before any claim", () =>
-    Effect.runPromise(
-      onTestClock(
-        Effect.gen(function* () {
-          const fix = fixture({
-            cursor: memberA.id,
-            guard: { limit: 8, dailyExhausted: true, halted: false },
-          });
-
-          successOf(yield* runSliceNow(fix));
-
-          expect(fix.world.claims).toHaveLength(0);
-          expect(fix.world.listCalls).toHaveLength(0);
-          expect(fix.mailer.sent).toHaveLength(0);
-          expect(fix.world.paused).toStrictEqual([{ reason: "daily-quota", cursor: memberA.id }]);
-        }),
-      ),
-    ));
-
-  it("completes when the list is missing", () =>
-    Effect.runPromise(
-      onTestClock(
-        Effect.gen(function* () {
-          const fix = fixture({ listMissing: true });
-
-          successOf(yield* runSliceNow(fix));
-
-          expect(fix.world.completed).toBe(1);
-          expect(fix.world.claims).toHaveLength(0);
-          expect(fix.wake.messages).toHaveLength(0);
-        }),
-      ),
-    ));
-
-  it("consumes the limiter once per attempt with the run's limit", () =>
-    Effect.runPromise(
-      onTestClock(
-        Effect.gen(function* () {
-          const fix = fixture({
-            members: [memberA, memberB],
-            guard: { limit: 3, dailyExhausted: false, halted: false },
-            outcomes: [
-              { outcome: "rejected", rejectionCode: "message-rejected" },
-              { outcome: "accepted", messageId: "ses-message" },
-            ],
-          });
-
-          successOf(yield* runSliceNow(fix));
-
-          expect(fix.limiter.consumes.map((consumed) => consumed.limit)).toStrictEqual([3, 3]);
-          expect(fix.world.counters.rejected).toBe(1);
-          expect(fix.world.counters.accepted).toBe(1);
-        }),
-      ),
-    ));
-
-  it("pauses for reputation before any claim or limiter call", () =>
-    Effect.runPromise(
-      onTestClock(
-        Effect.gen(function* () {
-          const fix = fixture({
-            cursor: memberA.id,
-            guard: { limit: 8, dailyExhausted: false, halted: true },
-          });
-
-          successOf(yield* runSliceNow(fix));
-
-          expect(fix.world.claims).toHaveLength(0);
-          expect(fix.world.listCalls).toHaveLength(0);
-          expect(fix.limiter.consumes).toHaveLength(0);
-          expect(fix.mailer.sent).toHaveLength(0);
-          expect(fix.world.paused).toStrictEqual([{ reason: "reputation", cursor: memberA.id }]);
-        }),
-      ),
-    ));
-
-  it("does not trip the breaker at 199 accepted with 199 bounced", () =>
-    Effect.runPromise(
-      onTestClock(
-        Effect.gen(function* () {
-          const fix = fixture({ run: { accepted: 199, bounced: 199, complained: 0 } });
-
-          successOf(yield* runSliceNow(fix));
-
-          expect(fix.world.paused).toHaveLength(0);
-          expect(fix.world.claims).toStrictEqual([memberA.id]);
-          expect(fix.world.completed).toBe(1);
-        }),
-      ),
-    ));
-
-  it("trips the breaker at 200 accepted with 10 bounced", () =>
-    Effect.runPromise(
-      onTestClock(
-        Effect.gen(function* () {
-          const fix = fixture({
-            cursor: memberA.id,
-            run: { accepted: 200, bounced: 10, complained: 0 },
-          });
-
-          successOf(yield* runSliceNow(fix));
-
-          expect(fix.world.claims).toHaveLength(0);
-          expect(fix.world.listCalls).toHaveLength(0);
-          expect(fix.limiter.consumes).toHaveLength(0);
-          expect(fix.world.paused).toStrictEqual([{ reason: "feedback", cursor: memberA.id }]);
-        }),
-      ),
-    ));
-
-  it("does not trip the breaker at 200 accepted with 9 bounced", () =>
-    Effect.runPromise(
-      onTestClock(
-        Effect.gen(function* () {
-          const fix = fixture({ run: { accepted: 200, bounced: 9, complained: 0 } });
-
-          successOf(yield* runSliceNow(fix));
-
-          expect(fix.world.paused).toHaveLength(0);
-          expect(fix.world.claims).toStrictEqual([memberA.id]);
-        }),
-      ),
-    ));
-
-  it("trips the breaker at 1000 accepted with 1 complaint", () =>
-    Effect.runPromise(
-      onTestClock(
-        Effect.gen(function* () {
-          const fix = fixture({
-            cursor: memberA.id,
-            run: { accepted: 1000, bounced: 0, complained: 1 },
-          });
-
-          successOf(yield* runSliceNow(fix));
-
-          expect(fix.world.claims).toHaveLength(0);
-          expect(fix.world.listCalls).toHaveLength(0);
-          expect(fix.limiter.consumes).toHaveLength(0);
-          expect(fix.world.paused).toStrictEqual([{ reason: "feedback", cursor: memberA.id }]);
-        }),
-      ),
-    ));
-
-  it("does not trip the breaker at 999 accepted with 1 complaint", () =>
-    Effect.runPromise(
-      onTestClock(
-        Effect.gen(function* () {
-          const fix = fixture({ run: { accepted: 999, bounced: 0, complained: 1 } });
-
-          successOf(yield* runSliceNow(fix));
-
-          expect(fix.world.paused).toHaveLength(0);
-          expect(fix.world.claims).toStrictEqual([memberA.id]);
-        }),
-      ),
-    ));
-
-  it("pauses for reputation, not daily quota, when the guard is halted and the quota is exhausted", () =>
-    Effect.runPromise(
-      onTestClock(
-        Effect.gen(function* () {
-          const fix = fixture({
-            cursor: memberA.id,
-            guard: { limit: 8, dailyExhausted: true, halted: true },
-            run: { accepted: 200, bounced: 200, complained: 0 },
-          });
-
-          successOf(yield* runSliceNow(fix));
-
-          expect(fix.world.claims).toHaveLength(0);
-          expect(fix.world.paused).toStrictEqual([{ reason: "reputation", cursor: memberA.id }]);
-        }),
-      ),
-    ));
-
-  it("pauses for daily quota before the breaker is evaluated", () =>
-    Effect.runPromise(
-      onTestClock(
-        Effect.gen(function* () {
-          const fix = fixture({
-            cursor: memberA.id,
-            guard: { limit: 8, dailyExhausted: true, halted: false },
-            run: { accepted: 200, bounced: 200, complained: 0 },
-          });
-
-          successOf(yield* runSliceNow(fix));
-
-          expect(fix.world.paused).toStrictEqual([{ reason: "daily-quota", cursor: memberA.id }]);
-        }),
-      ),
-    ));
-
-  it("skips bouncing members", () =>
-    Effect.runPromise(
-      onTestClock(
-        Effect.gen(function* () {
-          const fix = fixture({
-            members: [memberA],
-            statuses: [[memberA.email, "bouncing"]],
-          });
-
-          successOf(yield* runSliceNow(fix));
-
-          expect(fix.world.skips).toStrictEqual([{ contactId: memberA.id, reason: "bouncing" }]);
-          expect(fix.world.claims).toHaveLength(0);
-          expect(fix.mailer.sent).toHaveLength(0);
-          expect(fix.world.completed).toBe(1);
-        }),
-      ),
-    ));
-
-  it("skips members a two-entry filter does not match without a row, a status read, a limiter slot or a submission", () =>
-    Effect.runPromise(
-      onTestClock(
-        Effect.gen(function* () {
-          const later = "0195f0a0-1111-4222-8333-44444444c099";
-
-          const fix = fixture({
-            members: [memberA, memberB, memberC],
-            filter: { plan: "pro", city: "Berlin" },
-            nextCursor: later,
-          });
-
-          successOf(yield* runSliceNow(fix));
-
-          expect(fix.world.counters.accepted).toBe(1);
-          expect(fix.world.rows.get(memberA.id)?.state).toBe("accepted");
-          expect(fix.world.rows.has(memberB.id)).toBe(false);
-          expect(fix.world.rows.has(memberC.id)).toBe(false);
-          expect(fix.world.counters.skipped).toBe(0);
-          expect(fix.world.statusCalls).toStrictEqual([memberA.email]);
-          expect(fix.limiter.consumes).toHaveLength(1);
-          expect(fix.mailer.sent.map((message) => message.recipient)).toStrictEqual([
-            memberA.email,
-          ]);
-          expect(fix.world.checkpoints).toMatchObject([{ previous: undefined, next: later }]);
-          expect(fix.wake.messages).toStrictEqual([{ campaignId, runToken }]);
-          expect(fix.world.completed).toBe(0);
-        }),
-      ),
-    ));
-
-  it("checkpoints at a filtered member when the next delay would overrun", () =>
-    Effect.runPromise(
-      onTestClock(
-        Effect.gen(function* () {
-          const fix = fixture({
-            members: [memberB, memberA],
-            filter: { plan: "pro", city: "Berlin" },
-            delays: [Duration.hours(1)],
-          });
-
-          successOf(yield* runSliceNow(fix));
-
-          expect(fix.world.checkpoints).toMatchObject([{ previous: undefined, next: memberB.id }]);
-          expect(fix.world.rows.has(memberB.id)).toBe(false);
-          expect(fix.world.claims).toHaveLength(0);
-          expect(fix.mailer.sent).toHaveLength(0);
-          expect(fix.limiter.consumes).toHaveLength(1);
-          expect(fix.world.statusCalls).toStrictEqual([memberA.email]);
-          expect(fix.wake.messages).toStrictEqual([{ campaignId, runToken }]);
-          expect(fix.world.completed).toBe(0);
-        }),
-      ),
-    ));
+  it.effect(
+    "settles each member of a page, increments counters, and enqueues one continuation",
+    () =>
+      Effect.gen(function* () {
+        const fix = fixture({ members: [memberA, memberB], nextCursor: memberC.id });
+
+        successOf(yield* runSliceNow(fix));
+
+        expect(fix.world.listCalls).toStrictEqual([
+          { listId, limit: memberPageSize, cursor: undefined },
+        ]);
+        expect(fix.world.claims).toStrictEqual([memberA.id, memberB.id]);
+        expect(fix.world.settlements).toHaveLength(2);
+        expect(fix.world.counters.accepted).toBe(2);
+        expect(fix.mailer.sent.map((message) => message.recipient)).toStrictEqual([
+          memberA.email,
+          memberB.email,
+        ]);
+        expect(fix.guard.slots).toStrictEqual([defaultGuard.limit, defaultGuard.limit]);
+        expect(fix.world.checkpoints).toMatchObject([{ previous: undefined, next: memberC.id }]);
+        expect(fix.wake.messages).toStrictEqual([{ campaignId, runToken }]);
+        expect(fix.world.completed).toBe(0);
+      }),
+  );
+
+  it.effect.each([
+    { parts: "no html", html: undefined },
+    { parts: "html", html: "<p>Hello there</p>" },
+  ])("hands the mailer the subject and the stored body when the campaign has $parts", ({ html }) =>
+    Effect.gen(function* () {
+      const fix = fixture({ html });
+
+      successOf(yield* runSliceNow(fix));
+
+      expect(fix.mailer.sent).toMatchObject([{ subject, text, html }]);
+    }),
+  );
+
+  it.effect("sends as the campaign, under the send id of the row it claimed", () =>
+    Effect.gen(function* () {
+      const fix = fixture({ members: [memberA] });
+
+      successOf(yield* runSliceNow(fix));
+
+      expect(fix.mailer.sent.map((message) => message.purpose)).toStrictEqual([
+        { kind: "campaign", campaignId, sendId: fix.world.rows.get(memberA.id)?.sendId },
+      ]);
+      expect(fix.mailer.sent[0]?.subject).toBe(subject);
+      expect(fix.mailer.sent[0]?.unsubscribeUrl).toBe(
+        yield* unsubscribeLink(memberA.email).pipe(Effect.provide(configurationOf(unsubscribeEnv))),
+      );
+    }),
+  );
+
+  it.effect("completes the last page and enqueues nothing", () =>
+    Effect.gen(function* () {
+      const fix = fixture({ members: [memberA] });
+
+      successOf(yield* runSliceNow(fix));
+
+      expect(fix.world.counters.accepted).toBe(1);
+      expect(fix.world.completed).toBe(1);
+      expect(fix.world.checkpoints).toHaveLength(0);
+      expect(fix.wake.messages).toHaveLength(0);
+    }),
+  );
+
+  it.effect("skips unsubscribed and suppressed members", () =>
+    Effect.gen(function* () {
+      const fix = fixture({
+        members: [memberA, memberB, memberC],
+        statuses: [
+          [memberA.email, "unsubscribed"],
+          [memberB.email, "suppressed"],
+        ],
+      });
+
+      successOf(yield* runSliceNow(fix));
+
+      expect(fix.world.skips).toStrictEqual([
+        { contactId: memberA.id, reason: "unsubscribed" },
+        { contactId: memberB.id, reason: "suppressed" },
+      ]);
+      expect(fix.world.counters.skipped).toBe(2);
+      expect(fix.world.counters.accepted).toBe(1);
+      expect(fix.mailer.sent).toHaveLength(1);
+      expect(fix.world.completed).toBe(1);
+    }),
+  );
+
+  it.effect("claims nothing and submits nothing on a redelivered slice, then completes", () =>
+    Effect.gen(function* () {
+      const fix = fixture({ members: [memberA, memberB], claimed: [memberA, memberB] });
+
+      successOf(yield* runSliceNow(fix));
+
+      expect(fix.world.claims).toHaveLength(0);
+      expect(fix.mailer.sent).toHaveLength(0);
+      expect(fix.guard.slots).toHaveLength(2);
+      expect(fix.world.completed).toBe(1);
+      expect(fix.wake.messages).toHaveLength(0);
+    }),
+  );
+
+  it.effect("submits nothing when the run token is stale", () =>
+    Effect.gen(function* () {
+      const fix = fixture({ beginOutcome: "stale" });
+      const entries: Array<{ readonly level: string; readonly message: unknown }> = [];
+      const now = yield* Clock.currentTimeMillis;
+
+      const attempt = yield* Effect.result(
+        runSlice({ campaignId, runToken }, now + Duration.toMillis(sliceTimeout)),
+      ).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            fix.layer,
+            Logger.layer([
+              Logger.make((options) => {
+                entries.push({ level: options.logLevel, message: options.message });
+              }),
+            ]),
+          ),
+        ),
+      );
+
+      successOf(attempt);
+
+      expect(fix.world.claims).toHaveLength(0);
+      expect(fix.mailer.sent).toHaveLength(0);
+      expect(fix.world.listCalls).toHaveLength(0);
+      expect(fix.world.settlements).toHaveLength(0);
+      expect(fix.world.completed).toBe(0);
+      expect(fix.wake.messages).toHaveLength(0);
+
+      const stale = entries.filter((entry) => {
+        // SAFETY: Effect.logInfo(message, data) reaches a logger as [message, data].
+        const recorded = entry.message as ReadonlyArray<unknown> | string | undefined;
+
+        return Array.isArray(recorded)
+          ? recorded[0] === "stale wake discarded"
+          : recorded === "stale wake discarded";
+      });
+
+      expect(stale).toHaveLength(1);
+      expect(stale[0]?.level).toBe("Info");
+      expect(stale[0]?.message).toStrictEqual([
+        "stale wake discarded",
+        { campaignId, runToken, disposition: "stale" },
+      ]);
+    }),
+  );
+
+  it.effect("checkpoints at the last processed member when a later delay would overrun", () =>
+    Effect.gen(function* () {
+      const fix = fixture({
+        members: [memberA, memberB],
+        delays: [Duration.zero, Duration.hours(1)],
+      });
+
+      successOf(yield* runSliceNow(fix));
+
+      expect(fix.world.counters.accepted).toBe(1);
+      expect(fix.world.claims).toStrictEqual([memberA.id]);
+      expect(fix.mailer.sent).toHaveLength(1);
+      expect(fix.world.checkpoints).toMatchObject([{ previous: undefined, next: memberA.id }]);
+      expect(fix.wake.messages).toStrictEqual([{ campaignId, runToken }]);
+      expect(fix.world.completed).toBe(0);
+    }),
+  );
+
+  it.effect("submits the unclaimed member on the slice after a budget overrun", () =>
+    Effect.gen(function* () {
+      const continuation = fixture({
+        members: [memberA, memberB],
+        claimed: [memberA],
+      });
+
+      successOf(yield* runSliceNow(continuation));
+
+      expect(continuation.world.claims).toStrictEqual([memberB.id]);
+      expect(continuation.mailer.sent).toHaveLength(1);
+      expect(continuation.mailer.sent[0]?.recipient).toBe(memberB.email);
+      expect(continuation.world.completed).toBe(1);
+    }),
+  );
+
+  it.effect("fails the invocation when the first member already overruns", () =>
+    Effect.gen(function* () {
+      const fix = fixture({ delays: [Duration.hours(1)] });
+
+      const attempt = yield* runSliceNow(fix);
+
+      expect(failureOf(attempt)).toBeInstanceOf(SliceOverrun);
+      expect(fix.world.claims).toHaveLength(0);
+      expect(fix.mailer.sent).toHaveLength(0);
+      expect(fix.world.checkpoints).toHaveLength(0);
+      expect(fix.wake.messages).toHaveLength(0);
+    }),
+  );
+
+  it.effect("claims no recipient when the unsubscribe link cannot be minted", () =>
+    Effect.gen(function* () {
+      const fix = fixture({
+        env: { EMAILER_UNSUBSCRIBE_SECRET: unsubscribeEnv.EMAILER_UNSUBSCRIBE_SECRET },
+      });
+
+      const now = yield* Clock.currentTimeMillis;
+
+      const exit = yield* Effect.exit(
+        runSlice({ campaignId, runToken }, now + Duration.toMillis(sliceTimeout)),
+      ).pipe(Effect.provide(fix.layer));
+
+      expect(Exit.hasDies(exit)).toBe(true);
+      expect(fix.world.claims).toHaveLength(0);
+      expect(fix.world.rows.size).toBe(0);
+      expect(fix.mailer.sent).toHaveLength(0);
+    }),
+  );
+
+  it.effect("enqueues nothing when a checkpoint is lost", () =>
+    Effect.gen(function* () {
+      const fix = fixture({
+        members: [memberA],
+        nextCursor: memberB.id,
+        checkpointOutcome: "condition-failed",
+      });
+
+      successOf(yield* runSliceNow(fix));
+
+      expect(fix.world.counters.accepted).toBe(1);
+      expect(fix.world.checkpoints).toHaveLength(1);
+      expect(fix.wake.messages).toHaveLength(0);
+      expect(fix.world.completed).toBe(0);
+    }),
+  );
+
+  it.effect("retries rate-limited submissions with 1s, 2s, 4s backoff then pauses", () =>
+    Effect.gen(function* () {
+      const fix = fixture({
+        outcomes: [
+          { outcome: "rejected", rejectionCode: "rate-limited" },
+          { outcome: "rejected", rejectionCode: "rate-limited" },
+          { outcome: "rejected", rejectionCode: "rate-limited" },
+          { outcome: "rejected", rejectionCode: "rate-limited" },
+        ],
+      });
+
+      const fiber = yield* Effect.forkChild(runSliceNow(fix));
+
+      yield* TestClock.adjust("6999 millis");
+
+      expect(fix.mailer.sent).toHaveLength(3);
+
+      yield* TestClock.adjust("1 millis");
+
+      successOf(yield* Fiber.join(fiber));
+
+      expect(fix.mailer.sent).toHaveLength(4);
+      expect(fix.guard.slots).toHaveLength(4);
+      expect(fix.guard.slots.every((limit) => limit === defaultGuard.limit)).toBe(true);
+      expect(fix.world.counters.rejected).toBe(1);
+      expect(fix.world.rows.get(memberA.id)?.state).toBe("rejected");
+      expect(fix.world.paused).toStrictEqual([{ reason: "rate-limited", cursor: memberA.id }]);
+      expect(fix.wake.messages).toHaveLength(0);
+    }),
+  );
+
+  it.effect("recovers from one rate-limited submission after a 1s backoff", () =>
+    Effect.gen(function* () {
+      const fix = fixture({
+        outcomes: [
+          { outcome: "rejected", rejectionCode: "rate-limited" },
+          { outcome: "accepted", messageId: "second" },
+        ],
+      });
+
+      const fiber = yield* Effect.forkChild(runSliceNow(fix));
+
+      yield* TestClock.adjust("1 second");
+
+      successOf(yield* Fiber.join(fiber));
+
+      expect(fix.mailer.sent).toHaveLength(2);
+      expect(fix.guard.slots).toHaveLength(2);
+      expect(fix.world.settlements).toStrictEqual([
+        { contactId: memberA.id, settlement: { outcome: "accepted", messageId: "second" } },
+      ]);
+      expect(fix.world.paused).toStrictEqual([]);
+    }),
+  );
+
+  it.effect("settles an uncertain submission without resending it and moves on", () =>
+    Effect.gen(function* () {
+      const fix = fixture({
+        members: [memberA, memberB],
+        outcomes: [{ outcome: "uncertain" }],
+      });
+
+      successOf(yield* runSliceNow(fix));
+
+      expect(fix.mailer.sent.map((message) => message.recipient)).toStrictEqual([
+        memberA.email,
+        memberB.email,
+      ]);
+      expect(fix.world.settlements).toStrictEqual([
+        { contactId: memberA.id, settlement: { outcome: "uncertain" } },
+        {
+          contactId: memberB.id,
+          settlement: { outcome: "accepted", messageId: "ses-message" },
+        },
+      ]);
+      expect(fix.world.paused).toStrictEqual([]);
+      expect(fix.world.completed).toBe(1);
+    }),
+  );
+
+  it.effect("pauses on sending-paused after settling the recipient rejected", () =>
+    Effect.gen(function* () {
+      const fix = fixture({
+        outcomes: [{ outcome: "rejected", rejectionCode: "sending-paused" }],
+      });
+
+      successOf(yield* runSliceNow(fix));
+
+      expect(fix.world.counters.rejected).toBe(1);
+      expect(fix.world.paused).toStrictEqual([{ reason: "sending-paused", cursor: memberA.id }]);
+      expect(fix.wake.messages).toHaveLength(0);
+      expect(fix.world.completed).toBe(0);
+    }),
+  );
+
+  // The breaker rows here and in the next table are ADR-0012's boundaries: a bounce trip at 200
+  // accepted and 5 percent, a complaint trip at 1000 accepted and 1 per mille. The guard is read
+  // first and wins over both.
+  it.effect.each<{
+    readonly cause: string;
+    readonly scenario: Scenario;
+    readonly reason: PauseReason;
+  }>([
+    {
+      cause: "a daily-quota refusal",
+      scenario: { guard: { limit: 8, refusal: "daily-quota" } },
+      reason: "daily-quota",
+    },
+    {
+      cause: "a reputation refusal",
+      scenario: { guard: { limit: 8, refusal: "reputation" } },
+      reason: "reputation",
+    },
+    {
+      cause: "200 accepted with 10 bounced",
+      scenario: { run: { accepted: 200, bounced: 10, complained: 0 } },
+      reason: "feedback",
+    },
+    {
+      cause: "1000 accepted with 1 complaint",
+      scenario: { run: { accepted: 1000, bounced: 0, complained: 1 } },
+      reason: "feedback",
+    },
+    {
+      cause: "a reputation refusal over the breaker",
+      scenario: {
+        guard: { limit: 8, refusal: "reputation" },
+        run: { accepted: 200, bounced: 200, complained: 0 },
+      },
+      reason: "reputation",
+    },
+    {
+      cause: "a daily-quota refusal over the breaker",
+      scenario: {
+        guard: { limit: 8, refusal: "daily-quota" },
+        run: { accepted: 200, bounced: 200, complained: 0 },
+      },
+      reason: "daily-quota",
+    },
+  ])(
+    "pauses as $reason on $cause, before any page read, claim, pacing slot or send",
+    ({ scenario, reason }) =>
+      Effect.gen(function* () {
+        const fix = fixture({ ...scenario, cursor: memberA.id });
+
+        successOf(yield* runSliceNow(fix));
+
+        expect(fix.world.listCalls).toHaveLength(0);
+        expect(fix.world.claims).toHaveLength(0);
+        expect(fix.guard.slots).toHaveLength(0);
+        expect(fix.mailer.sent).toHaveLength(0);
+        expect(fix.world.paused).toStrictEqual([{ reason, cursor: memberA.id }]);
+      }),
+  );
+
+  it.effect.each([
+    {
+      counts: "199 accepted with 199 bounced",
+      run: { accepted: 199, bounced: 199, complained: 0 },
+    },
+    { counts: "200 accepted with 9 bounced", run: { accepted: 200, bounced: 9, complained: 0 } },
+    { counts: "999 accepted with 1 complaint", run: { accepted: 999, bounced: 0, complained: 1 } },
+  ])("does not trip the breaker at $counts", ({ run }) =>
+    Effect.gen(function* () {
+      const fix = fixture({ run });
+
+      successOf(yield* runSliceNow(fix));
+
+      expect(fix.world.paused).toHaveLength(0);
+      expect(fix.world.claims).toStrictEqual([memberA.id]);
+      expect(fix.world.completed).toBe(1);
+    }),
+  );
+
+  it.effect("completes when the list is missing", () =>
+    Effect.gen(function* () {
+      const fix = fixture({ listMissing: true });
+
+      successOf(yield* runSliceNow(fix));
+
+      expect(fix.world.completed).toBe(1);
+      expect(fix.world.claims).toHaveLength(0);
+      expect(fix.wake.messages).toHaveLength(0);
+    }),
+  );
+
+  it.effect("takes one pacing slot per attempt with the run's limit", () =>
+    Effect.gen(function* () {
+      const fix = fixture({
+        members: [memberA, memberB],
+        guard: { limit: 3 },
+        outcomes: [
+          { outcome: "rejected", rejectionCode: "message-rejected" },
+          { outcome: "accepted", messageId: "ses-message" },
+        ],
+      });
+
+      successOf(yield* runSliceNow(fix));
+
+      expect(fix.guard.slots).toStrictEqual([3, 3]);
+      expect(fix.world.counters.rejected).toBe(1);
+      expect(fix.world.counters.accepted).toBe(1);
+    }),
+  );
+
+  it.effect("skips bouncing members", () =>
+    Effect.gen(function* () {
+      const fix = fixture({
+        members: [memberA],
+        statuses: [[memberA.email, "bouncing"]],
+      });
+
+      successOf(yield* runSliceNow(fix));
+
+      expect(fix.world.skips).toStrictEqual([{ contactId: memberA.id, reason: "bouncing" }]);
+      expect(fix.world.claims).toHaveLength(0);
+      expect(fix.mailer.sent).toHaveLength(0);
+      expect(fix.world.completed).toBe(1);
+    }),
+  );
+
+  it.effect(
+    "skips members a two-entry filter does not match without a row, a status read, a pacing slot or a submission",
+    () =>
+      Effect.gen(function* () {
+        const later = "0195f0a0-1111-4222-8333-44444444c099";
+
+        const fix = fixture({
+          members: [memberA, memberB, memberC],
+          filter: { plan: "pro", city: "Berlin" },
+          nextCursor: later,
+        });
+
+        successOf(yield* runSliceNow(fix));
+
+        expect(fix.world.counters.accepted).toBe(1);
+        expect(fix.world.rows.get(memberA.id)?.state).toBe("accepted");
+        expect(fix.world.rows.has(memberB.id)).toBe(false);
+        expect(fix.world.rows.has(memberC.id)).toBe(false);
+        expect(fix.world.counters.skipped).toBe(0);
+        expect(fix.world.statusCalls).toStrictEqual([memberA.email]);
+        expect(fix.guard.slots).toHaveLength(1);
+        expect(fix.mailer.sent.map((message) => message.recipient)).toStrictEqual([memberA.email]);
+        expect(fix.world.checkpoints).toMatchObject([{ previous: undefined, next: later }]);
+        expect(fix.wake.messages).toStrictEqual([{ campaignId, runToken }]);
+        expect(fix.world.completed).toBe(0);
+      }),
+  );
+
+  it.effect("checkpoints at a filtered member when the next delay would overrun", () =>
+    Effect.gen(function* () {
+      const fix = fixture({
+        members: [memberB, memberA],
+        filter: { plan: "pro", city: "Berlin" },
+        delays: [Duration.hours(1)],
+      });
+
+      successOf(yield* runSliceNow(fix));
+
+      expect(fix.world.checkpoints).toMatchObject([{ previous: undefined, next: memberB.id }]);
+      expect(fix.world.rows.has(memberB.id)).toBe(false);
+      expect(fix.world.claims).toHaveLength(0);
+      expect(fix.mailer.sent).toHaveLength(0);
+      expect(fix.guard.slots).toHaveLength(1);
+      expect(fix.world.statusCalls).toStrictEqual([memberA.email]);
+      expect(fix.wake.messages).toStrictEqual([{ campaignId, runToken }]);
+      expect(fix.world.completed).toBe(0);
+    }),
+  );
 });

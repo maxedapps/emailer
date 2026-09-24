@@ -2,7 +2,7 @@ import * as AWS from "alchemy/AWS";
 import { fromCredentials } from "alchemy/AWS/Credentials";
 import { Effect, Layer, Result } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "@effect/vitest";
 
 import { str } from "./Items.ts";
 import { transactionPrimitives, updatePrimitives } from "./Primitives.ts";
@@ -178,38 +178,37 @@ const runLifecycleTransaction = (transport: Transport) =>
   }).pipe(Effect.provide(bindings(transport)));
 
 describe("conditional primitives over the real client", () => {
-  it("updateIf lets the client retry a server error with the identical request", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const transport = transportReplying([serverError, ok]);
+  it.live("updateIf lets the client retry a server error with the identical request", () =>
+    Effect.gen(function* () {
+      const transport = transportReplying([serverError, ok]);
 
-        const outcome = yield* runUpdateIf(transport);
+      const outcome = yield* runUpdateIf(transport);
 
-        expect(Result.isSuccess(outcome) && outcome.success).toStrictEqual({
-          applied: true,
-          attributes: undefined,
-        });
-        expect(transport.attempts).toHaveLength(2);
-        expect(transport.attempts[1]).toBe(transport.attempts[0]);
-      }),
-    ));
+      expect(Result.isSuccess(outcome) && outcome.success).toStrictEqual({
+        applied: true,
+        attributes: undefined,
+      });
+      expect(transport.attempts).toHaveLength(2);
+      expect(transport.attempts[1]).toBe(transport.attempts[0]);
+    }),
+  );
 
-  it("runTransaction lets the client retry a server error with the same token", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const transport = transportReplying([serverError, ok]);
+  it.live("runTransaction lets the client retry a server error with the same token", () =>
+    Effect.gen(function* () {
+      const transport = transportReplying([serverError, ok]);
 
-        const outcome = yield* runTransaction(transport);
+      const outcome = yield* runTransaction(transport);
 
-        expect(Result.isSuccess(outcome) && outcome.success).toStrictEqual({ committed: true });
-        expect(transport.attempts).toHaveLength(2);
-        expect(transport.attempts[1]).toBe(transport.attempts[0]);
-        expect(tokenOf(transport.attempts[0] ?? "")).toBe("token-1");
-      }),
-    ));
+      expect(Result.isSuccess(outcome) && outcome.success).toStrictEqual({ committed: true });
+      expect(transport.attempts).toHaveLength(2);
+      expect(transport.attempts[1]).toBe(transport.attempts[0]);
+      expect(tokenOf(transport.attempts[0] ?? "")).toBe("token-1");
+    }),
+  );
 
-  it("runTransaction retries a conflict cancellation itself, as a new call with a new token", () =>
-    Effect.runPromise(
+  it.live(
+    "runTransaction retries a conflict cancellation itself, as a new call with a new token",
+    () =>
       Effect.gen(function* () {
         const transport = transportReplying([conflictCancellation, ok]);
 
@@ -218,10 +217,11 @@ describe("conditional primitives over the real client", () => {
         expect(Result.isSuccess(outcome) && outcome.success).toStrictEqual({ committed: true });
         expect(transport.attempts.map(tokenOf)).toStrictEqual(["token-1", "token-2"]);
       }),
-    ));
+  );
 
-  it("retries a lifecycle Update with the identical body and ClientRequestToken after a server error", () =>
-    Effect.runPromise(
+  it.live(
+    "retries a lifecycle Update with the identical body and ClientRequestToken after a server error",
+    () =>
       Effect.gen(function* () {
         const transport = transportReplying([serverError, ok]);
 
@@ -234,17 +234,16 @@ describe("conditional primitives over the real client", () => {
         expect(transport.attempts[0]).toContain("attribute_not_exists");
         expect(transport.attempts[0]).toContain("ClientRequestToken");
       }),
-    ));
+  );
 
-  it("retries a lifecycle Update conflict cancellation as a new call with a new token", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const transport = transportReplying([conflictCancellation, ok]);
+  it.live("retries a lifecycle Update conflict cancellation as a new call with a new token", () =>
+    Effect.gen(function* () {
+      const transport = transportReplying([conflictCancellation, ok]);
 
-        const outcome = yield* runLifecycleTransaction(transport);
+      const outcome = yield* runLifecycleTransaction(transport);
 
-        expect(Result.isSuccess(outcome) && outcome.success).toStrictEqual({ committed: true });
-        expect(transport.attempts.map(tokenOf)).toStrictEqual(["token-1", "token-2"]);
-      }),
-    ));
+      expect(Result.isSuccess(outcome) && outcome.success).toStrictEqual({ committed: true });
+      expect(transport.attempts.map(tokenOf)).toStrictEqual(["token-1", "token-2"]);
+    }),
+  );
 });

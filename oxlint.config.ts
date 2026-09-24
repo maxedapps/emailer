@@ -3,7 +3,12 @@ import { defineConfig } from "oxlint";
 
 export default defineConfig({
   extends: [recommended],
-  options: { typeAware: true, typeCheck: true },
+  options: {
+    typeAware: true,
+    typeCheck: true,
+    denyWarnings: true,
+    reportUnusedDisableDirectives: "error",
+  },
   plugins: ["typescript", "unicorn", "oxc", "import", "vitest"],
   categories: { correctness: "error" },
   ignorePatterns: [
@@ -21,6 +26,19 @@ export default defineConfig({
     { name: "anti-slop-effect", specifier: "./tools/oxlint/anti-slop/effect/index.ts" },
   ],
   rules: {
+    // `@effect/vitest`'s testers are test blocks too.
+    "vitest/no-standalone-expect": [
+      "error",
+      {
+        additionalTestBlockFunctions: [
+          "it.effect",
+          "it.effect.each",
+          "it.live",
+          "it.live.each",
+          "it.layer",
+        ],
+      },
+    ],
     "typescript/no-floating-promises": "error",
     "typescript/no-misused-promises": "error",
     "typescript/no-explicit-any": "error",

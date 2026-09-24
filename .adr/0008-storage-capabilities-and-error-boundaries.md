@@ -10,6 +10,7 @@
 - Amended: [ADR-0020](0020-drafts-previews-and-test-sends.md) — a sixth capability, `CampaignReader` (`GetItem` only), for the public preview function; the rate limiter's store is the fifth.
 - Amended: [campaign-listing](work/campaign-listing.md) — CampaignStore binds all six table operations
 - Amended: [codebase-cleanup](work/codebase-cleanup.md) — `Table.ts` also holds `allTableOperations`, the one six-operation binding that AudienceStore and CampaignStore, which both perform every operation, share; every narrower capability still binds its own
+- Amended: 2026-09-24, on the user's decision in the simplification plan (`work/simplify.md` T3) — storage fails with the contract's expected errors, `NotFound`, `EmailAlreadyUsed` and `AddressOptedOut`, where a read or a condition detects them, and the API calls the stores directly for plain reads and writes. `StorageFailure` stays internal.
 
 ## Context
 
@@ -26,11 +27,11 @@ Keep one table and four meaningful capability services:
 | FeedbackStore    | Conditional suppression and feedback writes                            | PutItem                                                               |
 | UnsubscribeStore | Conditional mailbox unsubscribe writes                                 | PutItem                                                               |
 
-The API provides the first two; event and public unsubscribe functions provide their specific writer capability. Each live Layer constructs only the bindings it needs. The failure destination separately requires Feedback's SQS SendMessage permission.
+The API provides the first two; event and public unsubscribe functions provide their specific writer capability. Each live Layer constructs only the bindings it needs.
 
 Retain existing item-owner modules. Table.ts owns only the resource; Errors.ts owns internal storage failures; Primitives.ts owns independently constructible bounded operations. Audience.ts and Unsubscribe.ts are new capability owners. Existing Campaigns.ts and Feedback.ts own their respective services. Keep shared values in leaf modules to avoid composition cycles.
 
-Application operations preserve internal storage and send causes. Entry-point adapters record sanitized diagnostics and translate failures into public responses or failed invocations. Storage errors do not depend on public HTTP schemas. Do not swallow feedback failures or claim successful unsubscribe before persistence.
+Application operations preserve internal storage and send causes. Entry-point adapters record sanitized diagnostics and translate failures into public responses or failed invocations. Storage fails with the contract's expected errors (`NotFound`, `EmailAlreadyUsed`, `AddressOptedOut`) where a read or a condition detects them; its internal `StorageFailure` does not depend on public HTTP schemas. Do not swallow feedback failures or claim successful unsubscribe before persistence.
 
 ## Alternatives considered
 

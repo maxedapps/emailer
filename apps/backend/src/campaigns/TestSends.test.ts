@@ -1,20 +1,20 @@
+import { describe, expect, it } from "@effect/vitest";
 import * as Schemas from "@emailer/api/Schemas";
-import { ConfigProvider, Duration, Effect, Layer, Option, Result } from "effect";
-import { RateLimiter } from "effect/unstable/persistence";
-import { describe, expect, it } from "vitest";
+import { ConfigProvider, Duration, Effect, Layer, Result } from "effect";
 
 import { sendTest } from "./TestSends.ts";
 import { unsubscribeLink } from "../consent/Unsubscribe.ts";
-import { Mailer, SubmissionUncertain } from "../sending/Mailer.ts";
+import { Mailer } from "../sending/Mailer.ts";
 import { SendGuard } from "../sending/SendGuard.ts";
 import { AudienceStore } from "../storage/Audience.ts";
 import { CampaignStore } from "../storage/Campaigns.ts";
-import { unusedAudience } from "../storage/Testing.ts";
+import { unusedAudience, unusedCampaigns } from "../storage/Testing.ts";
 
-import type { SendPurpose, SubmissionOutcome } from "../sending/Mailer.ts";
+import type { SendPurpose } from "../sending/Mailer.ts";
 import type { MessageContent } from "../sending/Message.ts";
 import type { SendAllowance } from "../sending/SendGuard.ts";
-import type { AddressStatus } from "../storage/Addresses.ts";
+import type { SubmissionOutcome } from "../storage/Campaigns.ts";
+import type { AddressStatus } from "@emailer/api/Schemas";
 
 const campaignId = "0195f0a0-1111-4222-8333-4444444ca409";
 
@@ -30,7 +30,7 @@ const campaign: Schemas.Campaign = {
   submission: { state: "draft" },
 };
 
-const healthy: SendAllowance = { limit: 3, dailyExhausted: false, halted: false };
+const healthy: SendAllowance = { limit: 3 };
 
 const configuration = Layer.succeed(ConfigProvider.ConfigProvider)(
   ConfigProvider.fromEnvRecord({
@@ -45,13 +45,10 @@ const member = (n: number): Schemas.Contact => ({
   createdAt: "2026-09-11T09:00:00.000Z",
 });
 
-const written = (operation: string) =>
-  Effect.die(new Error(`a test send must not reach CampaignStore.${operation}`));
-
 interface Scenario {
   readonly allowance?: SendAllowance;
   readonly statuses?: ReadonlyArray<readonly [string, AddressStatus]>;
-  readonly outcomes?: ReadonlyArray<SubmissionOutcome | SubmissionUncertain>;
+  readonly outcomes?: ReadonlyArray<SubmissionOutcome>;
   readonly members?: ReadonlyArray<Schemas.Contact>;
   readonly nextCursor?: string;
   readonly listMissing?: boolean;
@@ -66,7 +63,7 @@ interface Sent {
 
 const fixture = (scenario: Scenario = {}) => {
   const sent: Array<Sent> = [];
-  const consumes: Array<{ readonly key: string; readonly limit: number }> = [];
+  const slots: Array<number> = [];
   const pageRequests: Array<number> = [];
   const outcomes = [...(scenario.outcomes ?? [])];
   const statuses = new Map(scenario.statuses ?? []);
@@ -76,70 +73,53 @@ const fixture = (scenario: Scenario = {}) => {
     Layer.succeed(AudienceStore)({
       ...unusedAudience,
       listMembers: (_listId, limit) =>
-        Effect.sync(() => {
+        Effect.gen(function* () {
           pageRequests.push(limit);
 
-          return scenario.listMissing === true
-            ? Option.none()
-            : Option.some({ items: scenario.members ?? [], nextCursor: scenario.nextCursor });
+          if (scenario.listMissing === true) {
+            return yield* new Schemas.NotFound({ entity: "list" });
+          }
+
+          const items = [...(scenario.members ?? [])];
+
+          return scenario.nextCursor === undefined
+            ? { items }
+            : { items, nextCursor: scenario.nextCursor };
         }),
       addressStatus: (email) => Effect.succeed(statuses.get(email) ?? ("mailable" as const)),
     }),
     Layer.succeed(CampaignStore)({
+      ...unusedCampaigns,
       getCampaign: (id) =>
-        Effect.succeed(id === campaignId ? Option.some(campaign) : Option.none()),
-      getCampaignBody: () => written("getCampaignBody"),
-      createCampaign: () => written("createCampaign"),
-      listCampaigns: () => written("listCampaigns"),
-      getCampaignControl: () => written("getCampaignControl"),
-      enqueueCampaign: () => written("enqueueCampaign"),
-      scheduleCampaign: () => written("scheduleCampaign"),
-      resumeCampaign: () => written("resumeCampaign"),
-      cancelCampaign: () => written("cancelCampaign"),
-      beginRun: () => written("beginRun"),
-      claimRecipient: () => written("claimRecipient"),
-      skipRecipient: () => written("skipRecipient"),
-      settleRecipient: () => written("settleRecipient"),
-      checkpoint: () => written("checkpoint"),
-      completeRun: () => written("completeRun"),
-      pauseRun: () => written("pauseRun"),
-      updateDraft: () => written("updateDraft"),
-      deleteDraft: () => written("deleteDraft"),
+        id === campaignId
+          ? Effect.succeed(campaign)
+          : Effect.fail(new Schemas.NotFound({ entity: "campaign" })),
     }),
     Layer.succeed(Mailer)({
       send: (recipient, content, unsubscribeUrl, purpose) =>
-        Effect.gen(function* () {
+        Effect.sync(() => {
           sent.push({ recipient, content, unsubscribeUrl, purpose });
 
-          const next = outcomes.shift();
-
-          if (next instanceof SubmissionUncertain) {
-            return yield* next;
-          }
-
-          return next ?? { outcome: "accepted" as const, messageId: `message-${sent.length}` };
+          return (
+            outcomes.shift() ?? {
+              outcome: "accepted" as const,
+              messageId: `message-${sent.length}`,
+            }
+          );
         }),
     }),
-    Layer.succeed(SendGuard)({ current: Effect.succeed(scenario.allowance ?? healthy) }),
-    Layer.succeed(RateLimiter.RateLimiter)({
-      [RateLimiter.TypeId]: RateLimiter.TypeId,
-      consume: (options) =>
+    Layer.succeed(SendGuard)({
+      current: Effect.succeed(scenario.allowance ?? healthy),
+      slot: (limit) =>
         Effect.sync(() => {
-          consumes.push({ key: options.key, limit: options.limit });
+          slots.push(limit);
 
-          return {
-            delay: Duration.zero,
-            limit: options.limit,
-            remaining: options.limit,
-            resetAfter: Duration.zero,
-          };
+          return Duration.zero;
         }),
-      adaptiveConsume: () => Effect.die(new Error("adaptiveConsume is not exercised")),
-      adaptiveFeedback: () => Effect.die(new Error("adaptiveFeedback is not exercised")),
     }),
   );
 
-  return { layer, sent, consumes, pageRequests };
+  return { layer, sent, slots, pageRequests };
 };
 
 const run = (fix: ReturnType<typeof fixture>, payload: Schemas.TestSendPayload) =>
@@ -154,8 +134,9 @@ const failureOf = <A, E>(attempt: Result.Result<A, E>): E => {
 };
 
 describe("sendTest", () => {
-  it("sends a [Test] copy of the campaign to each address in order, untagged, one paced slot each", () =>
-    Effect.runPromise(
+  it.effect(
+    "sends a [Test] copy of the campaign to each address in order, untagged, one paced slot each",
+    () =>
       Effect.gen(function* () {
         const fix = fixture();
 
@@ -181,125 +162,115 @@ describe("sendTest", () => {
             purpose: { kind: "test" },
           })),
         );
-        expect(fix.consumes).toStrictEqual([
-          { key: "ses-send", limit: healthy.limit },
-          { key: "ses-send", limit: healthy.limit },
-        ]);
+        expect(fix.slots).toStrictEqual([healthy.limit, healthy.limit]);
       }),
-    ));
+  );
 
-  it("skips addresses that are not mailable, without taking a slot", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const fix = fixture({
-          statuses: [
-            ["gone@example.com", "unsubscribed"],
-            ["hard@example.com", "suppressed"],
-            ["soft@example.com", "bouncing"],
-          ],
-        });
+  it.effect("skips addresses that are not mailable, without taking a slot", () =>
+    Effect.gen(function* () {
+      const fix = fixture({
+        statuses: [
+          ["gone@example.com", "unsubscribed"],
+          ["hard@example.com", "suppressed"],
+          ["soft@example.com", "bouncing"],
+        ],
+      });
 
-        const attempt = yield* run(fix, {
-          to: ["gone@example.com", "hard@example.com", "soft@example.com", "ok@example.com"],
-        });
+      const attempt = yield* run(fix, {
+        to: ["gone@example.com", "hard@example.com", "soft@example.com", "ok@example.com"],
+      });
 
-        expect(Result.isSuccess(attempt) && attempt.success.recipients).toStrictEqual([
-          { email: "gone@example.com", outcome: "skipped", reason: "unsubscribed" },
-          { email: "hard@example.com", outcome: "skipped", reason: "suppressed" },
-          { email: "soft@example.com", outcome: "skipped", reason: "bouncing" },
-          { email: "ok@example.com", outcome: "accepted", messageId: "message-1" },
-        ]);
-        expect(fix.consumes).toHaveLength(1);
-      }),
-    ));
+      expect(Result.isSuccess(attempt) && attempt.success.recipients).toStrictEqual([
+        { email: "gone@example.com", outcome: "skipped", reason: "unsubscribed" },
+        { email: "hard@example.com", outcome: "skipped", reason: "suppressed" },
+        { email: "soft@example.com", outcome: "skipped", reason: "bouncing" },
+        { email: "ok@example.com", outcome: "accepted", messageId: "message-1" },
+      ]);
+      expect(fix.slots).toHaveLength(1);
+    }),
+  );
 
-  it("reports a rejection and an uncertain submission per recipient and carries on", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const fix = fixture({
-          outcomes: [
-            { outcome: "rejected", rejectionCode: "rate-limited" },
-            new SubmissionUncertain({ reason: "timeout", cause: "slow" }),
-          ],
-        });
+  it.effect("reports a rejection and an uncertain submission per recipient and carries on", () =>
+    Effect.gen(function* () {
+      const fix = fixture({
+        outcomes: [
+          { outcome: "rejected", rejectionCode: "rate-limited" },
+          { outcome: "uncertain" },
+        ],
+      });
 
-        const attempt = yield* run(fix, {
-          to: ["a@example.com", "b@example.com", "c@example.com"],
-        });
+      const attempt = yield* run(fix, {
+        to: ["a@example.com", "b@example.com", "c@example.com"],
+      });
 
-        expect(Result.isSuccess(attempt) && attempt.success.recipients).toStrictEqual([
-          { email: "a@example.com", outcome: "rejected", rejectionCode: "rate-limited" },
-          { email: "b@example.com", outcome: "uncertain" },
-          { email: "c@example.com", outcome: "accepted", messageId: "message-3" },
-        ]);
-        expect(fix.sent).toHaveLength(3);
-      }),
-    ));
+      expect(Result.isSuccess(attempt) && attempt.success.recipients).toStrictEqual([
+        { email: "a@example.com", outcome: "rejected", rejectionCode: "rate-limited" },
+        { email: "b@example.com", outcome: "uncertain" },
+        { email: "c@example.com", outcome: "accepted", messageId: "message-3" },
+      ]);
+      expect(fix.sent).toHaveLength(3);
+    }),
+  );
 
-  it("sends to every member of a list that fits, asking for one member past the limit", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const fix = fixture({ members: [member(1), member(2)] });
+  it.effect("sends to every member of a list that fits, asking for one member past the limit", () =>
+    Effect.gen(function* () {
+      const fix = fixture({ members: [member(1), member(2)] });
 
-        const attempt = yield* run(fix, { listId });
+      const attempt = yield* run(fix, { listId });
 
-        expect(fix.pageRequests).toStrictEqual([Schemas.maxTestRecipients + 1]);
-        expect(Result.isSuccess(attempt) && attempt.success.recipients).toStrictEqual([
-          { email: "member1@example.com", outcome: "accepted", messageId: "message-1" },
-          { email: "member2@example.com", outcome: "accepted", messageId: "message-2" },
-        ]);
-      }),
-    ));
+      expect(fix.pageRequests).toStrictEqual([Schemas.maxTestRecipients + 1]);
+      expect(Result.isSuccess(attempt) && attempt.success.recipients).toStrictEqual([
+        { email: "member1@example.com", outcome: "accepted", messageId: "message-1" },
+        { email: "member2@example.com", outcome: "accepted", messageId: "message-2" },
+      ]);
+    }),
+  );
 
-  it("refuses a list with a second page, even when orphaned members thinned the first", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const fix = fixture({
-          members: Array.from({ length: 19 }, (_, n) => member(n)),
-          nextCursor: member(21).id,
-        });
+  it.effect("refuses a list with a second page, even when orphaned members thinned the first", () =>
+    Effect.gen(function* () {
+      const fix = fixture({
+        members: Array.from({ length: 19 }, (_, n) => member(n)),
+        nextCursor: member(21).id,
+      });
 
-        const attempt = yield* run(fix, { listId });
+      const attempt = yield* run(fix, { listId });
 
-        expect(failureOf(attempt)).toStrictEqual(
-          new Schemas.TestAudienceTooLarge({ limit: Schemas.maxTestRecipients }),
-        );
-        expect(fix.sent).toHaveLength(0);
-      }),
-    ));
+      expect(failureOf(attempt)).toStrictEqual(
+        new Schemas.TestAudienceTooLarge({ limit: Schemas.maxTestRecipients }),
+      );
+      expect(fix.sent).toHaveLength(0);
+    }),
+  );
 
-  it("answers NotFound for a missing list and a missing campaign", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const fix = fixture({ listMissing: true });
+  it.effect("answers NotFound for a missing list and a missing campaign", () =>
+    Effect.gen(function* () {
+      const fix = fixture({ listMissing: true });
 
-        expect(failureOf(yield* run(fix, { listId }))).toStrictEqual(
-          new Schemas.NotFound({ entity: "list" }),
-        );
+      expect(failureOf(yield* run(fix, { listId }))).toStrictEqual(
+        new Schemas.NotFound({ entity: "list" }),
+      );
 
-        const missing = yield* Effect.result(
-          sendTest("0195f0a0-1111-4222-8333-4444444ca40a", { to: ["a@example.com"] }),
-        ).pipe(Effect.provide(fix.layer));
+      const missing = yield* Effect.result(
+        sendTest("0195f0a0-1111-4222-8333-4444444ca40a", { to: ["a@example.com"] }),
+      ).pipe(Effect.provide(fix.layer));
 
-        expect(failureOf(missing)).toStrictEqual(new Schemas.NotFound({ entity: "campaign" }));
-        expect(fix.sent).toHaveLength(0);
-      }),
-    ));
+      expect(failureOf(missing)).toStrictEqual(new Schemas.NotFound({ entity: "campaign" }));
+      expect(fix.sent).toHaveLength(0);
+    }),
+  );
 
-  it.each([
-    ["a reputation halt", { limit: 3, dailyExhausted: false, halted: true }, "reputation"],
-    ["a spent daily budget", { limit: 3, dailyExhausted: true, halted: false }, "daily-quota"],
-  ] as const)("refuses to send during %s", (_label, allowance, reason) =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const fix = fixture({ allowance });
+  it.effect.each([
+    ["a reputation halt", "reputation"],
+    ["a spent daily budget", "daily-quota"],
+  ] as const)("refuses to send during %s", ([_label, reason]) =>
+    Effect.gen(function* () {
+      const fix = fixture({ allowance: { limit: 3, refusal: reason } });
 
-        const attempt = yield* run(fix, { to: ["a@example.com"] });
+      const attempt = yield* run(fix, { to: ["a@example.com"] });
 
-        expect(failureOf(attempt)).toStrictEqual(new Schemas.SendingPaused({ reason }));
-        expect(fix.sent).toHaveLength(0);
-        expect(fix.consumes).toHaveLength(0);
-      }),
-    ),
+      expect(failureOf(attempt)).toStrictEqual(new Schemas.SendingPaused({ reason }));
+      expect(fix.sent).toHaveLength(0);
+      expect(fix.slots).toHaveLength(0);
+    }),
   );
 });

@@ -43,7 +43,8 @@ export const publicly = <A, E, R>(operation: Effect.Effect<A, E | StorageFailure
  * The boundary for the two entry points that have no HTTP error contract to translate into: the
  * SES event consumer and the public unsubscribe POST. Neither may report success for work that did
  * not persist, so the failure still ends the invocation — it is only recorded on the way past.
- * Lambda retries the consumer and a mail provider gets a 500 rather than a false acknowledgement.
+ * SQS redelivers the consumer's message and a mail provider gets a 500 rather than a false
+ * acknowledgement.
  */
 export const reportedAndFatal = <A, E, R>(operation: Effect.Effect<A, E, R>) =>
   operation.pipe(

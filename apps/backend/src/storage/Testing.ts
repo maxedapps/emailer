@@ -8,6 +8,7 @@ import * as dynamodb from "@distilled.cloud/aws/dynamodb";
 import type * as AWS from "alchemy/AWS";
 import { Effect, Result } from "effect";
 
+import { StorageFailure } from "./Errors.ts";
 import { allPrimitives } from "./Primitives.ts";
 
 import type { TransactionTokens } from "./Primitives.ts";
@@ -16,7 +17,6 @@ import type { AudienceOperations } from "./Audience.ts";
 import type { CampaignStoreOperations } from "./Campaigns.ts";
 
 import type { TableOperations } from "./Items.ts";
-import type { StorageFailure } from "./Errors.ts";
 
 type GetItemReply = Effect.Effect<dynamodb.GetItemOutput, dynamodb.GetItemError>;
 
@@ -52,6 +52,23 @@ export interface Table {
   readonly transactionRequests: Array<AWS.DynamoDB.TransactWriteItemsRequest>;
 }
 
+/**
+ * One operation of the double: it records each request and answers with the reply scripted for its
+ * position in the call order, or the fallback once the script runs out.
+ */
+const recorder =
+  <Request, A, E>(
+    requests: Array<Request>,
+    replies: ReadonlyArray<Effect.Effect<A, E>> | undefined,
+    fallback: A,
+  ) =>
+  (request: Request): Effect.Effect<A, E> =>
+    Effect.suspend(() => {
+      requests.push(request);
+
+      return replies?.[requests.length - 1] ?? Effect.succeed(fallback);
+    });
+
 export const scriptedTable = (replies: ScriptedReplies): Table => {
   const getItemRequests: Array<AWS.DynamoDB.GetItemRequest> = [];
   const batchGetItemRequests: Array<AWS.DynamoDB.BatchGetItemRequest> = [];
@@ -61,42 +78,12 @@ export const scriptedTable = (replies: ScriptedReplies): Table => {
   const transactionRequests: Array<AWS.DynamoDB.TransactWriteItemsRequest> = [];
 
   const operations: TableOperations = {
-    getItem: (request) =>
-      Effect.suspend(() => {
-        getItemRequests.push(request);
-
-        return replies.getItem?.[getItemRequests.length - 1] ?? Effect.succeed({});
-      }),
-    batchGetItem: (request) =>
-      Effect.suspend(() => {
-        batchGetItemRequests.push(request);
-
-        return replies.batchGetItem?.[batchGetItemRequests.length - 1] ?? Effect.succeed({});
-      }),
-    putItem: (request) =>
-      Effect.suspend(() => {
-        putItemRequests.push(request);
-
-        return replies.putItem?.[putItemRequests.length - 1] ?? Effect.succeed({});
-      }),
-    updateItem: (request) =>
-      Effect.suspend(() => {
-        updateItemRequests.push(request);
-
-        return replies.updateItem?.[updateItemRequests.length - 1] ?? Effect.succeed({});
-      }),
-    query: (request) =>
-      Effect.suspend((): QueryReply => {
-        queryRequests.push(request);
-
-        return replies.query?.[queryRequests.length - 1] ?? Effect.succeed({ Items: [] });
-      }),
-    transactWriteItems: (request) =>
-      Effect.suspend(() => {
-        transactionRequests.push(request);
-
-        return replies.transactWriteItems?.[transactionRequests.length - 1] ?? Effect.succeed({});
-      }),
+    getItem: recorder(getItemRequests, replies.getItem, {}),
+    batchGetItem: recorder(batchGetItemRequests, replies.batchGetItem, {}),
+    putItem: recorder(putItemRequests, replies.putItem, {}),
+    updateItem: recorder(updateItemRequests, replies.updateItem, {}),
+    query: recorder(queryRequests, replies.query, { Items: [] }),
+    transactWriteItems: recorder(transactionRequests, replies.transactWriteItems, {}),
   };
 
   return {
@@ -124,9 +111,10 @@ export const conditionFailed = Effect.fail(
   new dynamodb.ConditionalCheckFailedException({ message: "the conditional request failed" }),
 );
 
-export const failureOf = <A>(attempt: Result.Result<A, StorageFailure>): StorageFailure => {
-  if (Result.isSuccess(attempt)) {
-    throw new Error("Expected the operation to fail");
+/** The storage failure an operation ended with. A success, or a contract error, fails the test. */
+export const failureOf = <A, E>(attempt: Result.Result<A, E>): StorageFailure => {
+  if (Result.isSuccess(attempt) || !(attempt.failure instanceof StorageFailure)) {
+    throw new Error("Expected the operation to fail with a storage failure");
   }
 
   return attempt.failure;
@@ -196,9 +184,7 @@ export const unusedCampaigns: CampaignStoreOperations = {
   getCampaign: () => notExercised("CampaignStore", "getCampaign"),
   listCampaigns: () => notExercised("CampaignStore", "listCampaigns"),
   getCampaignControl: () => notExercised("CampaignStore", "getCampaignControl"),
-  enqueueCampaign: () => notExercised("CampaignStore", "enqueueCampaign"),
-  scheduleCampaign: () => notExercised("CampaignStore", "scheduleCampaign"),
-  resumeCampaign: () => notExercised("CampaignStore", "resumeCampaign"),
+  newRun: () => notExercised("CampaignStore", "newRun"),
   cancelCampaign: () => notExercised("CampaignStore", "cancelCampaign"),
   updateDraft: () => notExercised("CampaignStore", "updateDraft"),
   deleteDraft: () => notExercised("CampaignStore", "deleteDraft"),

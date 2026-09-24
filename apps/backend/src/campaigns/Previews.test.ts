@@ -1,6 +1,6 @@
+import { describe, expect, it } from "@effect/vitest";
 import { ConfigProvider, Effect, Option, Redacted } from "effect";
 import { TestClock } from "effect/testing";
-import { describe, expect, it } from "vitest";
 
 import * as SignedToken from "../SignedToken.ts";
 import {
@@ -52,29 +52,28 @@ describe("preview tokens", () => {
 });
 
 describe("previewLink", () => {
-  it("links under the configured base for twenty-four hours", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        yield* TestClock.setTime(1_790_000_000_000);
+  it.effect("links under the configured base for twenty-four hours", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(1_790_000_000_000);
 
-        const link = yield* previewLink(campaignId).pipe(
-          Effect.provideService(
-            ConfigProvider.ConfigProvider,
-            ConfigProvider.fromEnvRecord({
-              EMAILER_PREVIEW_URL: "https://preview.example/",
-              EMAILER_PREVIEW_SECRET: Redacted.value(signingKey),
-            }),
-          ),
-        );
+      const link = yield* previewLink(campaignId).pipe(
+        Effect.provideService(
+          ConfigProvider.ConfigProvider,
+          ConfigProvider.fromEnvRecord({
+            EMAILER_PREVIEW_URL: "https://preview.example/",
+            EMAILER_PREVIEW_SECRET: Redacted.value(signingKey),
+          }),
+        ),
+      );
 
-        const token = link.url.replace("https://preview.example/previews/", "");
+      const token = link.url.replace("https://preview.example/previews/", "");
 
-        expect(link.url.startsWith("https://preview.example/previews/v1.")).toBe(true);
-        expect(link.expiresAt).toBe("2026-09-22T14:13:20.000Z");
-        expect(verifyPreviewToken(signingKey, token, 1_790_086_399)).toStrictEqual(
-          Option.some(campaignId),
-        );
-        expect(verifyPreviewToken(signingKey, token, 1_790_086_400)).toStrictEqual(Option.none());
-      }).pipe(Effect.provide(TestClock.layer())),
-    ));
+      expect(link.url.startsWith("https://preview.example/previews/v1.")).toBe(true);
+      expect(link.expiresAt).toBe("2026-09-22T14:13:20.000Z");
+      expect(verifyPreviewToken(signingKey, token, 1_790_086_399)).toStrictEqual(
+        Option.some(campaignId),
+      );
+      expect(verifyPreviewToken(signingKey, token, 1_790_086_400)).toStrictEqual(Option.none());
+    }),
+  );
 });

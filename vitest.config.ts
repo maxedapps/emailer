@@ -6,23 +6,15 @@ export default defineConfig({
       {
         test: {
           name: "unit",
-          environment: "node",
           include: ["apps/**/*.test.ts", "packages/**/*.test.ts"],
-          exclude: ["**/node_modules/**", "**/dist/**", "**/*.integration.test.ts"],
-          clearMocks: true,
-          restoreMocks: true,
+          exclude: ["**/node_modules/**", "**/*.integration.test.ts"],
           testTimeout: 30_000,
-          hookTimeout: 30_000,
         },
       },
       {
         test: {
           name: "integration",
-          environment: "node",
-          include: ["apps/**/*.integration.test.ts", "packages/**/*.integration.test.ts"],
-          exclude: ["**/node_modules/**", "**/dist/**"],
-          clearMocks: true,
-          restoreMocks: true,
+          include: ["apps/**/*.integration.test.ts"],
           testTimeout: 120_000,
           hookTimeout: 120_000,
           // One live deployment, one shared account suppression list, labelled simulator addresses, and one

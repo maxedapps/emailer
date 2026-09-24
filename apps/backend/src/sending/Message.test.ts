@@ -1,5 +1,5 @@
+import { describe, expect, it } from "@effect/vitest";
 import { Cause, ConfigProvider, Effect, Exit, Option, Result } from "effect";
-import { describe, expect, it } from "vitest";
 
 import {
   belongsToIdentity,
@@ -132,47 +132,42 @@ describe("senderSettings", () => {
       ),
     );
 
-  it("refuses a blank postal address rather than sending non-compliant mail", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        expect(Result.isFailure(yield* resolving("   "))).toBe(true);
-      }),
-    ));
+  it.effect("refuses a blank postal address rather than sending non-compliant mail", () =>
+    Effect.gen(function* () {
+      expect(Result.isFailure(yield* resolving("   "))).toBe(true);
+    }),
+  );
 
-  it("trims the configured postal address", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const outcome = yield* resolving(`  ${postalAddress}  `);
+  it.effect("trims the configured postal address", () =>
+    Effect.gen(function* () {
+      const outcome = yield* resolving(`  ${postalAddress}  `);
 
-        expect(Result.isSuccess(outcome) && outcome.success.postalAddress).toBe(postalAddress);
-      }),
-    ));
+      expect(Result.isSuccess(outcome) && outcome.success.postalAddress).toBe(postalAddress);
+    }),
+  );
 
-  it("dies when the From address is not on the identity", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const exit = yield* Effect.exit(senderSettings).pipe(
-          Effect.provideService(
-            ConfigProvider.ConfigProvider,
-            ConfigProvider.fromEnvRecord({
-              EMAILER_SENDER_IDENTITY: "mail.example.com",
-              EMAILER_FROM_EMAIL: "emailer-test@example.com",
-              EMAILER_POSTAL_ADDRESS: postalAddress,
-            }),
-          ),
-        );
+  it.effect("dies when the From address is not on the identity", () =>
+    Effect.gen(function* () {
+      const exit = yield* Effect.exit(senderSettings).pipe(
+        Effect.provideService(
+          ConfigProvider.ConfigProvider,
+          ConfigProvider.fromEnvRecord({
+            EMAILER_SENDER_IDENTITY: "mail.example.com",
+            EMAILER_FROM_EMAIL: "emailer-test@example.com",
+            EMAILER_POSTAL_ADDRESS: postalAddress,
+          }),
+        ),
+      );
 
-        if (!Exit.isFailure(exit)) {
-          throw new Error("Expected senderSettings to die");
-        }
+      if (!Exit.isFailure(exit)) {
+        throw new Error("Expected senderSettings to die");
+      }
 
-        const defect = Cause.findDefect(exit.cause);
+      const defect = Cause.findDefect(exit.cause);
 
-        expect(Result.isSuccess(defect) && defect.success instanceof SenderNotOnIdentity).toBe(
-          true,
-        );
-      }),
-    ));
+      expect(Result.isSuccess(defect) && defect.success instanceof SenderNotOnIdentity).toBe(true);
+    }),
+  );
 });
 
 describe("the sender's name", () => {
@@ -189,48 +184,40 @@ describe("the sender's name", () => {
 
   const nameFrom = (name: string) => settingsFrom({ ...baseEnv, EMAILER_FROM_NAME: name });
 
-  it.each([
+  it.effect.each([
     ["unset", settingsFrom(baseEnv)],
     ["blank", nameFrom("")],
-  ])("is absent when %s, so mail goes out from the bare address", (_label, resolving) =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const outcome = yield* resolving;
+  ] as const)("is absent when %s, so mail goes out from the bare address", ([_label, resolving]) =>
+    Effect.gen(function* () {
+      const outcome = yield* resolving;
 
-        expect(Result.isSuccess(outcome) && outcome.success.senderName).toStrictEqual(
-          Option.none(),
-        );
-      }),
-    ),
+      expect(Result.isSuccess(outcome) && outcome.success.senderName).toStrictEqual(Option.none());
+    }),
   );
 
-  it.each([
+  it.effect.each([
     ["trimmed", "  Example News  ", "Example News"],
     ["45 UTF-8 bytes long", `${"ü".repeat(22)}x`, `${"ü".repeat(22)}x`],
-  ])("is accepted %s", (_label, name, expected) =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const outcome = yield* nameFrom(name);
+  ] as const)("is accepted %s", ([_label, name, expected]) =>
+    Effect.gen(function* () {
+      const outcome = yield* nameFrom(name);
 
-        expect(Result.isSuccess(outcome) && outcome.success.senderName).toStrictEqual(
-          Option.some(expected),
-        );
-      }),
-    ),
+      expect(Result.isSuccess(outcome) && outcome.success.senderName).toStrictEqual(
+        Option.some(expected),
+      );
+    }),
   );
 
-  it.each([
+  it.effect.each([
     ["only whitespace", "   "],
     ["a double quote", 'The "Example" News'],
     ["a backslash", "Back\\slash"],
     ["a line break", "Example News\r\nBcc: someone@example.com"],
     ["more than 45 UTF-8 bytes", "ü".repeat(23)],
-  ])("is refused at startup when it holds %s", (_label, name) =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        expect(Result.isFailure(yield* nameFrom(name))).toBe(true);
-      }),
-    ),
+  ] as const)("is refused at startup when it holds %s", ([_label, name]) =>
+    Effect.gen(function* () {
+      expect(Result.isFailure(yield* nameFrom(name))).toBe(true);
+    }),
   );
 });
 

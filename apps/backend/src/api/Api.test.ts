@@ -1,5 +1,6 @@
 import * as sesv2 from "@distilled.cloud/aws/sesv2";
 import { NodeCrypto } from "@effect/platform-node";
+import { describe, expect, it } from "@effect/vitest";
 import { makeEmailerClient } from "@emailer/api/Client";
 import type { EmailerClient } from "@emailer/api/Client";
 import * as AWS from "alchemy/AWS";
@@ -8,6 +9,7 @@ import {
   Clock,
   ConfigProvider,
   DateTime,
+  Duration,
   Effect,
   Layer,
   Option,
@@ -17,8 +19,6 @@ import {
   Scope,
 } from "effect";
 import { FetchHttpClient, HttpEffect } from "effect/unstable/http";
-import { RateLimiter } from "effect/unstable/persistence";
-import { describe, expect, it } from "vitest";
 
 import { AccountSuppression } from "../audience/Addresses.ts";
 import { makeApiHandler } from "./Api.ts";
@@ -34,7 +34,7 @@ import { unusedAudience, unusedCampaigns } from "../storage/Testing.ts";
 
 import type { SendPurpose } from "../sending/Mailer.ts";
 import type { SendAllowance } from "../sending/SendGuard.ts";
-import type { AddressStatus } from "../storage/Addresses.ts";
+import type { AddressStatus } from "@emailer/api/Schemas";
 
 const token = "3o4Xr7nJ1pQvKzB2sYtLwMhGfDcEaN9uRiVoP0qTzXY";
 
@@ -55,7 +55,6 @@ interface Store {
     | AccountSuppression
     | Mailer
     | SendGuard
-    | RateLimiter.RateLimiter
   >;
   readonly mailed: Array<{
     readonly recipient: string;
@@ -74,6 +73,10 @@ interface Store {
   readonly listOnAccount: (destination: sesv2.SuppressedDestination) => void;
   readonly failSesDelete: (error: sesv2.DeleteSuppressedDestinationError) => void;
 }
+
+/** A stored entity, or the store's answer for one that is not there. */
+const found = <A>(value: A | undefined, entity: Schemas.NotFound["entity"]) =>
+  value === undefined ? Effect.fail(new Schemas.NotFound({ entity })) : Effect.succeed(value);
 
 const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store => {
   const reads: Array<string> = [];
@@ -107,7 +110,7 @@ const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store 
     readonly purpose: SendPurpose;
   }> = [];
 
-  let allowance: SendAllowance = { limit: 14, dailyExhausted: false, halted: false };
+  let allowance: SendAllowance = { limit: 14 };
 
   const sending = Layer.mergeAll(
     Layer.succeed(Mailer)({
@@ -118,89 +121,83 @@ const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store 
           return { outcome: "accepted" as const, messageId: `message-${mailed.length}` };
         }),
     }),
-    Layer.succeed(SendGuard)({ current: Effect.sync(() => allowance) }),
-    RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory)),
+    Layer.succeed(SendGuard)({
+      current: Effect.sync(() => allowance),
+      slot: () => Effect.succeed(Duration.zero),
+    }),
   );
 
   const audience = Layer.succeed(AudienceStore)({
     ...unusedAudience,
     createContact: (contact) =>
-      Effect.suspend(() => {
+      Effect.gen(function* () {
         writes.push("createContact");
 
         for (const existing of contacts.values()) {
           if (Schemas.mailboxKey(existing.email) === Schemas.mailboxKey(contact.email)) {
-            return Effect.succeed("email-taken" as const);
+            return yield* new Schemas.EmailAlreadyUsed({ email: contact.email });
           }
         }
 
         contacts.set(contact.id, contact);
-
-        return Effect.succeed("created" as const);
       }),
     getContact: (id) =>
-      Effect.sync(() => {
+      Effect.suspend(() => {
         reads.push("getContact");
 
-        return Option.fromUndefinedOr(contacts.get(id));
+        return found(contacts.get(id), "contact");
       }),
     getContactByEmail: (address) =>
-      Effect.sync(() => {
+      Effect.suspend(() => {
         reads.push("getContactByEmail");
 
-        for (const contact of contacts.values()) {
-          if (Schemas.mailboxKey(contact.email) === Schemas.mailboxKey(address)) {
-            return Option.some(contact);
-          }
-        }
-
-        return Option.none<Schemas.Contact>();
+        return found(
+          [...contacts.values()].find(
+            (contact) => Schemas.mailboxKey(contact.email) === Schemas.mailboxKey(address),
+          ),
+          "contact",
+        );
       }),
     listContacts: (limit) =>
       Effect.sync(() => {
         reads.push("listContacts");
 
-        const page = [...contacts.values()].slice(0, limit);
-
-        return { items: page, nextCursor: undefined };
+        return { items: [...contacts.values()].slice(0, limit) };
       }),
     updateContact: (id, update) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         writes.push("updateContact");
 
-        const found = contacts.get(id);
-
-        if (found === undefined) {
-          return { outcome: "contact-missing" as const };
-        }
-
-        const email = update.email ?? found.email;
+        const current = yield* found(contacts.get(id), "contact");
+        const email = update.email ?? current.email;
 
         // `status` stands for the stored address, so a move off it is what an opt-out refuses.
         if (
           addressStatus === "unsubscribed" &&
-          Schemas.mailboxKey(email) !== Schemas.mailboxKey(found.email)
+          Schemas.mailboxKey(email) !== Schemas.mailboxKey(current.email)
         ) {
-          return { outcome: "opted-out" as const, email: found.email };
+          return yield* new Schemas.AddressOptedOut({ email: current.email });
         }
 
         for (const other of contacts.values()) {
           if (other.id !== id && Schemas.mailboxKey(other.email) === Schemas.mailboxKey(email)) {
-            return { outcome: "email-taken" as const, email };
+            return yield* new Schemas.EmailAlreadyUsed({ email });
           }
         }
 
-        const updated: Schemas.Contact = { ...found, email };
+        const updated: Schemas.Contact = { ...current, email };
 
         contacts.set(id, updated);
 
-        return { outcome: "updated" as const, contact: updated };
+        return updated;
       }),
     deleteContact: (id) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         writes.push("deleteContact");
 
-        return contacts.delete(id) ? ("deleted" as const) : ("contact-missing" as const);
+        if (!contacts.delete(id)) {
+          return yield* new Schemas.NotFound({ entity: "contact" });
+        }
       }),
     createList: (list) =>
       Effect.sync(() => {
@@ -208,49 +205,36 @@ const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store 
         lists.set(list.id, list);
       }),
     getList: (id) =>
-      Effect.sync(() => {
+      Effect.suspend(() => {
         reads.push("getList");
 
-        return Option.fromUndefinedOr(lists.get(id));
+        return found(lists.get(id), "list");
       }),
     renameList: (id, name) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         writes.push("renameList");
 
-        const stored = lists.get(id);
-
-        if (stored === undefined) {
-          return Option.none<Schemas.ContactList>();
-        }
-
-        const renamed = { ...stored, name };
+        const renamed = { ...(yield* found(lists.get(id), "list")), name };
 
         lists.set(id, renamed);
 
-        return Option.some(renamed);
+        return renamed;
       }),
     deleteList: (id) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         writes.push("deleteList");
 
         if (!lists.delete(id)) {
-          return "list-missing" as const;
+          return yield* new Schemas.NotFound({ entity: "list" });
         }
 
         members.delete(id);
-
-        return "deleted" as const;
       }),
     listMembers: (listId, limit) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         reads.push("listMembers");
 
-        if (!lists.has(listId)) {
-          return Option.none<{
-            readonly items: ReadonlyArray<Schemas.Contact>;
-            readonly nextCursor: string | undefined;
-          }>();
-        }
+        yield* found(lists.get(listId), "list");
 
         const joined: Array<Schemas.Contact> = [];
 
@@ -262,30 +246,26 @@ const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store 
           }
         }
 
-        return Option.some({ items: joined, nextCursor: undefined });
+        return { items: joined };
       }),
     removeMember: (listId, contactId) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         writes.push("removeMember");
 
         if (!lists.has(listId)) {
-          return "list-missing" as const;
+          return yield* new Schemas.NotFound({ entity: "list" });
         }
 
         members.set(
           listId,
           (members.get(listId) ?? []).filter((id) => id !== contactId),
         );
-
-        return "removed" as const;
       }),
     importContacts: (listId, candidates, addedAt) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         writes.push("importContacts");
 
-        if (!lists.has(listId)) {
-          return { outcome: "list-missing" as const };
-        }
+        yield* found(lists.get(listId), "list");
 
         const joined = members.get(listId) ?? [];
 
@@ -313,19 +293,14 @@ const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store 
 
         members.set(listId, joined);
 
-        return { outcome: "imported" as const, contacts: imported };
+        return { contacts: imported };
       }),
     addMember: (listId, contactId) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         writes.push("addMember");
 
-        if (!contacts.has(contactId)) {
-          return "contact-missing" as const;
-        }
-
-        if (!lists.has(listId)) {
-          return "list-missing" as const;
-        }
+        yield* found(contacts.get(contactId), "contact");
+        yield* found(lists.get(listId), "list");
 
         const current = members.get(listId) ?? [];
 
@@ -384,10 +359,10 @@ const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store 
         campaigns.set(campaign.id, { ...campaign, submission: { state: "draft" } });
       }),
     getCampaign: (id) =>
-      Effect.sync(() => {
+      Effect.suspend(() => {
         reads.push("getCampaign");
 
-        return Option.fromUndefinedOr(campaigns.get(id));
+        return found(campaigns.get(id), "campaign");
       }),
     updateDraft: (campaign) =>
       Effect.sync(() => {
@@ -417,9 +392,7 @@ const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store 
       Effect.sync(() => {
         reads.push("listCampaigns");
 
-        const page = [...campaigns.values()].slice(0, limit);
-
-        return { items: page, nextCursor: undefined };
+        return { items: [...campaigns.values()].slice(0, limit) };
       }),
     getCampaignControl: (id) =>
       Effect.gen(function* () {
@@ -429,24 +402,19 @@ const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store 
           return yield* controlFailure;
         }
 
-        const campaign = campaigns.get(id);
+        const { submission } = yield* found(campaigns.get(id), "campaign");
 
-        if (campaign === undefined) {
-          return Option.none();
-        }
-
-        const submission = campaign.submission;
-
-        return Option.some({
+        return {
           state: submission.state,
           runToken: runTokens.get(id),
           startedAt: "startedAt" in submission ? submission.startedAt : undefined,
           pausedReason: submission.state === "paused" ? submission.reason : undefined,
-        });
+        };
       }),
-    enqueueCampaign: (id, expected, newToken, now) =>
+    // Every run this suite starts is a send; scheduling and resuming belong to Campaigns.test.ts.
+    newRun: (id, expected, newToken, _target, now) =>
       Effect.sync(() => {
-        writes.push("enqueueCampaign");
+        writes.push("newRun");
 
         const campaign = campaigns.get(id);
 
@@ -504,10 +472,6 @@ const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store 
     create: (_campaignId, _runToken, _sendAt) =>
       Effect.sync(() => {
         sequence.push("createSchedule");
-      }),
-    remove: (_runToken) =>
-      Effect.sync(() => {
-        sequence.push("removeSchedule");
       }),
   });
 
@@ -791,94 +755,88 @@ describe("public errors", () => {
       });
   });
 
-  it("answers 503 with a typed body when the dispatch wake fails", () => {
+  it.effect("answers 503 with a typed body when the dispatch wake fails", () => {
     const store = inMemory(true);
     const handler = webHandler(store);
 
     const transport: typeof globalThis.fetch = (input, init) => handler(new Request(input, init));
 
-    return Effect.runPromise(
-      Effect.gen(function* () {
-        const client = yield* makeEmailerClient(baseUrl, Redacted.make(token));
+    return Effect.gen(function* () {
+      const client = yield* makeEmailerClient(baseUrl, Redacted.make(token));
 
-        const list = yield* client.lists.create({ payload: { name: "Readers" } });
+      const list = yield* client.lists.create({ payload: { name: "Readers" } });
 
-        const campaign = yield* client.campaigns.create({
-          payload: { listId: list.id, subject: "Release notes", text: "Hello" },
-        });
+      const campaign = yield* client.campaigns.create({
+        payload: { listId: list.id, subject: "Release notes", text: "Hello" },
+      });
 
-        const attempt = yield* Effect.result(
-          client.campaigns.send({ params: { id: campaign.id } }),
-        );
+      const attempt = yield* Effect.result(client.campaigns.send({ params: { id: campaign.id } }));
 
-        expect(Result.isFailure(attempt) ? attempt.failure : undefined).toStrictEqual(
-          new Schemas.StorageUnavailable({ operationId: "dispatch" }),
-        );
+      expect(Result.isFailure(attempt) ? attempt.failure : undefined).toStrictEqual(
+        new Schemas.StorageUnavailable({ operationId: "dispatch" }),
+      );
 
-        const response = yield* Effect.promise(() =>
-          handler(
-            new Request(`${baseUrl}/campaigns/${campaign.id}/send`, {
-              method: "POST",
-              headers: authorized(),
-            }),
-          ),
-        );
-
-        expect(response.status).toBe(503);
-
-        const body = yield* Effect.promise(() => response.text());
-
-        expect(body).toContain('"StorageUnavailable"');
-        expect(body).toContain('"operationId":"dispatch"');
-
-        const queued = yield* client.campaigns.get({ params: { id: campaign.id } });
-
-        expect(queued.submission.state).toBe("queued");
-        expect(store.wakes).toHaveLength(0);
-      }).pipe(
-        Effect.provide(
-          Layer.provide(FetchHttpClient.layer, Layer.succeed(FetchHttpClient.Fetch, transport)),
+      const response = yield* Effect.promise(() =>
+        handler(
+          new Request(`${baseUrl}/campaigns/${campaign.id}/send`, {
+            method: "POST",
+            headers: authorized(),
+          }),
         ),
+      );
+
+      expect(response.status).toBe(503);
+
+      const body = yield* Effect.promise(() => response.text());
+
+      expect(body).toContain('"StorageUnavailable"');
+      expect(body).toContain('"operationId":"dispatch"');
+
+      const queued = yield* client.campaigns.get({ params: { id: campaign.id } });
+
+      expect(queued.submission.state).toBe("queued");
+      expect(store.wakes).toHaveLength(0);
+    }).pipe(
+      Effect.provide(
+        Layer.provide(FetchHttpClient.layer, Layer.succeed(FetchHttpClient.Fetch, transport)),
       ),
     );
   });
 
-  it("answers 404 with a typed body when cancelling a campaign that does not exist", () => {
+  it.effect("answers 404 with a typed body when cancelling a campaign that does not exist", () => {
     const store = inMemory();
     const handler = webHandler(store);
 
     const transport: typeof globalThis.fetch = (input, init) => handler(new Request(input, init));
 
-    return Effect.runPromise(
-      Effect.gen(function* () {
-        const client = yield* makeEmailerClient(baseUrl, Redacted.make(token));
+    return Effect.gen(function* () {
+      const client = yield* makeEmailerClient(baseUrl, Redacted.make(token));
 
-        const attempt = yield* Effect.result(client.campaigns.cancel({ params: { id: knownId } }));
+      const attempt = yield* Effect.result(client.campaigns.cancel({ params: { id: knownId } }));
 
-        expect(Result.isFailure(attempt) ? attempt.failure : undefined).toStrictEqual(
-          new Schemas.NotFound({ entity: "campaign" }),
-        );
+      expect(Result.isFailure(attempt) ? attempt.failure : undefined).toStrictEqual(
+        new Schemas.NotFound({ entity: "campaign" }),
+      );
 
-        const response = yield* Effect.promise(() => handler(cancelRequest(knownId)));
+      const response = yield* Effect.promise(() => handler(cancelRequest(knownId)));
 
-        expect(response.status).toBe(404);
+      expect(response.status).toBe(404);
 
-        const body = yield* Effect.promise(() => response.text());
+      const body = yield* Effect.promise(() => response.text());
 
-        expect(body).toContain('"NotFound"');
-        expect(body).toContain('"entity":"campaign"');
-        expect(body).not.toContain("runToken");
-        expect(store.writes).toHaveLength(0);
-        expect(store.sequence).toHaveLength(0);
-      }).pipe(
-        Effect.provide(
-          Layer.provide(FetchHttpClient.layer, Layer.succeed(FetchHttpClient.Fetch, transport)),
-        ),
+      expect(body).toContain('"NotFound"');
+      expect(body).toContain('"entity":"campaign"');
+      expect(body).not.toContain("runToken");
+      expect(store.writes).toHaveLength(0);
+      expect(store.sequence).toHaveLength(0);
+    }).pipe(
+      Effect.provide(
+        Layer.provide(FetchHttpClient.layer, Layer.succeed(FetchHttpClient.Fetch, transport)),
       ),
     );
   });
 
-  it("answers 503 with a typed body when cancelling cannot read campaign control", () => {
+  it.effect("answers 503 with a typed body when cancelling cannot read campaign control", () => {
     const store = inMemory();
     const handler = webHandler(store);
 
@@ -886,35 +844,33 @@ describe("public errors", () => {
 
     const transport: typeof globalThis.fetch = (input, init) => handler(new Request(input, init));
 
-    return Effect.runPromise(
-      Effect.gen(function* () {
-        const client = yield* makeEmailerClient(baseUrl, Redacted.make(token));
+    return Effect.gen(function* () {
+      const client = yield* makeEmailerClient(baseUrl, Redacted.make(token));
 
-        const attempt = yield* Effect.result(client.campaigns.cancel({ params: { id: knownId } }));
+      const attempt = yield* Effect.result(client.campaigns.cancel({ params: { id: knownId } }));
 
-        expect(Result.isFailure(attempt) ? attempt.failure : undefined).toStrictEqual(
-          new Schemas.StorageUnavailable({ operationId: "getCampaignControl" }),
-        );
+      expect(Result.isFailure(attempt) ? attempt.failure : undefined).toStrictEqual(
+        new Schemas.StorageUnavailable({ operationId: "getCampaignControl" }),
+      );
 
-        const response = yield* Effect.promise(() => handler(cancelRequest(knownId)));
+      const response = yield* Effect.promise(() => handler(cancelRequest(knownId)));
 
-        expect(response.status).toBe(503);
+      expect(response.status).toBe(503);
 
-        const body = yield* Effect.promise(() => response.text());
+      const body = yield* Effect.promise(() => response.text());
 
-        expect(body).toContain('"StorageUnavailable"');
-        expect(body).toContain('"operationId":"getCampaignControl"');
-        expect(store.writes).toHaveLength(0);
-        expect(store.sequence).toHaveLength(0);
-      }).pipe(
-        Effect.provide(
-          Layer.provide(FetchHttpClient.layer, Layer.succeed(FetchHttpClient.Fetch, transport)),
-        ),
+      expect(body).toContain('"StorageUnavailable"');
+      expect(body).toContain('"operationId":"getCampaignControl"');
+      expect(store.writes).toHaveLength(0);
+      expect(store.sequence).toHaveLength(0);
+    }).pipe(
+      Effect.provide(
+        Layer.provide(FetchHttpClient.layer, Layer.succeed(FetchHttpClient.Fetch, transport)),
       ),
     );
   });
 
-  it.each(["2099-13-01T00:00:00.000Z", "2099-02-29T09:00:00.000Z"])(
+  it.effect.each(["2099-13-01T00:00:00.000Z", "2099-02-29T09:00:00.000Z"])(
     "rejects calendar-invalid sendAt %s without changing an existing schedule",
     (sendAt) => {
       const store = inMemory();
@@ -932,69 +888,11 @@ describe("public errors", () => {
 
       store.setCampaign(campaign, runToken);
 
-      return Effect.runPromise(
-        Effect.gen(function* () {
-          const response = yield* Effect.promise(() =>
-            handler(
-              jsonRequest(
-                `/campaigns/${knownId}/schedule`,
-                "POST",
-                `{"sendAt":"${sendAt}"}`,
-                authorized(),
-              ),
-            ),
-          );
-
-          expect(response.status).toBe(400);
-          expect(store.writes).toHaveLength(0);
-          expect(store.sequence).toHaveLength(0);
-          expect(store.wakes).toHaveLength(0);
-
-          const campaigns = yield* CampaignStore;
-
-          expect(yield* campaigns.getCampaign(knownId)).toStrictEqual(Option.some(campaign));
-          expect(yield* campaigns.getCampaignControl(knownId)).toStrictEqual(
-            Option.some({
-              state: "scheduled",
-              runToken,
-              startedAt: undefined,
-              pausedReason: undefined,
-            }),
-          );
-        }).pipe(Effect.provide(store.layer)),
-      );
-    },
-  );
-
-  it("answers 409 with a typed body when sendAt is not in the future", () => {
-    const store = inMemory();
-    const handler = webHandler(store);
-    const sendAt = "2026-09-11T10:00:01.000Z";
-
-    const transport: typeof globalThis.fetch = (input, init) => handler(new Request(input, init));
-
-    return Effect.runPromise(
-      Effect.gen(function* () {
-        const client = yield* makeEmailerClient(baseUrl, Redacted.make(token));
-
-        const list = yield* client.lists.create({ payload: { name: "Readers" } });
-
-        const campaign = yield* client.campaigns.create({
-          payload: { listId: list.id, subject: "Release notes", text: "Hello" },
-        });
-
-        const attempt = yield* Effect.result(
-          client.campaigns.schedule({ params: { id: campaign.id }, payload: { sendAt } }),
-        );
-
-        expect(Result.isFailure(attempt) ? attempt.failure : undefined).toStrictEqual(
-          new Schemas.SendAtNotInFuture({ sendAt }),
-        );
-
+      return Effect.gen(function* () {
         const response = yield* Effect.promise(() =>
           handler(
             jsonRequest(
-              `/campaigns/${campaign.id}/schedule`,
+              `/campaigns/${knownId}/schedule`,
               "POST",
               `{"sendAt":"${sendAt}"}`,
               authorized(),
@@ -1002,20 +900,72 @@ describe("public errors", () => {
           ),
         );
 
-        expect(response.status).toBe(409);
+        expect(response.status).toBe(400);
+        expect(store.writes).toHaveLength(0);
+        expect(store.sequence).toHaveLength(0);
+        expect(store.wakes).toHaveLength(0);
 
-        const body = yield* Effect.promise(() => response.text());
+        const campaigns = yield* CampaignStore;
 
-        expect(body).toContain('"SendAtNotInFuture"');
-        expect(body).toContain(`"sendAt":"${sendAt}"`);
+        expect(yield* campaigns.getCampaign(knownId)).toStrictEqual(campaign);
+        expect(yield* campaigns.getCampaignControl(knownId)).toStrictEqual({
+          state: "scheduled",
+          runToken,
+          startedAt: undefined,
+          pausedReason: undefined,
+        });
+      }).pipe(Effect.provide(store.layer));
+    },
+  );
 
-        const draft = yield* client.campaigns.get({ params: { id: campaign.id } });
+  it.effect("answers 409 with a typed body when sendAt is not in the future", () => {
+    const store = inMemory();
+    const handler = webHandler(store);
+    const sendAt = "2026-09-11T10:00:01.000Z";
 
-        expect(draft.submission.state).toBe("draft");
-      }).pipe(
-        Effect.provide(
-          Layer.provide(FetchHttpClient.layer, Layer.succeed(FetchHttpClient.Fetch, transport)),
+    const transport: typeof globalThis.fetch = (input, init) => handler(new Request(input, init));
+
+    return Effect.gen(function* () {
+      const client = yield* makeEmailerClient(baseUrl, Redacted.make(token));
+
+      const list = yield* client.lists.create({ payload: { name: "Readers" } });
+
+      const campaign = yield* client.campaigns.create({
+        payload: { listId: list.id, subject: "Release notes", text: "Hello" },
+      });
+
+      const attempt = yield* Effect.result(
+        client.campaigns.schedule({ params: { id: campaign.id }, payload: { sendAt } }),
+      );
+
+      expect(Result.isFailure(attempt) ? attempt.failure : undefined).toStrictEqual(
+        new Schemas.SendAtNotInFuture({ sendAt }),
+      );
+
+      const response = yield* Effect.promise(() =>
+        handler(
+          jsonRequest(
+            `/campaigns/${campaign.id}/schedule`,
+            "POST",
+            `{"sendAt":"${sendAt}"}`,
+            authorized(),
+          ),
         ),
+      );
+
+      expect(response.status).toBe(409);
+
+      const body = yield* Effect.promise(() => response.text());
+
+      expect(body).toContain('"SendAtNotInFuture"');
+      expect(body).toContain(`"sendAt":"${sendAt}"`);
+
+      const draft = yield* client.campaigns.get({ params: { id: campaign.id } });
+
+      expect(draft.submission.state).toBe("draft");
+    }).pipe(
+      Effect.provide(
+        Layer.provide(FetchHttpClient.layer, Layer.succeed(FetchHttpClient.Fetch, transport)),
       ),
     );
   });
@@ -1080,201 +1030,191 @@ describe("Function URL event adaptation", () => {
 
   const nativeHandler = (store: Store) => AWS.Lambda.makeFunctionHttpHandler(builtHandler(store));
 
-  it("answers a native event with a native result", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const store = inMemory();
+  it.effect("answers a native event with a native result", () =>
+    Effect.gen(function* () {
+      const store = inMemory();
 
-        const handled = nativeHandler(store)(
-          functionUrlEvent("POST", "/contacts", `{"email":"${allowedRecipient}"}`),
-        );
+      const handled = nativeHandler(store)(
+        functionUrlEvent("POST", "/contacts", `{"email":"${allowedRecipient}"}`),
+      );
 
-        expect(handled).toBeDefined();
+      expect(handled).toBeDefined();
 
-        const result = yield* decodeNative(
-          yield* Effect.scoped(handled ?? Effect.die("no handler matched the event")),
-        );
+      const result = yield* decodeNative(
+        yield* Effect.scoped(handled ?? Effect.die("no handler matched the event")),
+      );
 
-        expect(result.statusCode).toBe(201);
-        expect(result.headers?.["content-type"]).toContain("application/json");
-        expect(result.body).toContain(allowedRecipient);
-        expect(store.writes).toStrictEqual(["createContact"]);
-      }),
-    ));
+      expect(result.statusCode).toBe(201);
+      expect(result.headers?.["content-type"]).toContain("application/json");
+      expect(result.body).toContain(allowedRecipient);
+      expect(store.writes).toStrictEqual(["createContact"]);
+    }),
+  );
 
-  it("keeps the challenge on a native unauthorized result", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const store = inMemory();
-        const event = functionUrlEvent("GET", `/contacts/${knownId}`);
+  it.effect("keeps the challenge on a native unauthorized result", () =>
+    Effect.gen(function* () {
+      const store = inMemory();
+      const event = functionUrlEvent("GET", `/contacts/${knownId}`);
 
-        event.headers.authorization = `Bearer ${otherToken}`;
+      event.headers.authorization = `Bearer ${otherToken}`;
 
-        const handled = nativeHandler(store)(event);
+      const handled = nativeHandler(store)(event);
 
-        const result = yield* decodeNative(
-          yield* Effect.scoped(handled ?? Effect.die("no handler matched the event")),
-        );
+      const result = yield* decodeNative(
+        yield* Effect.scoped(handled ?? Effect.die("no handler matched the event")),
+      );
 
-        expect(result.statusCode).toBe(401);
-        expect(result.headers?.["www-authenticate"]).toBe("Bearer");
-        expect(store.reads).toHaveLength(0);
-      }),
-    ));
+      expect(result.statusCode).toBe(401);
+      expect(result.headers?.["www-authenticate"]).toBe("Bearer");
+      expect(store.reads).toHaveLength(0);
+    }),
+  );
 });
 
 describe("generated client round trip", () => {
-  it("runs the whole flow from contact to a queued campaign without a mailer", () => {
+  it.effect("runs the whole flow from contact to a queued campaign without a mailer", () => {
     const store = inMemory();
     const handler = webHandler(store);
 
     const transport: typeof globalThis.fetch = (input, init) => handler(new Request(input, init));
 
-    return Effect.runPromise(
-      Effect.gen(function* () {
-        const client = yield* makeEmailerClient(baseUrl, Redacted.make(token));
+    return Effect.gen(function* () {
+      const client = yield* makeEmailerClient(baseUrl, Redacted.make(token));
 
-        const contact = yield* client.contacts.create({
-          payload: { email: allowedRecipient, name: "Sam" },
-        });
+      const contact = yield* client.contacts.create({
+        payload: { email: allowedRecipient, name: "Sam" },
+      });
 
-        const list = yield* client.lists.create({ payload: { name: "Readers" } });
+      const list = yield* client.lists.create({ payload: { name: "Readers" } });
 
-        yield* client.lists.addContact({ params: { listId: list.id, contactId: contact.id } });
+      yield* client.lists.addContact({ params: { listId: list.id, contactId: contact.id } });
 
-        const campaign = yield* client.campaigns.create({
-          payload: { listId: list.id, subject: "Release notes", text: "Hello" },
-        });
+      const campaign = yield* client.campaigns.create({
+        payload: { listId: list.id, subject: "Release notes", text: "Hello" },
+      });
 
-        expect(campaign.submission.state).toBe("draft");
+      expect(campaign.submission.state).toBe("draft");
 
-        const sent = yield* client.campaigns.send({ params: { id: campaign.id } });
+      const sent = yield* client.campaigns.send({ params: { id: campaign.id } });
 
-        expect(sent.submission.state).toBe("queued");
-        expect(store.wakes).toHaveLength(1);
-        expect(store.wakes[0]?.campaignId).toBe(campaign.id);
+      expect(sent.submission.state).toBe("queued");
+      expect(store.wakes).toHaveLength(1);
+      expect(store.wakes[0]?.campaignId).toBe(campaign.id);
 
-        const fetched = yield* client.campaigns.get({ params: { id: campaign.id } });
+      const fetched = yield* client.campaigns.get({ params: { id: campaign.id } });
 
-        expect(fetched.submission).toStrictEqual(sent.submission);
+      expect(fetched.submission).toStrictEqual(sent.submission);
 
-        const replayed = yield* client.campaigns.send({ params: { id: campaign.id } });
+      const replayed = yield* client.campaigns.send({ params: { id: campaign.id } });
 
-        expect(replayed.submission).toStrictEqual(sent.submission);
-        expect(store.wakes).toHaveLength(2);
-        expect(store.wakes[1]?.runToken).toBe(store.wakes[0]?.runToken);
-      }).pipe(
-        Effect.provide(
-          Layer.provide(FetchHttpClient.layer, Layer.succeed(FetchHttpClient.Fetch, transport)),
-        ),
+      expect(replayed.submission).toStrictEqual(sent.submission);
+      expect(store.wakes).toHaveLength(2);
+      expect(store.wakes[1]?.runToken).toBe(store.wakes[0]?.runToken);
+    }).pipe(
+      Effect.provide(
+        Layer.provide(FetchHttpClient.layer, Layer.succeed(FetchHttpClient.Fetch, transport)),
       ),
     );
   });
 
-  it("returns the same html from GET after creating a campaign with html", () => {
+  it.effect("returns the same html from GET after creating a campaign with html", () => {
     const store = inMemory();
     const handler = webHandler(store);
 
     const transport: typeof globalThis.fetch = (input, init) => handler(new Request(input, init));
 
-    return Effect.runPromise(
-      Effect.gen(function* () {
-        const client = yield* makeEmailerClient(baseUrl, Redacted.make(token));
+    return Effect.gen(function* () {
+      const client = yield* makeEmailerClient(baseUrl, Redacted.make(token));
 
-        const list = yield* client.lists.create({ payload: { name: "Readers" } });
+      const list = yield* client.lists.create({ payload: { name: "Readers" } });
 
-        const html = "<p>Hello there</p>";
+      const html = "<p>Hello there</p>";
 
-        const campaign = yield* client.campaigns.create({
-          payload: { listId: list.id, subject: "Release notes", text: "Hello", html },
-        });
+      const campaign = yield* client.campaigns.create({
+        payload: { listId: list.id, subject: "Release notes", text: "Hello", html },
+      });
 
-        expect(campaign.html).toBe(html);
+      expect(campaign.html).toBe(html);
 
-        const fetched = yield* client.campaigns.get({ params: { id: campaign.id } });
+      const fetched = yield* client.campaigns.get({ params: { id: campaign.id } });
 
-        expect(fetched.html).toBe(html);
-      }).pipe(
-        Effect.provide(
-          Layer.provide(FetchHttpClient.layer, Layer.succeed(FetchHttpClient.Fetch, transport)),
-        ),
+      expect(fetched.html).toBe(html);
+    }).pipe(
+      Effect.provide(
+        Layer.provide(FetchHttpClient.layer, Layer.succeed(FetchHttpClient.Fetch, transport)),
       ),
     );
   });
 
-  it("returns the same filter from GET after creating a campaign with a filter", () => {
+  it.effect("returns the same filter from GET after creating a campaign with a filter", () => {
     const store = inMemory();
     const handler = webHandler(store);
 
     const transport: typeof globalThis.fetch = (input, init) => handler(new Request(input, init));
 
-    return Effect.runPromise(
-      Effect.gen(function* () {
-        const client = yield* makeEmailerClient(baseUrl, Redacted.make(token));
+    return Effect.gen(function* () {
+      const client = yield* makeEmailerClient(baseUrl, Redacted.make(token));
 
-        const list = yield* client.lists.create({ payload: { name: "Readers" } });
+      const list = yield* client.lists.create({ payload: { name: "Readers" } });
 
-        const filter = { plan: "pro" };
+      const filter = { plan: "pro" };
 
-        const campaign = yield* client.campaigns.create({
-          payload: { listId: list.id, subject: "Release notes", text: "Hello", filter },
-        });
+      const campaign = yield* client.campaigns.create({
+        payload: { listId: list.id, subject: "Release notes", text: "Hello", filter },
+      });
 
-        expect(campaign.filter).toStrictEqual(filter);
+      expect(campaign.filter).toStrictEqual(filter);
 
-        const fetched = yield* client.campaigns.get({ params: { id: campaign.id } });
+      const fetched = yield* client.campaigns.get({ params: { id: campaign.id } });
 
-        expect(fetched.filter).toStrictEqual(filter);
-      }).pipe(
-        Effect.provide(
-          Layer.provide(FetchHttpClient.layer, Layer.succeed(FetchHttpClient.Fetch, transport)),
-        ),
+      expect(fetched.filter).toStrictEqual(filter);
+    }).pipe(
+      Effect.provide(
+        Layer.provide(FetchHttpClient.layer, Layer.succeed(FetchHttpClient.Fetch, transport)),
       ),
     );
   });
 
-  it("cancels a never-started queued campaign back to draft", () => {
+  it.effect("cancels a never-started queued campaign back to draft", () => {
     const store = inMemory();
     const handler = webHandler(store);
 
     const transport: typeof globalThis.fetch = (input, init) => handler(new Request(input, init));
 
-    return Effect.runPromise(
-      Effect.gen(function* () {
-        const client = yield* makeEmailerClient(baseUrl, Redacted.make(token));
+    return Effect.gen(function* () {
+      const client = yield* makeEmailerClient(baseUrl, Redacted.make(token));
 
-        const list = yield* client.lists.create({ payload: { name: "Readers" } });
+      const list = yield* client.lists.create({ payload: { name: "Readers" } });
 
-        const campaign = yield* client.campaigns.create({
-          payload: { listId: list.id, subject: "Release notes", text: "Hello" },
-        });
+      const campaign = yield* client.campaigns.create({
+        payload: { listId: list.id, subject: "Release notes", text: "Hello" },
+      });
 
-        const queued = yield* client.campaigns.send({ params: { id: campaign.id } });
+      const queued = yield* client.campaigns.send({ params: { id: campaign.id } });
 
-        expect(queued.submission.state).toBe("queued");
+      expect(queued.submission.state).toBe("queued");
 
-        const cancelled = yield* client.campaigns.cancel({ params: { id: campaign.id } });
+      const cancelled = yield* client.campaigns.cancel({ params: { id: campaign.id } });
 
-        expect(cancelled.submission).toStrictEqual({ state: "draft" });
-        expect(cancelled).not.toHaveProperty("runToken");
+      expect(cancelled.submission).toStrictEqual({ state: "draft" });
+      expect(cancelled).not.toHaveProperty("runToken");
 
-        const response = yield* Effect.promise(() => handler(cancelRequest(campaign.id)));
+      const response = yield* Effect.promise(() => handler(cancelRequest(campaign.id)));
 
-        expect(response.status).toBe(200);
+      expect(response.status).toBe(200);
 
-        const body = yield* Effect.promise(() => response.text());
+      const body = yield* Effect.promise(() => response.text());
 
-        expect(body).not.toContain("runToken");
-        expect((yield* campaignFromJson(body)).submission).toStrictEqual({ state: "draft" });
-      }).pipe(
-        Effect.provide(
-          Layer.provide(FetchHttpClient.layer, Layer.succeed(FetchHttpClient.Fetch, transport)),
-        ),
+      expect(body).not.toContain("runToken");
+      expect((yield* campaignFromJson(body)).submission).toStrictEqual({ state: "draft" });
+    }).pipe(
+      Effect.provide(
+        Layer.provide(FetchHttpClient.layer, Layer.succeed(FetchHttpClient.Fetch, transport)),
       ),
     );
   });
 
-  it.each([
+  it.effect.each([
     [
       "sending",
       {
@@ -1296,77 +1236,72 @@ describe("generated client round trip", () => {
         feedback: { bounced: 0, complained: 0 },
       },
     ],
-  ] as const)("answers 409 without mutating a %s campaign", (_label, submission) => {
+  ] as const)("answers 409 without mutating a %s campaign", ([_label, submission]) => {
     const store = inMemory();
     const handler = webHandler(store);
     const runToken = "0195f0a0-1111-4222-8333-44444444e5d2";
 
     const transport: typeof globalThis.fetch = (input, init) => handler(new Request(input, init));
 
-    return Effect.runPromise(
-      Effect.gen(function* () {
-        const client = yield* makeEmailerClient(baseUrl, Redacted.make(token));
+    return Effect.gen(function* () {
+      const client = yield* makeEmailerClient(baseUrl, Redacted.make(token));
 
-        const list = yield* client.lists.create({ payload: { name: "Readers" } });
+      const list = yield* client.lists.create({ payload: { name: "Readers" } });
 
-        const campaign = yield* client.campaigns.create({
-          payload: { listId: list.id, subject: "Release notes", text: "Hello" },
-        });
+      const campaign = yield* client.campaigns.create({
+        payload: { listId: list.id, subject: "Release notes", text: "Hello" },
+      });
 
-        const current = { ...campaign, submission };
+      const current = { ...campaign, submission };
 
-        store.setCampaign(current, runToken);
+      store.setCampaign(current, runToken);
 
-        const attempt = yield* Effect.result(
-          client.campaigns.cancel({ params: { id: campaign.id } }),
-        );
+      const attempt = yield* Effect.result(
+        client.campaigns.cancel({ params: { id: campaign.id } }),
+      );
 
-        expect(Result.isFailure(attempt) ? attempt.failure : undefined).toStrictEqual(
-          new Schemas.CampaignStateConflict({ state: submission.state }),
-        );
+      expect(Result.isFailure(attempt) ? attempt.failure : undefined).toStrictEqual(
+        new Schemas.CampaignStateConflict({ state: submission.state }),
+      );
 
-        const response = yield* Effect.promise(() => handler(cancelRequest(campaign.id)));
+      const response = yield* Effect.promise(() => handler(cancelRequest(campaign.id)));
 
-        expect(response.status).toBe(409);
+      expect(response.status).toBe(409);
 
-        const body = yield* Effect.promise(() => response.text());
+      const body = yield* Effect.promise(() => response.text());
 
-        expect(body).toContain('"CampaignStateConflict"');
-        expect(body).toContain(`"state":"${submission.state}"`);
-        expect(body).not.toContain("runToken");
-        expect(store.writes).not.toContain("cancelCampaign");
-        expect(store.sequence).not.toContain("removeSchedule");
+      expect(body).toContain('"CampaignStateConflict"');
+      expect(body).toContain(`"state":"${submission.state}"`);
+      expect(body).not.toContain("runToken");
+      expect(store.writes).not.toContain("cancelCampaign");
 
-        const fetched = yield* client.campaigns.get({ params: { id: campaign.id } });
+      const fetched = yield* client.campaigns.get({ params: { id: campaign.id } });
 
-        expect(fetched).toStrictEqual(current);
-      }).pipe(
-        Effect.provide(
-          Layer.provide(FetchHttpClient.layer, Layer.succeed(FetchHttpClient.Fetch, transport)),
-        ),
+      expect(fetched).toStrictEqual(current);
+    }).pipe(
+      Effect.provide(
+        Layer.provide(FetchHttpClient.layer, Layer.succeed(FetchHttpClient.Fetch, transport)),
       ),
     );
   });
 
-  it("surfaces a public error from the service as a typed client failure", () => {
+  it.effect("surfaces a public error from the service as a typed client failure", () => {
     const store = inMemory();
     const handler = webHandler(store);
 
     const transport: typeof globalThis.fetch = (input, init) => handler(new Request(input, init));
 
-    return Effect.runPromise(
-      Effect.gen(function* () {
-        const client = yield* makeEmailerClient(baseUrl, Redacted.make(token));
+    return Effect.gen(function* () {
+      const client = yield* makeEmailerClient(baseUrl, Redacted.make(token));
 
-        const attempt = yield* Effect.result(client.contacts.get({ params: { id: knownId } }));
+      const attempt = yield* Effect.result(client.contacts.get({ params: { id: knownId } }));
 
-        expect(Result.isFailure(attempt) ? attempt.failure : undefined).toBeInstanceOf(
-          Schemas.NotFound,
-        );
-      }).pipe(
-        Effect.provide(
-          Layer.provide(FetchHttpClient.layer, Layer.succeed(FetchHttpClient.Fetch, transport)),
-        ),
+      expect(Result.isFailure(attempt) ? attempt.failure : undefined).toBeInstanceOf(
+        Schemas.NotFound,
+      );
+    }).pipe(
+      Effect.provide(
+        Layer.provide(FetchHttpClient.layer, Layer.succeed(FetchHttpClient.Fetch, transport)),
       ),
     );
   });
@@ -1378,19 +1313,17 @@ const clientOver = (store: Store) => {
   const transport: typeof globalThis.fetch = (input, init) => handler(new Request(input, init));
 
   return <A, E>(use: (client: EmailerClient) => Effect.Effect<A, E, never>) =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        return yield* use(yield* makeEmailerClient(baseUrl, Redacted.make(token)));
-      }).pipe(
-        Effect.provide(
-          Layer.provide(FetchHttpClient.layer, Layer.succeed(FetchHttpClient.Fetch, transport)),
-        ),
+    Effect.gen(function* () {
+      return yield* use(yield* makeEmailerClient(baseUrl, Redacted.make(token)));
+    }).pipe(
+      Effect.provide(
+        Layer.provide(FetchHttpClient.layer, Layer.succeed(FetchHttpClient.Fetch, transport)),
       ),
     );
 };
 
 describe("contact management", () => {
-  it("refuses a second contact on an address another one already holds", () => {
+  it.effect("refuses a second contact on an address another one already holds", () => {
     const store = inMemory();
 
     return clientOver(store)((client) =>
@@ -1408,7 +1341,7 @@ describe("contact management", () => {
     );
   });
 
-  it("finds a contact by an address written in a different case", () => {
+  it.effect("finds a contact by an address written in a different case", () => {
     const store = inMemory();
 
     return clientOver(store)((client) =>
@@ -1422,7 +1355,7 @@ describe("contact management", () => {
     );
   });
 
-  it("carries attributes through creation, listing and an update that replaces them", () => {
+  it.effect("carries attributes through creation, listing and an update that replaces them", () => {
     const store = inMemory();
 
     return clientOver(store)((client) =>
@@ -1441,7 +1374,7 @@ describe("contact management", () => {
     );
   });
 
-  it("removes a contact and then reports it as gone", () => {
+  it.effect("removes a contact and then reports it as gone", () => {
     const store = inMemory();
 
     return clientOver(store)((client) =>
@@ -1459,7 +1392,7 @@ describe("contact management", () => {
     );
   });
 
-  it("refuses an update onto an address another contact holds", () => {
+  it.effect("refuses an update onto an address another contact holds", () => {
     const store = inMemory();
 
     return clientOver(store)((client) =>
@@ -1482,7 +1415,7 @@ describe("contact management", () => {
     );
   });
 
-  it("refuses to move a contact off an address that opted out", () => {
+  it.effect("refuses to move a contact off an address that opted out", () => {
     const store = inMemory(false, "unsubscribed");
 
     return clientOver(store)((client) =>
@@ -1575,7 +1508,7 @@ describe("contact management", () => {
 });
 
 describe("list management", () => {
-  it("renames a list and answers with the list as it now stands", () => {
+  it.effect("renames a list and answers with the list as it now stands", () => {
     const store = inMemory();
 
     return clientOver(store)((client) =>
@@ -1592,7 +1525,7 @@ describe("list management", () => {
     );
   });
 
-  it("tells a list with no members apart from a list that is not there", () => {
+  it.effect("tells a list with no members apart from a list that is not there", () => {
     const store = inMemory();
 
     return clientOver(store)((client) =>
@@ -1617,7 +1550,7 @@ describe("list management", () => {
     );
   });
 
-  it("answers a bulk import with converged state, identically on a re-run", () => {
+  it.effect("answers a bulk import with converged state, identically on a re-run", () => {
     const store = inMemory();
 
     return clientOver(store)((client) =>
@@ -1642,7 +1575,7 @@ describe("list management", () => {
     );
   });
 
-  it("removes a member, leaving the contact itself alone", () => {
+  it.effect("removes a member, leaving the contact itself alone", () => {
     const store = inMemory();
 
     return clientOver(store)((client) =>
@@ -1667,7 +1600,7 @@ describe("list management", () => {
     );
   });
 
-  it("deletes a list and then reports it as gone", () => {
+  it.effect("deletes a list and then reports it as gone", () => {
     const store = inMemory();
 
     return clientOver(store)((client) =>
@@ -1685,28 +1618,27 @@ describe("list management", () => {
     );
   });
 
-  it("refuses an import naming one address twice, without touching storage", () => {
+  it.effect("refuses an import naming one address twice, without touching storage", () => {
     const store = inMemory();
 
-    return clientOver(store)((client) => client.lists.create({ payload: { name: "Weekly" } })).then(
-      (created) => {
-        store.writes.length = 0;
+    return Effect.gen(function* () {
+      const created = yield* clientOver(store)((client) =>
+        client.lists.create({ payload: { name: "Weekly" } }),
+      );
 
-        return webHandler(store)(
-          jsonRequest(
-            `/lists/${created.id}/contacts`,
-            "POST",
-            JSON.stringify({
-              contacts: [{ email: "Sam@example.com" }, { email: "sam@EXAMPLE.com" }],
-            }),
-            authorized(),
-          ),
-        ).then((response) => {
-          expect(response.status).toBe(400);
-          expect(store.writes).toHaveLength(0);
-        });
-      },
-    );
+      store.writes.length = 0;
+
+      const body = yield* Schema.encodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))({
+        contacts: [{ email: "Sam@example.com" }, { email: "sam@EXAMPLE.com" }],
+      });
+
+      const response = yield* Effect.promise(() =>
+        webHandler(store)(jsonRequest(`/lists/${created.id}/contacts`, "POST", body, authorized())),
+      );
+
+      expect(response.status).toBe(400);
+      expect(store.writes).toHaveLength(0);
+    });
   });
 });
 
@@ -1721,12 +1653,13 @@ describe("draft editing", () => {
     };
   };
 
-  it("edits a draft, removing its html and filter with null, and reads the edit back", () => {
-    const store = inMemory();
-    const { layer } = clientLayer(store);
+  it.effect(
+    "edits a draft, removing its html and filter with null, and reads the edit back",
+    () => {
+      const store = inMemory();
+      const { layer } = clientLayer(store);
 
-    return Effect.runPromise(
-      Effect.gen(function* () {
+      return Effect.gen(function* () {
         const client = yield* makeEmailerClient(baseUrl, Redacted.make(token));
         const list = yield* client.lists.create({ payload: { name: "Readers" } });
 
@@ -1754,79 +1687,75 @@ describe("draft editing", () => {
           submission: { state: "draft" },
         });
         expect(yield* client.campaigns.get({ params: { id: campaign.id } })).toStrictEqual(updated);
-      }).pipe(Effect.provide(layer)),
-    );
-  });
+      }).pipe(Effect.provide(layer));
+    },
+  );
 
-  it("deletes a draft with 204, after which it is not found", () => {
+  it.effect("deletes a draft with 204, after which it is not found", () => {
     const store = inMemory();
     const { handler, layer } = clientLayer(store);
 
-    return Effect.runPromise(
-      Effect.gen(function* () {
-        const client = yield* makeEmailerClient(baseUrl, Redacted.make(token));
-        const list = yield* client.lists.create({ payload: { name: "Readers" } });
+    return Effect.gen(function* () {
+      const client = yield* makeEmailerClient(baseUrl, Redacted.make(token));
+      const list = yield* client.lists.create({ payload: { name: "Readers" } });
 
-        const campaign = yield* client.campaigns.create({
-          payload: { listId: list.id, subject: "Release notes", text: "Hello" },
-        });
+      const campaign = yield* client.campaigns.create({
+        payload: { listId: list.id, subject: "Release notes", text: "Hello" },
+      });
 
-        const response = yield* Effect.promise(() =>
-          handler(
-            new Request(`${baseUrl}/campaigns/${campaign.id}`, {
-              method: "DELETE",
-              headers: authorized(),
-            }),
-          ),
-        );
+      const response = yield* Effect.promise(() =>
+        handler(
+          new Request(`${baseUrl}/campaigns/${campaign.id}`, {
+            method: "DELETE",
+            headers: authorized(),
+          }),
+        ),
+      );
 
-        expect(response.status).toBe(204);
+      expect(response.status).toBe(204);
 
-        const attempt = yield* Effect.result(client.campaigns.get({ params: { id: campaign.id } }));
+      const attempt = yield* Effect.result(client.campaigns.get({ params: { id: campaign.id } }));
 
-        expect(Result.isFailure(attempt) ? attempt.failure : undefined).toStrictEqual(
-          new Schemas.NotFound({ entity: "campaign" }),
-        );
-      }).pipe(Effect.provide(layer)),
-    );
+      expect(Result.isFailure(attempt) ? attempt.failure : undefined).toStrictEqual(
+        new Schemas.NotFound({ entity: "campaign" }),
+      );
+    }).pipe(Effect.provide(layer));
   });
 
-  it("answers 409 with the state to editing or deleting a queued campaign", () => {
+  it.effect("answers 409 with the state to editing or deleting a queued campaign", () => {
     const store = inMemory();
     const { layer } = clientLayer(store);
 
-    return Effect.runPromise(
-      Effect.gen(function* () {
-        const client = yield* makeEmailerClient(baseUrl, Redacted.make(token));
-        const list = yield* client.lists.create({ payload: { name: "Readers" } });
+    return Effect.gen(function* () {
+      const client = yield* makeEmailerClient(baseUrl, Redacted.make(token));
+      const list = yield* client.lists.create({ payload: { name: "Readers" } });
 
-        const campaign = yield* client.campaigns.create({
-          payload: { listId: list.id, subject: "Release notes", text: "Hello" },
-        });
+      const campaign = yield* client.campaigns.create({
+        payload: { listId: list.id, subject: "Release notes", text: "Hello" },
+      });
 
-        const queued: Schemas.Campaign = {
-          ...campaign,
-          submission: { state: "queued", queuedAt: "2026-09-11T10:00:01.000Z" },
-        };
+      const queued: Schemas.Campaign = {
+        ...campaign,
+        submission: { state: "queued", queuedAt: "2026-09-11T10:00:01.000Z" },
+      };
 
-        store.setCampaign(queued, "0195f0a0-1111-4222-8333-44444444e5d2");
+      store.setCampaign(queued, "0195f0a0-1111-4222-8333-44444444e5d2");
 
-        const edit = yield* Effect.result(
-          client.campaigns.update({ params: { id: campaign.id }, payload: { subject: "x" } }),
-        );
+      const edit = yield* Effect.result(
+        client.campaigns.update({ params: { id: campaign.id }, payload: { subject: "x" } }),
+      );
 
-        const removal = yield* Effect.result(
-          client.campaigns.remove({ params: { id: campaign.id } }),
-        );
+      const removal = yield* Effect.result(
+        client.campaigns.remove({ params: { id: campaign.id } }),
+      );
 
-        const conflict = new Schemas.CampaignStateConflict({ state: "queued" });
+      const conflict = new Schemas.CampaignStateConflict({ state: "queued" });
 
-        expect(Result.isFailure(edit) ? edit.failure : undefined).toStrictEqual(conflict);
-        expect(Result.isFailure(removal) ? removal.failure : undefined).toStrictEqual(conflict);
+      expect(Result.isFailure(edit) ? edit.failure : undefined).toStrictEqual(conflict);
+      expect(Result.isFailure(removal) ? removal.failure : undefined).toStrictEqual(conflict);
 
-        expect(yield* client.campaigns.get({ params: { id: campaign.id } })).toStrictEqual(queued);
-      }).pipe(Effect.provide(layer)),
-    );
+      expect(yield* client.campaigns.get({ params: { id: campaign.id } })).toStrictEqual(queued);
+    }).pipe(Effect.provide(layer));
   });
 });
 
@@ -1862,12 +1791,13 @@ describe("test sends", () => {
       });
     });
 
-  it("sends an untagged [Test] copy to each address in order and reports every outcome", () => {
-    const store = inMemory();
-    const { layer } = clientLayer(store);
+  it.effect(
+    "sends an untagged [Test] copy to each address in order and reports every outcome",
+    () => {
+      const store = inMemory();
+      const { layer } = clientLayer(store);
 
-    return Effect.runPromise(
-      Effect.gen(function* () {
+      return Effect.gen(function* () {
         const client = yield* makeEmailerClient(baseUrl, Redacted.make(token));
         const campaign = yield* draftFor(client);
 
@@ -1895,68 +1825,64 @@ describe("test sends", () => {
           },
         ]);
         expect(store.writes).not.toContain("claimRecipient");
-      }).pipe(Effect.provide(layer)),
-    );
-  });
+      }).pipe(Effect.provide(layer));
+    },
+  );
 
-  it.each([
+  it.effect.each([
     [
       "more than twenty addresses",
       { to: Array.from({ length: 21 }, (_, n) => `r${n}@example.com`) },
     ],
     ["the same mailbox twice", { to: ["a@example.com", "A@example.com"] }],
     ["no address", { to: [] }],
-  ])("refuses %s with 400 before sending", (_label, payload) => {
+  ])("refuses %s with 400 before sending", ([_label, payload]) => {
     const store = inMemory();
     const { handler } = clientLayer(store);
 
-    return Effect.runPromise(
-      Effect.gen(function* () {
-        const body = yield* Schema.encodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))(
-          payload,
-        );
+    return Effect.gen(function* () {
+      const body = yield* Schema.encodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))(
+        payload,
+      );
 
-        const response = yield* Effect.promise(() =>
-          handler(
-            jsonRequest(
-              "/campaigns/0195f0a0-1111-4222-8333-4444444ca409/test",
-              "POST",
-              body,
-              authorized(),
-            ),
+      const response = yield* Effect.promise(() =>
+        handler(
+          jsonRequest(
+            "/campaigns/0195f0a0-1111-4222-8333-4444444ca409/test",
+            "POST",
+            body,
+            authorized(),
           ),
-        );
+        ),
+      );
 
-        expect(response.status).toBe(400);
-        expect(store.mailed).toHaveLength(0);
-      }),
-    );
+      expect(response.status).toBe(400);
+      expect(store.mailed).toHaveLength(0);
+    });
   });
 
-  it("answers 503 SendingPaused while the account-wide guard halts sending", () => {
+  it.effect("answers 503 SendingPaused while the account-wide guard halts sending", () => {
     const store = inMemory();
     const { layer } = clientLayer(store);
 
-    return Effect.runPromise(
-      Effect.gen(function* () {
-        const client = yield* makeEmailerClient(baseUrl, Redacted.make(token));
-        const campaign = yield* draftFor(client);
+    return Effect.gen(function* () {
+      const client = yield* makeEmailerClient(baseUrl, Redacted.make(token));
+      const campaign = yield* draftFor(client);
 
-        store.holdSending({ limit: 14, dailyExhausted: false, halted: true });
+      store.holdSending({ limit: 14, refusal: "reputation" });
 
-        const attempt = yield* Effect.result(
-          client.campaigns.test({
-            params: { id: campaign.id },
-            payload: { to: ["a@example.com"] },
-          }),
-        );
+      const attempt = yield* Effect.result(
+        client.campaigns.test({
+          params: { id: campaign.id },
+          payload: { to: ["a@example.com"] },
+        }),
+      );
 
-        expect(Result.isFailure(attempt) ? attempt.failure : undefined).toStrictEqual(
-          new Schemas.SendingPaused({ reason: "reputation" }),
-        );
-        expect(store.mailed).toHaveLength(0);
-      }).pipe(Effect.provide(layer)),
-    );
+      expect(Result.isFailure(attempt) ? attempt.failure : undefined).toStrictEqual(
+        new Schemas.SendingPaused({ reason: "reputation" }),
+      );
+      expect(store.mailed).toHaveLength(0);
+    }).pipe(Effect.provide(layer));
   });
 });
 
@@ -1981,48 +1907,47 @@ describe("preview links", () => {
     return Layer.provide(FetchHttpClient.layer, Layer.succeed(FetchHttpClient.Fetch, transport));
   };
 
-  it("mints a link under the preview function's URL that names the campaign", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const client = yield* makeEmailerClient(baseUrl, Redacted.make(token));
-        const list = yield* client.lists.create({ payload: { name: "Readers" } });
+  // Live: the server mints the expiry on the real clock, so "now" here must be the real clock too.
+  it.live("mints a link under the preview function's URL that names the campaign", () =>
+    Effect.gen(function* () {
+      const client = yield* makeEmailerClient(baseUrl, Redacted.make(token));
+      const list = yield* client.lists.create({ payload: { name: "Readers" } });
 
-        const campaign = yield* client.campaigns.create({
-          payload: { listId: list.id, subject: "Release notes", text: "Hello" },
-        });
+      const campaign = yield* client.campaigns.create({
+        payload: { listId: list.id, subject: "Release notes", text: "Hello" },
+      });
 
-        const link = yield* client.campaigns.preview({ params: { id: campaign.id } });
-        const previewToken = link.url.replace("https://preview.example/previews/", "");
+      const link = yield* client.campaigns.preview({ params: { id: campaign.id } });
+      const previewToken = link.url.replace("https://preview.example/previews/", "");
 
-        expect(link.url.startsWith("https://preview.example/previews/v1.")).toBe(true);
-        expect(
-          verifyPreviewToken(
-            Redacted.make(previewKey),
-            previewToken,
-            Math.floor((yield* Clock.currentTimeMillis) / 1000),
-          ),
-        ).toStrictEqual(Option.some(campaign.id));
-      }).pipe(Effect.provide(clientLayer(inMemory()))),
-    ));
+      expect(link.url.startsWith("https://preview.example/previews/v1.")).toBe(true);
+      expect(
+        verifyPreviewToken(
+          Redacted.make(previewKey),
+          previewToken,
+          Math.floor((yield* Clock.currentTimeMillis) / 1000),
+        ),
+      ).toStrictEqual(Option.some(campaign.id));
+    }).pipe(Effect.provide(clientLayer(inMemory()))),
+  );
 
-  it("answers 404 for a campaign that does not exist", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const client = yield* makeEmailerClient(baseUrl, Redacted.make(token));
+  it.effect("answers 404 for a campaign that does not exist", () =>
+    Effect.gen(function* () {
+      const client = yield* makeEmailerClient(baseUrl, Redacted.make(token));
 
-        const attempt = yield* Effect.result(
-          client.campaigns.preview({ params: { id: "0195f0a0-1111-4222-8333-4444444ca409" } }),
-        );
+      const attempt = yield* Effect.result(
+        client.campaigns.preview({ params: { id: "0195f0a0-1111-4222-8333-4444444ca409" } }),
+      );
 
-        expect(Result.isFailure(attempt) ? attempt.failure : undefined).toStrictEqual(
-          new Schemas.NotFound({ entity: "campaign" }),
-        );
-      }).pipe(Effect.provide(clientLayer(inMemory()))),
-    ));
+      expect(Result.isFailure(attempt) ? attempt.failure : undefined).toStrictEqual(
+        new Schemas.NotFound({ entity: "campaign" }),
+      );
+    }).pipe(Effect.provide(clientLayer(inMemory()))),
+  );
 });
 
 describe("campaign listing", () => {
-  it("returns created campaigns as summaries without the body and honours limit", () => {
+  it.effect("returns created campaigns as summaries without the body and honours limit", () => {
     const store = inMemory();
 
     return clientOver(store)((client) =>
@@ -2048,7 +1973,6 @@ describe("campaign listing", () => {
             submission: { state: "draft" },
           },
         ]);
-        expect(page.items[0]).not.toHaveProperty("text");
         expect(yield* client.campaigns.get({ params: { id: first.id } })).toStrictEqual(first);
       }),
     );
@@ -2072,25 +1996,6 @@ describe("application lifetime", () => {
       .then((second) => {
         expect(second.status).toBe(401);
         expect(second.headers.get("www-authenticate")).toBe("Bearer");
-      });
-  });
-
-  it("refuses a wrong credential after accepting a right one on the same application", () => {
-    const store = inMemory();
-    const handler = webHandler(store);
-
-    return handler(new Request(`${baseUrl}/contacts`, { headers: authorized() }))
-      .then((first) => {
-        expect(first.status).toBe(200);
-
-        return handler(
-          new Request(`${baseUrl}/contacts`, {
-            headers: { authorization: "Bearer 3o4Xr7nJ1pQvKzB2sYtLwMhGfDcEaN9uRiVoP0qTzXZ" },
-          }),
-        );
-      })
-      .then((second) => {
-        expect(second.status).toBe(401);
       });
   });
 
@@ -2126,7 +2031,7 @@ describe("addresses", () => {
     accountSuppression: null,
   };
 
-  it("returns the local record with a null account entry when SES has none", () => {
+  it.effect("returns the local record with a null account entry when SES has none", () => {
     const store = inMemory();
 
     return clientOver(store)((client) =>
@@ -2139,7 +2044,7 @@ describe("addresses", () => {
     );
   });
 
-  it("maps a present account entry to its reason and an ISO timestamp", () => {
+  it.effect("maps a present account entry to its reason and an ISO timestamp", () => {
     const store = inMemory();
 
     store.listOnAccount({
@@ -2160,7 +2065,7 @@ describe("addresses", () => {
     );
   });
 
-  it("passes the address to SES exactly as given and reports it back unchanged", () => {
+  it.effect("passes the address to SES exactly as given and reports it back unchanged", () => {
     const store = inMemory();
     const listed = "User@Example.com";
 
@@ -2174,7 +2079,7 @@ describe("addresses", () => {
     );
   });
 
-  it("clears the local rows when SES has no entry to delete", () => {
+  it.effect("clears the local rows when SES has no entry to delete", () => {
     const store = inMemory(false, "bouncing");
 
     store.failSesDelete(new sesv2.NotFoundException({ message: "not listed" }));
@@ -2196,7 +2101,7 @@ describe("addresses", () => {
     );
   });
 
-  it("answers 503 naming the delete when SES refuses it for another reason", () => {
+  it.effect("answers 503 naming the delete when SES refuses it for another reason", () => {
     const store = inMemory(false, "suppressed");
 
     store.failSesDelete(new sesv2.TooManyRequestsException({ message: "slow" }));
@@ -2215,17 +2120,18 @@ describe("addresses", () => {
     );
   });
 
-  it("answers 503 with a typed body when the suppression lookup fails for another reason", () => {
-    const store = inMemory();
+  it.effect(
+    "answers 503 with a typed body when the suppression lookup fails for another reason",
+    () => {
+      const store = inMemory();
 
-    store.failSesGet(new sesv2.TooManyRequestsException({ message: "slow" }));
+      store.failSesGet(new sesv2.TooManyRequestsException({ message: "slow" }));
 
-    const handler = webHandler(store);
+      const handler = webHandler(store);
 
-    const transport: typeof globalThis.fetch = (input, init) => handler(new Request(input, init));
+      const transport: typeof globalThis.fetch = (input, init) => handler(new Request(input, init));
 
-    return Effect.runPromise(
-      Effect.gen(function* () {
+      return Effect.gen(function* () {
         const client = yield* makeEmailerClient(baseUrl, Redacted.make(token));
 
         const attempt = yield* Effect.result(
@@ -2255,29 +2161,32 @@ describe("addresses", () => {
         Effect.provide(
           Layer.provide(FetchHttpClient.layer, Layer.succeed(FetchHttpClient.Fetch, transport)),
         ),
-      ),
-    );
-  });
+      );
+    },
+  );
 
-  it("deletes the account entry before the local rows and returns the refreshed record", () => {
-    const store = inMemory(false, "suppressed");
+  it.effect(
+    "deletes the account entry before the local rows and returns the refreshed record",
+    () => {
+      const store = inMemory(false, "suppressed");
 
-    return clientOver(store)((client) =>
-      Effect.gen(function* () {
-        const record = yield* client.addresses.unsuppress({
-          payload: { email: allowedRecipient },
-        });
+      return clientOver(store)((client) =>
+        Effect.gen(function* () {
+          const record = yield* client.addresses.unsuppress({
+            payload: { email: allowedRecipient },
+          });
 
-        expect(record).toStrictEqual(mailable);
-        expect(store.sequence).toStrictEqual([
-          "deleteSuppressedDestination",
-          "unsuppress",
-          "addressRecord",
-          "getSuppressedDestination",
-        ]);
-      }),
-    );
-  });
+          expect(record).toStrictEqual(mailable);
+          expect(store.sequence).toStrictEqual([
+            "deleteSuppressedDestination",
+            "unsuppress",
+            "addressRecord",
+            "getSuppressedDestination",
+          ]);
+        }),
+      );
+    },
+  );
 
   it("refuses addresses status without a credential", () => {
     const store = inMemory();

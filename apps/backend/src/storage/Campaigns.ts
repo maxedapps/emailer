@@ -1,6 +1,6 @@
 import * as Schemas from "@emailer/api/Schemas";
 import * as AWS from "alchemy/AWS";
-import { Context, Crypto, Effect, Layer, Option, Schema, SchemaTransformation } from "effect";
+import { Context, Crypto, Effect, Layer, Schema, SchemaTransformation, Struct } from "effect";
 
 import { corrupt } from "./Errors.ts";
 import {
@@ -47,9 +47,7 @@ const StoredCampaign = Schema.Struct({
   listId: attributeOf(Schemas.EntityId),
   subject: attributeOf(Schemas.CampaignSubject),
   createdAt: attributeOf(Schemas.Timestamp),
-  state: attributeOf(
-    Schema.Literals(["draft", "scheduled", "queued", "sending", "paused", "completed"]),
-  ),
+  state: attributeOf(Schemas.CampaignState),
   queuedAt: Schema.optionalKey(attributeOf(Schemas.Timestamp)),
   startedAt: Schema.optionalKey(attributeOf(Schemas.Timestamp)),
   finishedAt: Schema.optionalKey(attributeOf(Schemas.Timestamp)),
@@ -84,12 +82,14 @@ const decodeStoredCampaignBody = Schema.decodeUnknownEffect(StoredCampaignBody);
 
 const decodeSubmission = Schema.decodeUnknownEffect(Schemas.CampaignSubmission);
 
-export type SkipReason = "unsubscribed" | "suppressed" | "bouncing";
-
-export type RecipientSettlement =
-  | { readonly state: "accepted"; readonly messageId: string }
-  | { readonly state: "rejected"; readonly rejectionCode: Schemas.RejectionCode }
-  | { readonly state: "uncertain" };
+/**
+ * What one SES submission came to: the mailer answers it, and a send row is settled from it.
+ * `uncertain` means no definite answer came back, so whether the message went out is unknown.
+ */
+export type SubmissionOutcome =
+  | { readonly outcome: "accepted"; readonly messageId: string }
+  | { readonly outcome: "rejected"; readonly rejectionCode: Schemas.RejectionCode }
+  | { readonly outcome: "uncertain" };
 
 interface CampaignRun {
   readonly listId: string;
@@ -104,20 +104,15 @@ interface CampaignRun {
 }
 
 export interface CampaignControl {
-  readonly state: (typeof StoredCampaign.Type)["state"];
+  readonly state: Schemas.CampaignState;
   readonly runToken: string | undefined;
   readonly startedAt: string | undefined;
   readonly pausedReason: Schemas.PauseReason | undefined;
 }
 
-export type ExpectedIdleSource = {
-  readonly state: "draft" | "scheduled";
+export type RunSource = {
+  readonly state: "draft" | "scheduled" | "paused";
   readonly runToken: string | undefined;
-};
-
-export type ExpectedPausedSource = {
-  readonly state: "paused";
-  readonly runToken: string;
 };
 
 export type CancelSource =
@@ -193,8 +188,8 @@ const sendingAndRun = (runToken: string) => ({
   ":run": str(runToken),
 });
 
-const settlementWrite = (settlement: RecipientSettlement) => {
-  switch (settlement.state) {
+const settlementWrite = (settlement: SubmissionOutcome) => {
+  switch (settlement.outcome) {
     case "accepted":
       return {
         expression: "SET #state = :state, finishedAt = :finishedAt, messageId = :messageId",
@@ -240,17 +235,14 @@ const campaignReads = (primitives: ReadPrimitives) => {
       Effect.mapError(corrupt("getCampaignBody")),
     );
 
-    const body: Schemas.CampaignBody =
-      stored.html === undefined ? { text: stored.text } : { text: stored.text, html: stored.html };
-
-    return body;
+    return Struct.omit(stored, ["v"]);
   });
 
   const getCampaign = Effect.fn("Storage.getCampaign")(function* (campaignId: string) {
     const response = yield* readItem("getCampaign", campaignKey(campaignId));
 
     if (response.Item === undefined) {
-      return Option.none<Schemas.Campaign>();
+      return yield* new Schemas.NotFound({ entity: "campaign" });
     }
 
     const stored = yield* decodeStoredCampaign(response.Item).pipe(
@@ -260,7 +252,7 @@ const campaignReads = (primitives: ReadPrimitives) => {
     const summary = yield* summaryOf(stored).pipe(Effect.mapError(corrupt("getCampaign")));
     const body = yield* getCampaignBody(campaignId);
 
-    return Option.some<Schemas.Campaign>({ ...summary, ...body });
+    return { ...summary, ...body } satisfies Schemas.Campaign;
   });
 
   return { getCampaignBody, getCampaign } as const;
@@ -317,20 +309,15 @@ export const campaignOperations = (
     cursor: string | undefined,
   ) {
     const page = yield* readEntityPage("listCampaigns", campaignKind, campaignKey, limit, cursor);
-    const campaigns: Array<Schemas.CampaignSummary> = [];
 
-    for (const item of page.items) {
-      const stored = yield* decodeStoredCampaign(item).pipe(
+    const campaigns = yield* Effect.forEach(page.items, (item) =>
+      decodeStoredCampaign(item).pipe(
+        Effect.flatMap(summaryOf),
         Effect.mapError(corrupt("listCampaigns")),
-      );
+      ),
+    );
 
-      campaigns.push(yield* summaryOf(stored).pipe(Effect.mapError(corrupt("listCampaigns"))));
-    }
-
-    return { items: campaigns, nextCursor: page.nextCursor } satisfies StoredPage<
-      Schemas.CampaignSummary,
-      string
-    >;
+    return { ...page, items: campaigns } satisfies StoredPage<Schemas.CampaignSummary, string>;
   });
 
   // Tokenless virgin drafts are valid here; a missing token on queued/scheduled is the command's
@@ -341,14 +328,14 @@ export const campaignOperations = (
     const response = yield* readItem("getCampaignControl", campaignKey(campaignId));
 
     if (response.Item === undefined) {
-      return Option.none<CampaignControl>();
+      return yield* new Schemas.NotFound({ entity: "campaign" });
     }
 
     const stored = yield* decodeStoredCampaign(response.Item).pipe(
       Effect.mapError(corrupt("getCampaignControl")),
     );
 
-    return Option.some(controlOf(stored));
+    return controlOf(stored);
   });
 
   const commitLifecycle = (
@@ -373,70 +360,41 @@ export const campaignOperations = (
       ],
     });
 
-  const enqueueCampaign = Effect.fn("Storage.enqueueCampaign")(function* (
+  /**
+   * Starts a new run, and only from the state and token the caller observed: the campaign becomes
+   * `queued` or `scheduled` under a fresh run token, with the run baselines taken from the counters
+   * as they stand. `queuedAt` is when it was queued or, for a schedule, when the wake-up is due.
+   * Only a paused source carries a pause reason, and it goes. Send, schedule and resume keep their
+   * own operation ids, so a failure names the command that hit it.
+   */
+  const newRun = Effect.fn("Storage.newRun")(function* (
     id: string,
-    expected: ExpectedIdleSource,
+    expected: RunSource,
     newToken: string,
-    now: string,
+    target: "queued" | "scheduled",
+    queuedAt: string,
   ) {
-    const outcome = yield* commitLifecycle("enqueueCampaign", id, {
+    const operationId =
+      target === "scheduled"
+        ? "scheduleCampaign"
+        : expected.state === "paused"
+          ? "resumeCampaign"
+          : "enqueueCampaign";
+
+    const outcome = yield* commitLifecycle(operationId, id, {
       UpdateExpression:
-        "SET #state = :queued, queuedAt = :now, runToken = :run, runAccepted = accepted, runBounced = bounced, runComplained = complained",
+        "SET #state = :target, queuedAt = :queuedAt, runToken = :run, runAccepted = accepted, runBounced = bounced, runComplained = complained REMOVE pausedReason",
       ConditionExpression: `#state = :expectedState AND ${observedTokenCondition(expected.runToken)}`,
       ExpressionAttributeValues: {
-        ":queued": str("queued"),
-        ":now": str(now),
+        ":target": str(target),
+        ":queuedAt": str(queuedAt),
         ":run": str(newToken),
         ":expectedState": str(expected.state),
         ...observedTokenValues(expected.runToken),
       },
     });
 
-    return outcome.committed ? ("queued" as const) : ("conflict" as const);
-  });
-
-  const scheduleCampaign = Effect.fn("Storage.scheduleCampaign")(function* (
-    id: string,
-    expected: ExpectedIdleSource,
-    newToken: string,
-    sendAt: string,
-  ) {
-    const outcome = yield* commitLifecycle("scheduleCampaign", id, {
-      UpdateExpression:
-        "SET #state = :scheduled, queuedAt = :sendAt, runToken = :run, runAccepted = accepted, runBounced = bounced, runComplained = complained",
-      ConditionExpression: `#state = :expectedState AND ${observedTokenCondition(expected.runToken)}`,
-      ExpressionAttributeValues: {
-        ":scheduled": str("scheduled"),
-        ":sendAt": str(sendAt),
-        ":run": str(newToken),
-        ":expectedState": str(expected.state),
-        ...observedTokenValues(expected.runToken),
-      },
-    });
-
-    return outcome.committed ? ("scheduled" as const) : ("conflict" as const);
-  });
-
-  const resumeCampaign = Effect.fn("Storage.resumeCampaign")(function* (
-    id: string,
-    expected: ExpectedPausedSource,
-    newToken: string,
-    now: string,
-  ) {
-    const outcome = yield* commitLifecycle("resumeCampaign", id, {
-      UpdateExpression:
-        "SET #state = :queued, runToken = :run, queuedAt = :now, runAccepted = accepted, runBounced = bounced, runComplained = complained REMOVE pausedReason",
-      ConditionExpression: "#state = :paused AND runToken = :expected",
-      ExpressionAttributeValues: {
-        ":queued": str("queued"),
-        ":run": str(newToken),
-        ":now": str(now),
-        ":paused": str(expected.state),
-        ":expected": str(expected.runToken),
-      },
-    });
-
-    return outcome.committed ? ("queued" as const) : ("conflict" as const);
+    return outcome.committed ? target : ("conflict" as const);
   });
 
   const cancelCampaign = Effect.fn("Storage.cancelCampaign")(function* (
@@ -502,10 +460,6 @@ export const campaignOperations = (
 
     if (!outcome.applied) {
       return "stale" as const;
-    }
-
-    if (outcome.attributes === undefined) {
-      return yield* corrupt("beginRun")(outcome);
     }
 
     const stored = yield* decodeStoredCampaign(outcome.attributes).pipe(
@@ -581,7 +535,7 @@ export const campaignOperations = (
     runToken: string,
     contactId: string,
     recipient: string,
-    reason: SkipReason,
+    reason: Schemas.SkipReason,
     now: string,
   ) {
     const outcome = yield* runTransaction("skipRecipient", {
@@ -633,7 +587,7 @@ export const campaignOperations = (
     id: string,
     sendId: string,
     contactId: string,
-    settlement: RecipientSettlement,
+    settlement: SubmissionOutcome,
     now: string,
   ) {
     const terminal = settlementWrite(settlement);
@@ -811,9 +765,7 @@ export const campaignOperations = (
     getCampaign,
     listCampaigns,
     getCampaignControl,
-    enqueueCampaign,
-    scheduleCampaign,
-    resumeCampaign,
+    newRun,
     cancelCampaign,
     beginRun,
     claimRecipient,

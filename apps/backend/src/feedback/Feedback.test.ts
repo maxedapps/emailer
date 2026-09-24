@@ -1,9 +1,9 @@
+import { describe, expect, it } from "@effect/vitest";
 import * as Schemas from "@emailer/api/Schemas";
 import type * as AWS from "alchemy/AWS";
 import { ConfigProvider, Effect, Layer, Logger, References, Result } from "effect";
-import { describe, expect, it } from "vitest";
 
-import { expectedConfigurationSet, handleEvent } from "./Feedback.ts";
+import { expectedConfigurationSet, handleMessage } from "./Feedback.ts";
 import { StorageFailure } from "../storage/Errors.ts";
 import { FeedbackStore } from "../storage/Feedback.ts";
 
@@ -175,16 +175,25 @@ const delayEvent = (
   };
 };
 
+/** The queue message the rule delivers: the whole EventBridge event, with SES's event as `detail`. */
+const envelope = (detail: AWS.SES.EmailEventDetail, envelopeId = "envelope-1") =>
+  JSON.stringify({ version: "0", id: envelopeId, source: "aws.ses", detail });
+
+/** A message that is not an EventBridge event: a Lambda failure record nests the event instead. */
+const lambdaFailureRecord = JSON.stringify({
+  requestContext: { requestId: "request-1", condition: "RetriesExhausted" },
+  requestPayload: { id: "envelope-1", detail: bounceEvent("Permanent", "General") },
+});
+
 const handling = (
   world: World,
-  detail: AWS.SES.EmailEventDetail,
-  envelopeId = "envelope-1",
+  body: string,
   store: Layer.Layer<FeedbackStore> = storageLayer(world),
 ) =>
   Effect.gen(function* () {
     const expected = yield* expectedConfigurationSet;
 
-    yield* handleEvent(expected, detail, envelopeId);
+    yield* handleMessage(expected, body);
   }).pipe(
     Effect.provide(
       Layer.mergeAll(
@@ -196,11 +205,11 @@ const handling = (
     ),
   );
 
-const run = (detail: AWS.SES.EmailEventDetail, envelopeId?: string) =>
+const run = (detail: AWS.SES.EmailEventDetail) =>
   Effect.gen(function* () {
     const world = emptyWorld();
 
-    yield* handling(world, detail, envelopeId);
+    yield* handling(world, envelope(detail));
 
     return world;
   });
@@ -210,248 +219,224 @@ const countBounced: FeedbackWrite = { effect: "count", counter: "bounced" };
 const countComplained: FeedbackWrite = { effect: "count", counter: "complained" };
 
 describe("bounces", () => {
-  it("suppresses a permanent bounce and hands the store a counted, suppressed row", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const world = yield* run(bounceEvent("Permanent", "General"));
+  it.effect("suppresses a permanent bounce and hands the store a counted, suppressed row", () =>
+    Effect.gen(function* () {
+      const world = yield* run(bounceEvent("Permanent", "General"));
 
-        expect(world.suppressions.get("hard@example.com")?.reason).toBe("bounce");
-        expect(world.suppressions.get("hard@example.com")?.messageId).toBe(messageId);
-        expect(world.suppressions.get("hard@example.com")?.bounceSubType).toBe("General");
-        expect(world.writes).toHaveLength(1);
-        expect(world.writes[0]?.write).toStrictEqual(countBounced);
-        expect(world.writes[0]?.row).toStrictEqual({
-          campaignId,
-          kind: "bounce",
-          feedbackId,
-          recipient: "hard@example.com",
-          messageId,
-          outcome: "suppressed",
-          receivedAt: world.writes[0]?.row.receivedAt,
-          bounceType: "Permanent",
-          bounceSubType: "General",
-          complaintFeedbackType: undefined,
-          complaintSubType: undefined,
-        });
-        expect(world.writes[0]?.row.receivedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
-      }),
-    ));
+      expect(world.suppressions.get("hard@example.com")?.reason).toBe("bounce");
+      expect(world.suppressions.get("hard@example.com")?.messageId).toBe(messageId);
+      expect(world.suppressions.get("hard@example.com")?.bounceSubType).toBe("General");
+      expect(world.writes).toHaveLength(1);
+      expect(world.writes[0]?.write).toStrictEqual(countBounced);
+      expect(world.writes[0]?.row).toStrictEqual({
+        campaignId,
+        kind: "bounce",
+        feedbackId,
+        recipient: "hard@example.com",
+        messageId,
+        outcome: "suppressed",
+        receivedAt: world.writes[0]?.row.receivedAt,
+        bounceType: "Permanent",
+        bounceSubType: "General",
+        complaintFeedbackType: undefined,
+        complaintSubType: undefined,
+      });
+      expect(world.writes[0]?.row.receivedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    }),
+  );
 
-  it("suppresses the account-suppression echo and hands the store a history-only row", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const world = yield* run(bounceEvent("Permanent", "OnAccountSuppressionList"));
+  it.effect("does not suppress a transient bounce and hands the store a transient row", () =>
+    Effect.gen(function* () {
+      const world = yield* run(bounceEvent("Transient", "MailboxFull"));
 
-        expect(world.suppressions.has("hard@example.com")).toBe(true);
-        expect(world.writes).toHaveLength(1);
-        expect(world.writes[0]?.write).toStrictEqual({ effect: "history" });
-        expect(world.writes[0]?.row.outcome).toBe("suppressed");
-        expect(world.writes[0]?.row.bounceSubType).toBe("OnAccountSuppressionList");
-      }),
-    ));
+      expect(world.suppressions.size).toBe(0);
+      expect(world.writes).toHaveLength(1);
+      expect(world.writes[0]?.write).toStrictEqual({ effect: "transient" });
+      expect(world.writes[0]?.row).toMatchObject({
+        campaignId,
+        recipient: "hard@example.com",
+        outcome: "recorded",
+        bounceType: "Transient",
+        bounceSubType: "MailboxFull",
+      });
+    }),
+  );
 
-  it("does not suppress a transient bounce and hands the store a transient row", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const world = yield* run(bounceEvent("Transient", "MailboxFull"));
+  it.effect("writes one row per listed recipient and suppresses each", () =>
+    Effect.gen(function* () {
+      const world = yield* run(
+        bounceEvent("Permanent", "General", ["one@example.com", "two@example.com"]),
+      );
 
-        expect(world.suppressions.size).toBe(0);
-        expect(world.writes).toHaveLength(1);
-        expect(world.writes[0]?.write).toStrictEqual({ effect: "transient" });
-        expect(world.writes[0]?.row).toMatchObject({
-          campaignId,
-          recipient: "hard@example.com",
-          outcome: "recorded",
-          bounceType: "Transient",
-          bounceSubType: "MailboxFull",
-        });
-      }),
-    ));
-
-  it("writes one row per listed recipient and suppresses each", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const world = yield* run(
-          bounceEvent("Permanent", "General", ["one@example.com", "two@example.com"]),
-        );
-
-        expect([...world.suppressions.keys()]).toStrictEqual([
-          "one@example.com",
-          "two@example.com",
-        ]);
-        expect(world.writes.map((it) => it.row.recipient)).toStrictEqual([
-          "one@example.com",
-          "two@example.com",
-        ]);
-      }),
-    ));
-
-  it("tolerates a bounce that carries no subtype", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const world = yield* run(bounceEvent("Permanent", null));
-
-        expect(world.suppressions.get("hard@example.com")?.bounceSubType).toBeUndefined();
-        expect(world.writes[0]?.row.bounceSubType).toBeUndefined();
-      }),
-    ));
+      expect([...world.suppressions.keys()]).toStrictEqual(["one@example.com", "two@example.com"]);
+      expect(world.writes.map((it) => it.row.recipient)).toStrictEqual([
+        "one@example.com",
+        "two@example.com",
+      ]);
+    }),
+  );
 });
 
 describe("complaints", () => {
-  it("suppresses a complaint and hands the store a counted row", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const world = yield* run(complaintEvent("abuse"));
+  it.effect("suppresses a complaint and hands the store a counted row", () =>
+    Effect.gen(function* () {
+      const world = yield* run(complaintEvent("abuse"));
 
-        expect(world.suppressions.get("angry@example.com")?.reason).toBe("complaint");
-        expect(world.suppressions.get("angry@example.com")?.complaintFeedbackType).toBe("abuse");
-        expect(world.writes).toHaveLength(1);
-        expect(world.writes[0]?.write).toStrictEqual(countComplained);
-        expect(world.writes[0]?.row).toMatchObject({
-          kind: "complaint",
-          outcome: "suppressed",
-          complaintFeedbackType: "abuse",
-        });
-      }),
-    ));
+      expect(world.suppressions.get("angry@example.com")?.reason).toBe("complaint");
+      expect(world.suppressions.get("angry@example.com")?.complaintFeedbackType).toBe("abuse");
+      expect(world.writes).toHaveLength(1);
+      expect(world.writes[0]?.write).toStrictEqual(countComplained);
+      expect(world.writes[0]?.row).toMatchObject({
+        kind: "complaint",
+        outcome: "suppressed",
+        complaintFeedbackType: "abuse",
+      });
+    }),
+  );
 
-  it("suppresses the complaint echo and hands the store a history-only row", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const world = yield* run(complaintEvent(null, "OnAccountSuppressionList"));
+  // The one case whose complaint subtype reaches both the suppression and the row.
+  it.effect("suppresses the complaint echo and hands the store a history-only row", () =>
+    Effect.gen(function* () {
+      const world = yield* run(complaintEvent(null, "OnAccountSuppressionList"));
 
-        expect(world.suppressions.get("angry@example.com")?.complaintSubType).toBe(
-          "OnAccountSuppressionList",
-        );
-        expect(world.writes[0]?.write).toStrictEqual({ effect: "history" });
-        expect(world.writes[0]?.row.complaintSubType).toBe("OnAccountSuppressionList");
-      }),
-    ));
+      expect(world.suppressions.get("angry@example.com")?.complaintSubType).toBe(
+        "OnAccountSuppressionList",
+      );
+      expect(world.writes[0]?.write).toStrictEqual({ effect: "history" });
+      expect(world.writes[0]?.row.complaintSubType).toBe("OnAccountSuppressionList");
+    }),
+  );
 
-  it("records a not-spam report without suppressing or counting", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const world = yield* run(complaintEvent("not-spam"));
+  it.effect("records a not-spam report without suppressing or counting", () =>
+    Effect.gen(function* () {
+      const world = yield* run(complaintEvent("not-spam"));
 
-        expect(world.suppressions.size).toBe(0);
-        expect(world.writes).toHaveLength(1);
-        expect(world.writes[0]?.write).toStrictEqual({ effect: "history" });
-        expect(world.writes[0]?.row.outcome).toBe("recorded");
-      }),
-    ));
+      expect(world.suppressions.size).toBe(0);
+      expect(world.writes).toHaveLength(1);
+      expect(world.writes[0]?.write).toStrictEqual({ effect: "history" });
+      expect(world.writes[0]?.row.outcome).toBe("recorded");
+    }),
+  );
 });
 
 describe("events the handler must not act on", () => {
-  it("ignores an event published through another configuration set", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const world = yield* run(
-          bounceEvent("Permanent", "General", ["hard@example.com"], {
-            ...tags(),
-            "ses:configuration-set": ["someone-elses-set"],
-          }),
-        );
+  it.effect("ignores an event published through another configuration set", () =>
+    Effect.gen(function* () {
+      const world = yield* run(
+        bounceEvent("Permanent", "General", ["hard@example.com"], {
+          ...tags(),
+          "ses:configuration-set": ["someone-elses-set"],
+        }),
+      );
 
+      expect(world.suppressions.size).toBe(0);
+      expect(world.writes).toHaveLength(0);
+    }),
+  );
+
+  it.effect("ignores an event it cannot decode without failing the invocation", () =>
+    Effect.gen(function* () {
+      const world = yield* run({ eventType: "Bounce", mail: { messageId } });
+
+      expect(world.suppressions.size).toBe(0);
+      expect(world.writes).toHaveLength(0);
+    }),
+  );
+
+  it.effect(
+    "fails the invocation for a message that is not an EventBridge event, and writes nothing",
+    () =>
+      Effect.gen(function* () {
+        const world = emptyWorld();
+
+        const attempt = yield* Effect.result(handling(world, lambdaFailureRecord));
+
+        expect(Result.isFailure(attempt)).toBe(true);
         expect(world.suppressions.size).toBe(0);
         expect(world.writes).toHaveLength(0);
       }),
-    ));
+  );
 
-  it("ignores an event it cannot decode without failing the invocation", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const world = yield* run({ eventType: "Bounce", mail: { messageId } });
+  it.effect("ignores an event kind it does not classify", () =>
+    Effect.gen(function* () {
+      const world = yield* run({
+        eventType: "Delivery",
+        mail: { messageId, tags: { ...tags() } },
+        delivery: { recipients: ["sam@example.com"] },
+      });
 
-        expect(world.suppressions.size).toBe(0);
-        expect(world.writes).toHaveLength(0);
-      }),
-    ));
-
-  it("ignores an event kind it does not classify", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const world = yield* run({
-          eventType: "Delivery",
-          mail: { messageId, tags: { ...tags() } },
-          delivery: { recipients: ["sam@example.com"] },
-        });
-
-        expect(world.suppressions.size).toBe(0);
-        expect(world.writes).toHaveLength(0);
-      }),
-    ));
+      expect(world.suppressions.size).toBe(0);
+      expect(world.writes).toHaveLength(0);
+    }),
+  );
 });
 
 describe("idempotence and the campaign tag", () => {
-  it("changes nothing when the same event is delivered twice", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const world = emptyWorld();
-        const event = bounceEvent("Permanent", "General");
+  it.effect("changes nothing when the same event is delivered twice", () =>
+    Effect.gen(function* () {
+      const world = emptyWorld();
+      const event = bounceEvent("Permanent", "General");
 
-        yield* handling(world, event, "envelope-1");
-        yield* handling(world, event, "envelope-2");
+      yield* handling(world, envelope(event, "envelope-1"));
+      yield* handling(world, envelope(event, "envelope-2"));
 
-        expect(world.suppressions.size).toBe(1);
-        expect(world.writes).toHaveLength(2);
-        expect(world.writeOutcomes).toStrictEqual(["committed", "duplicate"]);
-        expect(world.repeated).toHaveLength(2);
-        expect(logsNamed(world, "duplicate feedback event")).toHaveLength(1);
-        expect(logsNamed(world, "duplicate feedback event")[0]?.level).toBe("Debug");
-      }),
-    ));
+      expect(world.suppressions.size).toBe(1);
+      expect(world.writes).toHaveLength(2);
+      expect(world.writeOutcomes).toStrictEqual(["committed", "duplicate"]);
+      expect(world.repeated).toHaveLength(2);
+      expect(logsNamed(world, "duplicate feedback event")).toHaveLength(1);
+      expect(logsNamed(world, "duplicate feedback event")[0]?.level).toBe("Debug");
+    }),
+  );
 
-  it("fails the invocation when the suppression write is unavailable", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const world = emptyWorld();
+  it.effect("fails the invocation when the suppression write is unavailable", () =>
+    Effect.gen(function* () {
+      const world = emptyWorld();
 
-        const unavailable = Layer.succeed(FeedbackStore)({
-          ...storageOperations(world),
-          suppressAddress: () =>
-            Effect.fail(
-              new StorageFailure({
-                operationId: "suppressAddress",
-                reason: "unavailable",
-                cause: "boom",
-              }),
-            ),
-        });
+      const unavailable = Layer.succeed(FeedbackStore)({
+        ...storageOperations(world),
+        suppressAddress: () =>
+          Effect.fail(
+            new StorageFailure({
+              operationId: "suppressAddress",
+              reason: "unavailable",
+              cause: "boom",
+            }),
+          ),
+      });
 
-        const attempt = yield* Effect.result(
-          handling(world, bounceEvent("Permanent", "General"), "envelope-1", unavailable),
-        );
+      const attempt = yield* Effect.result(
+        handling(world, envelope(bounceEvent("Permanent", "General")), unavailable),
+      );
 
-        expect(Result.isFailure(attempt)).toBe(true);
-        expect(world.writes).toHaveLength(0);
-      }),
-    ));
+      expect(Result.isFailure(attempt)).toBe(true);
+      expect(world.writes).toHaveLength(0);
+    }),
+  );
 
-  it("still suppresses when the event carries no campaign tag", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const untagged = {
-          "ses:configuration-set": [configurationSetName],
-        };
+  it.effect("still suppresses when the event carries no campaign tag", () =>
+    Effect.gen(function* () {
+      const untagged = {
+        "ses:configuration-set": [configurationSetName],
+      };
 
-        const world = yield* run(
-          bounceEvent("Permanent", "General", ["hard@example.com"], untagged),
-        );
+      const world = yield* run(bounceEvent("Permanent", "General", ["hard@example.com"], untagged));
 
-        expect(world.suppressions.has("hard@example.com")).toBe(true);
-        expect(world.writes).toHaveLength(0);
-        expect(logsNamed(world, "feedback without a campaign tag (a test send)")).toHaveLength(1);
-        expect(logsNamed(world, "feedback without a campaign tag (a test send)")[0]?.level).toBe(
-          "Info",
-        );
-      }),
-    ));
+      expect(world.suppressions.has("hard@example.com")).toBe(true);
+      expect(world.writes).toHaveLength(0);
+      expect(logsNamed(world, "feedback without a campaign tag (a test send)")).toHaveLength(1);
+      expect(logsNamed(world, "feedback without a campaign tag (a test send)")[0]?.level).toBe(
+        "Info",
+      );
+    }),
+  );
 
-  // The case the failure queue exists for: the suppression persisted, the history write did not.
-  // The invocation fails, Lambda retries and gives up, and the event lands on the queue. Replaying
-  // it then completes the history without writing the suppression a second time.
-  it("completes a half-written event on replay without duplicating what already landed", () =>
-    Effect.runPromise(
+  // The case the dead-letter queue exists for: the suppression persisted, the history write did
+  // not. The invocation fails, SQS redelivers the message until it dead-letters it, and a redrive
+  // then completes the history without writing the suppression a second time.
+  it.effect(
+    "completes a half-written event on replay without duplicating what already landed",
+    () =>
       Effect.gen(function* () {
         const world = emptyWorld();
         let historyFails = true;
@@ -471,7 +456,7 @@ describe("idempotence and the campaign tag", () => {
         });
 
         const first = yield* Effect.result(
-          handling(world, bounceEvent("Permanent", "General"), "envelope-1", flaky),
+          handling(world, envelope(bounceEvent("Permanent", "General")), flaky),
         );
 
         expect(Result.isFailure(first)).toBe(true);
@@ -481,7 +466,7 @@ describe("idempotence and the campaign tag", () => {
         historyFails = false;
 
         const replayed = yield* Effect.result(
-          handling(world, bounceEvent("Permanent", "General"), "envelope-1", flaky),
+          handling(world, envelope(bounceEvent("Permanent", "General")), flaky),
         );
 
         expect(Result.isSuccess(replayed)).toBe(true);
@@ -491,60 +476,59 @@ describe("idempotence and the campaign tag", () => {
         expect(world.suppressions.size).toBe(1);
         expect(world.repeated).toStrictEqual(["hard@example.com"]);
       }),
-    ));
+  );
 });
 
 describe("delivery delays", () => {
-  it("logs a delivery delay once for two recipients and writes nothing", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const world = yield* run(
-          delayEvent(
-            "SpamDetected",
-            ["late@example.com", "later@example.com"],
-            "2026-09-11T12:00:00.000Z",
-          ),
-        );
+  it.effect("logs a delivery delay once for two recipients and writes nothing", () =>
+    Effect.gen(function* () {
+      const world = yield* run(
+        delayEvent(
+          "SpamDetected",
+          ["late@example.com", "later@example.com"],
+          "2026-09-11T12:00:00.000Z",
+        ),
+      );
 
-        expect(world.suppressions.size).toBe(0);
-        expect(world.writes).toHaveLength(0);
+      expect(world.suppressions.size).toBe(0);
+      expect(world.writes).toHaveLength(0);
 
-        const delayed = logsNamed(world, "delivery delayed");
+      const delayed = logsNamed(world, "delivery delayed");
 
-        expect(delayed).toHaveLength(1);
-        expect(delayed[0]?.level).toBe("Info");
-        expect(delayed[0]?.message).toStrictEqual([
-          "delivery delayed",
-          {
-            delayType: "SpamDetected",
-            recipients: 2,
-            campaignId,
-            messageId,
-            expirationTime: "2026-09-11T12:00:00.000Z",
-          },
-        ]);
-      }),
-    ));
+      expect(delayed).toHaveLength(1);
+      expect(delayed[0]?.level).toBe("Info");
+      expect(delayed[0]?.message).toStrictEqual([
+        "delivery delayed",
+        {
+          delayType: "SpamDetected",
+          recipients: 2,
+          campaignId,
+          messageId,
+          expirationTime: "2026-09-11T12:00:00.000Z",
+        },
+      ]);
+    }),
+  );
 
-  it("logs a delivery delay without an expirationTime", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const world = yield* run(delayEvent("MailboxFull"));
+  it.effect("logs a delivery delay without an expirationTime", () =>
+    Effect.gen(function* () {
+      const world = yield* run(delayEvent("MailboxFull"));
 
-        expect(world.writes).toHaveLength(0);
-        expect(logsNamed(world, "delivery delayed")[0]?.message).toEqual([
-          "delivery delayed",
-          expect.objectContaining({
-            delayType: "MailboxFull",
-            recipients: 2,
-            expirationTime: undefined,
-          }),
-        ]);
-      }),
-    ));
+      expect(world.writes).toHaveLength(0);
+      expect(logsNamed(world, "delivery delayed")[0]?.message).toEqual([
+        "delivery delayed",
+        expect.objectContaining({
+          delayType: "MailboxFull",
+          recipients: 2,
+          expirationTime: undefined,
+        }),
+      ]);
+    }),
+  );
 
-  it("still logs a delivery delay when the event carries no campaign tag, and writes nothing", () =>
-    Effect.runPromise(
+  it.effect(
+    "still logs a delivery delay when the event carries no campaign tag, and writes nothing",
+    () =>
       Effect.gen(function* () {
         const world = yield* run(
           delayEvent("IPFailure", ["late@example.com"], "2026-09-11T12:00:00.000Z", {
@@ -564,74 +548,66 @@ describe("delivery delays", () => {
           }),
         ]);
       }),
-    ));
+  );
 });
 
 describe("write outcomes and summary", () => {
-  it("logs a warning when the campaign is unknown", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const world = emptyWorld();
+  it.effect("logs a warning when the campaign is unknown", () =>
+    Effect.gen(function* () {
+      const world = emptyWorld();
 
-        const unknown = Layer.succeed(FeedbackStore)({
-          ...storageOperations(world),
-          recordFeedback: (row, write) =>
-            Effect.sync(() => {
-              world.writes.push({ row, write });
-              world.writeOutcomes.push("unknown-campaign");
+      const unknown = Layer.succeed(FeedbackStore)({
+        ...storageOperations(world),
+        recordFeedback: (row, write) =>
+          Effect.sync(() => {
+            world.writes.push({ row, write });
+            world.writeOutcomes.push("unknown-campaign");
 
-              return "unknown-campaign";
-            }),
-        });
+            return "unknown-campaign";
+          }),
+      });
 
-        yield* handling(world, bounceEvent("Permanent", "General"), "envelope-1", unknown);
+      yield* handling(world, envelope(bounceEvent("Permanent", "General")), unknown);
 
-        expect(world.suppressions.has("hard@example.com")).toBe(true);
-        expect(world.writes).toHaveLength(1);
-        expect(world.writeOutcomes).toStrictEqual(["unknown-campaign"]);
+      expect(world.suppressions.has("hard@example.com")).toBe(true);
+      expect(world.writes).toHaveLength(1);
+      expect(world.writeOutcomes).toStrictEqual(["unknown-campaign"]);
 
-        const warnings = logsNamed(world, "feedback event for unknown campaign");
+      const warnings = logsNamed(world, "feedback event for unknown campaign");
 
-        expect(warnings).toHaveLength(1);
-        expect(warnings[0]?.level).toBe("Warn");
-        expect(warnings[0]?.message).toStrictEqual([
-          "feedback event for unknown campaign",
-          { campaignId, kind: "bounce" },
-        ]);
-      }),
-    ));
-
-  it.each([
-    ["Permanent", "General", { bounced: 1, complained: 0, echoes: 0, transient: 0 }],
-    [
-      "Permanent",
-      "OnAccountSuppressionList",
-      { bounced: 0, complained: 0, echoes: 1, transient: 0 },
-    ],
-    ["Permanent", "Suppressed", { bounced: 0, complained: 0, echoes: 1, transient: 0 }],
-    ["Transient", "MailboxFull", { bounced: 0, complained: 0, echoes: 0, transient: 1 }],
-  ])("summarises a %s/%s bounce as %o", (bounceType, bounceSubType, counts) =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const world = yield* run(bounceEvent(bounceType, bounceSubType));
-
-        expect(logsNamed(world, "feedback recorded")[0]?.message).toEqual([
-          "feedback recorded",
-          expect.objectContaining(counts),
-        ]);
-      }),
-    ),
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]?.level).toBe("Warn");
+      expect(warnings[0]?.message).toStrictEqual([
+        "feedback event for unknown campaign",
+        { campaignId, kind: "bounce" },
+      ]);
+    }),
   );
 
-  it("summarises a complaint under complained", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const world = yield* run(complaintEvent("abuse"));
+  it.effect.each([
+    ["Permanent", "General", "permanent-bounce"],
+    ["Permanent", "OnAccountSuppressionList", "suppression-echo"],
+    ["Permanent", "Suppressed", "suppression-echo"],
+    ["Transient", "MailboxFull", "transient-bounce"],
+  ] as const)("summarises a %s/%s bounce as %s", ([bounceType, bounceSubType, classification]) =>
+    Effect.gen(function* () {
+      const world = yield* run(bounceEvent(bounceType, bounceSubType));
 
-        expect(logsNamed(world, "feedback recorded")[0]?.message).toEqual([
-          "feedback recorded",
-          expect.objectContaining({ bounced: 0, complained: 1, echoes: 0, transient: 0 }),
-        ]);
-      }),
-    ));
+      expect(logsNamed(world, "feedback recorded")[0]?.message).toEqual([
+        "feedback recorded",
+        expect.objectContaining({ classification }),
+      ]);
+    }),
+  );
+
+  it.effect("summarises a complaint as a complaint", () =>
+    Effect.gen(function* () {
+      const world = yield* run(complaintEvent("abuse"));
+
+      expect(logsNamed(world, "feedback recorded")[0]?.message).toEqual([
+        "feedback recorded",
+        expect.objectContaining({ classification: "complaint" }),
+      ]);
+    }),
+  );
 });

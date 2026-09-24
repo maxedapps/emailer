@@ -1,6 +1,6 @@
 import { Effect, Fiber } from "effect";
 import { TestClock } from "effect/testing";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "@effect/vitest";
 
 import * as dynamodb from "@distilled.cloud/aws/dynamodb";
 
@@ -18,18 +18,11 @@ import {
 import type { ScriptedReplies } from "./Testing.ts";
 
 /**
- * Backoff between batch attempts is real time in production and would be real waiting here. The
- * operation runs on a test clock instead, advanced past every delay but well inside the five-second
- * deadline, so the retries are exercised without the suite sleeping.
+ * Backoff between attempts is real time in production and would be real waiting here. A test that
+ * retries forks the operation and advances the test clock past every delay, so the retries are
+ * exercised without the suite sleeping.
  */
-const onTestClock = <A, E>(operation: Effect.Effect<A, E>) =>
-  Effect.gen(function* () {
-    const running = yield* Effect.forkChild(operation);
-
-    yield* TestClock.adjust("30 seconds");
-
-    return yield* Fiber.join(running);
-  }).pipe(Effect.provide(TestClock.layer()));
+const pastEveryDelay = "30 seconds";
 
 /** A plausible physical table name: what AWS keys batch responses by, and the binding never maps back. */
 const physicalName = "emailer-test-EmailerData-9f3c";
@@ -52,8 +45,9 @@ const withTable = (replies: ScriptedReplies) => {
 };
 
 describe("readItems", () => {
-  it("reads responses keyed by the physical table name while requesting by the logical id", () =>
-    Effect.runPromise(
+  it.effect(
+    "reads responses keyed by the physical table name while requesting by the logical id",
+    () =>
       Effect.gen(function* () {
         const { table, primitives } = withTable({
           batchGetItem: [Effect.succeed({ Responses: { [physicalName]: [itemFor(contactId)] } })],
@@ -66,24 +60,24 @@ describe("readItems", () => {
           tableLogicalId,
         ]);
       }),
-    ));
+  );
 
-  it("carries the consistent read inside the per-table block, not at the top level", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, primitives } = withTable({});
+  it.effect("carries the consistent read inside the per-table block, not at the top level", () =>
+    Effect.gen(function* () {
+      const { table, primitives } = withTable({});
 
-        yield* primitives.readItems("listContacts", [contactKey(contactId)]);
+      yield* primitives.readItems("listContacts", [contactKey(contactId)]);
 
-        const request = table.batchGetItemRequests[0];
+      const request = table.batchGetItemRequests[0];
 
-        expect(request?.RequestItems[tableLogicalId]?.ConsistentRead).toBe(true);
-        expect(request).not.toHaveProperty("ConsistentRead");
-      }),
-    ));
+      expect(request?.RequestItems[tableLogicalId]?.ConsistentRead).toBe(true);
+      expect(request).not.toHaveProperty("ConsistentRead");
+    }),
+  );
 
-  it("re-keys unprocessed keys to the logical id rather than replaying the physical name", () =>
-    Effect.runPromise(
+  it.live(
+    "re-keys unprocessed keys to the logical id rather than replaying the physical name",
+    () =>
       Effect.gen(function* () {
         const pending = { Keys: [contactKey(otherContactId)], ConsistentRead: true };
 
@@ -107,121 +101,123 @@ describe("readItems", () => {
           [tableLogicalId]: pending,
         });
       }),
-    ));
+  );
 
   // AWS leaves keys unprocessed when it is shedding load, and it can do so on the retry of a
   // retry. Returning what arrived would answer a partial hydration as a complete one, which is a
   // listing silently dropping members.
-  it("keeps retrying the pending keys and returns every item once they all arrive", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const pendingFor = (id: string) => ({ Keys: [contactKey(id)], ConsistentRead: true });
+  it.effect("keeps retrying the pending keys and returns every item once they all arrive", () =>
+    Effect.gen(function* () {
+      const pendingFor = (id: string) => ({ Keys: [contactKey(id)], ConsistentRead: true });
 
-        const { table, primitives } = withTable({
-          batchGetItem: [
-            Effect.succeed({
-              Responses: { [physicalName]: [itemFor(contactId)] },
-              UnprocessedKeys: { [physicalName]: pendingFor(otherContactId) },
-            }),
-            Effect.succeed({ UnprocessedKeys: { [physicalName]: pendingFor(otherContactId) } }),
-            Effect.succeed({ Responses: { [physicalName]: [itemFor(otherContactId)] } }),
-          ],
-        });
+      const { table, primitives } = withTable({
+        batchGetItem: [
+          Effect.succeed({
+            Responses: { [physicalName]: [itemFor(contactId)] },
+            UnprocessedKeys: { [physicalName]: pendingFor(otherContactId) },
+          }),
+          Effect.succeed({ UnprocessedKeys: { [physicalName]: pendingFor(otherContactId) } }),
+          Effect.succeed({ Responses: { [physicalName]: [itemFor(otherContactId)] } }),
+        ],
+      });
 
-        const items = yield* onTestClock(
-          primitives.readItems("listContacts", [contactKey(contactId), contactKey(otherContactId)]),
-        );
+      const running = yield* Effect.forkChild(
+        primitives.readItems("listContacts", [contactKey(contactId), contactKey(otherContactId)]),
+      );
 
-        expect(items).toStrictEqual([itemFor(contactId), itemFor(otherContactId)]);
-        expect(table.batchGetItemRequests).toHaveLength(3);
+      yield* TestClock.adjust(pastEveryDelay);
 
-        // Only the keys still outstanding are re-requested; the item already read is not re-read.
-        for (const request of table.batchGetItemRequests.slice(1)) {
-          expect(request.RequestItems[tableLogicalId]?.Keys).toStrictEqual([
-            contactKey(otherContactId),
-          ]);
-        }
-      }),
-    ));
+      const items = yield* Fiber.join(running);
 
-  it("fails rather than reporting a short read when the attempts run out", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const pending = { Keys: [contactKey(otherContactId)], ConsistentRead: true };
+      expect(items).toStrictEqual([itemFor(contactId), itemFor(otherContactId)]);
+      expect(table.batchGetItemRequests).toHaveLength(3);
 
-        const partial = Effect.succeed({
-          Responses: { [physicalName]: [itemFor(contactId)] },
-          UnprocessedKeys: { [physicalName]: pending },
-        });
+      // Only the keys still outstanding are re-requested; the item already read is not re-read.
+      for (const request of table.batchGetItemRequests.slice(1)) {
+        expect(request.RequestItems[tableLogicalId]?.Keys).toStrictEqual([
+          contactKey(otherContactId),
+        ]);
+      }
+    }),
+  );
 
-        const { table, primitives } = withTable({
-          batchGetItem: [partial, partial, partial, partial, partial],
-        });
+  it.effect("fails rather than reporting a short read when the attempts run out", () =>
+    Effect.gen(function* () {
+      const pending = { Keys: [contactKey(otherContactId)], ConsistentRead: true };
 
-        const attempt = yield* Effect.result(
-          onTestClock(
-            primitives.readItems("listContacts", [
-              contactKey(contactId),
-              contactKey(otherContactId),
-            ]),
-          ),
-        );
+      const partial = Effect.succeed({
+        Responses: { [physicalName]: [itemFor(contactId)] },
+        UnprocessedKeys: { [physicalName]: pending },
+      });
 
-        expect(failureOf(attempt).operationId).toBe("listContacts");
-        expect(failureOf(attempt).reason).toBe("unavailable");
-        expect(table.batchGetItemRequests).toHaveLength(4);
-      }),
-    ));
+      const { table, primitives } = withTable({
+        batchGetItem: [partial, partial, partial, partial, partial],
+      });
+
+      const running = yield* Effect.forkChild(
+        primitives.readItems("listContacts", [contactKey(contactId), contactKey(otherContactId)]),
+      );
+
+      yield* TestClock.adjust(pastEveryDelay);
+
+      const attempt = yield* Effect.result(Fiber.join(running));
+
+      expect(failureOf(attempt).operationId).toBe("listContacts");
+      expect(failureOf(attempt).reason).toBe("unavailable");
+      expect(table.batchGetItemRequests).toHaveLength(4);
+    }),
+  );
 
   // One deadline for the whole operation, retries included: a caller's budget does not grow
   // because the store needed several rounds.
-  it("bounds the whole operation rather than each attempt", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const pending = { Keys: [contactKey(otherContactId)], ConsistentRead: true };
+  it.effect("bounds the whole operation rather than each attempt", () =>
+    Effect.gen(function* () {
+      const pending = { Keys: [contactKey(otherContactId)], ConsistentRead: true };
 
-        const slow = Effect.succeed({ UnprocessedKeys: { [physicalName]: pending } }).pipe(
-          Effect.delay("2 seconds"),
-        );
+      const slow = Effect.succeed({ UnprocessedKeys: { [physicalName]: pending } }).pipe(
+        Effect.delay("2 seconds"),
+      );
 
-        const { table, primitives } = withTable({ batchGetItem: [slow, slow, slow, slow] });
+      const { table, primitives } = withTable({ batchGetItem: [slow, slow, slow, slow] });
 
-        const attempt = yield* Effect.result(
-          onTestClock(primitives.readItems("listContacts", [contactKey(otherContactId)])),
-        );
+      const running = yield* Effect.forkChild(
+        primitives.readItems("listContacts", [contactKey(otherContactId)]),
+      );
 
-        expect(failureOf(attempt).reason).toBe("unavailable");
-        expect(table.batchGetItemRequests.length).toBeLessThan(4);
-      }),
-    ));
+      yield* TestClock.adjust(pastEveryDelay);
 
-  it("sends no request at all for an empty key set, which the service would reject", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, primitives } = withTable({});
+      const attempt = yield* Effect.result(Fiber.join(running));
 
-        expect(yield* primitives.readItems("listContacts", [])).toStrictEqual([]);
-        expect(table.batchGetItemRequests).toStrictEqual([]);
-      }),
-    ));
+      expect(failureOf(attempt).reason).toBe("unavailable");
+      expect(table.batchGetItemRequests.length).toBeLessThan(4);
+    }),
+  );
 
-  it("drops a key the response omits instead of matching results by position", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { primitives } = withTable({
-          batchGetItem: [
-            Effect.succeed({ Responses: { [physicalName]: [itemFor(otherContactId)] } }),
-          ],
-        });
+  it.effect("sends no request at all for an empty key set, which the service would reject", () =>
+    Effect.gen(function* () {
+      const { table, primitives } = withTable({});
 
-        const items = yield* primitives.readItems("listContacts", [
-          contactKey(contactId),
-          contactKey(otherContactId),
-        ]);
+      expect(yield* primitives.readItems("listContacts", [])).toStrictEqual([]);
+      expect(table.batchGetItemRequests).toStrictEqual([]);
+    }),
+  );
 
-        expect(items).toStrictEqual([itemFor(otherContactId)]);
-      }),
-    ));
+  it.effect("drops a key the response omits instead of matching results by position", () =>
+    Effect.gen(function* () {
+      const { primitives } = withTable({
+        batchGetItem: [
+          Effect.succeed({ Responses: { [physicalName]: [itemFor(otherContactId)] } }),
+        ],
+      });
+
+      const items = yield* primitives.readItems("listContacts", [
+        contactKey(contactId),
+        contactKey(otherContactId),
+      ]);
+
+      expect(items).toStrictEqual([itemFor(otherContactId)]);
+    }),
+  );
 });
 
 describe("runQuery", () => {
@@ -230,27 +226,25 @@ describe("runQuery", () => {
     ExpressionAttributeValues: { ":kind": str("contact") },
   };
 
-  it("reads the base table strongly consistently", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, primitives } = withTable({});
+  it.effect("reads the base table strongly consistently", () =>
+    Effect.gen(function* () {
+      const { table, primitives } = withTable({});
 
-        yield* primitives.runQuery("listMembers", "base-table", request);
+      yield* primitives.runQuery("listMembers", "base-table", request);
 
-        expect(table.queryRequests[0]?.ConsistentRead).toBe(true);
-      }),
-    ));
+      expect(table.queryRequests[0]?.ConsistentRead).toBe(true);
+    }),
+  );
 
-  it("never asks an index for a consistent read, which the service rejects at runtime", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, primitives } = withTable({});
+  it.effect("never asks an index for a consistent read, which the service rejects at runtime", () =>
+    Effect.gen(function* () {
+      const { table, primitives } = withTable({});
 
-        yield* primitives.runQuery("listContacts", "index", request);
+      yield* primitives.runQuery("listContacts", "index", request);
 
-        expect(table.queryRequests[0]).not.toHaveProperty("ConsistentRead");
-      }),
-    ));
+      expect(table.queryRequests[0]).not.toHaveProperty("ConsistentRead");
+    }),
+  );
 });
 
 describe("readEntityPage", () => {
@@ -267,83 +261,81 @@ describe("readEntityPage", () => {
 
   const createdAt = "2026-09-11T10:00:00.000Z";
 
-  it("queries the index for keys and hydrates them from the base table", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, primitives } = withTable({
-          query: [Effect.succeed({ Items: [indexEntry(contactId, createdAt)] })],
-          batchGetItem: [Effect.succeed({ Responses: { [physicalName]: [itemFor(contactId)] } })],
-        });
+  it.effect("queries the index for keys and hydrates them from the base table", () =>
+    Effect.gen(function* () {
+      const { table, primitives } = withTable({
+        query: [Effect.succeed({ Items: [indexEntry(contactId, createdAt)] })],
+        batchGetItem: [Effect.succeed({ Responses: { [physicalName]: [itemFor(contactId)] } })],
+      });
 
-        const page = yield* primitives.readEntityPage("listContacts", kind, keyOf, 25, undefined);
+      const page = yield* primitives.readEntityPage("listContacts", kind, keyOf, 25, undefined);
 
-        expect(table.queryRequests[0]?.IndexName).toBe("gsi1");
-        expect(table.queryRequests[0]?.Limit).toBe(25);
-        expect(table.batchGetItemRequests[0]?.RequestItems[tableLogicalId]?.Keys).toStrictEqual([
-          keyOf(contactId),
-        ]);
-        expect(page.items).toStrictEqual([itemFor(contactId)]);
-      }),
-    ));
+      expect(table.queryRequests[0]?.IndexName).toBe("gsi1");
+      expect(table.queryRequests[0]?.Limit).toBe(25);
+      expect(table.batchGetItemRequests[0]?.RequestItems[tableLogicalId]?.Keys).toStrictEqual([
+        keyOf(contactId),
+      ]);
+      expect(page.items).toStrictEqual([itemFor(contactId)]);
+    }),
+  );
 
-  it("derives the next cursor from the continuation key, never from the page's length", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        // DynamoDB can return an empty page that still has more to give.
-        const { primitives } = withTable({
-          query: [
-            Effect.succeed({
-              Items: [],
-              LastEvaluatedKey: indexEntry(contactId, createdAt),
-            }),
-          ],
-        });
+  it.effect("derives the next cursor from the continuation key, never from the page's length", () =>
+    Effect.gen(function* () {
+      // DynamoDB can return an empty page that still has more to give.
+      const { primitives } = withTable({
+        query: [
+          Effect.succeed({
+            Items: [],
+            LastEvaluatedKey: indexEntry(contactId, createdAt),
+          }),
+        ],
+      });
 
-        const page = yield* primitives.readEntityPage("listContacts", kind, keyOf, 25, undefined);
+      const page = yield* primitives.readEntityPage("listContacts", kind, keyOf, 25, undefined);
 
-        expect(page.items).toStrictEqual([]);
-        expect(page.nextCursor).toBe(`${createdAt}#${contactId}`);
-      }),
-    ));
+      expect(page.items).toStrictEqual([]);
+      expect(page.nextCursor).toBe(`${createdAt}#${contactId}`);
+    }),
+  );
 
-  it("reports no next cursor on a full page that happens to be the last", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { primitives } = withTable({
-          query: [Effect.succeed({ Items: [indexEntry(contactId, createdAt)] })],
-          batchGetItem: [Effect.succeed({ Responses: { [physicalName]: [itemFor(contactId)] } })],
-        });
+  it.effect("omits the next cursor on a full page that happens to be the last", () =>
+    Effect.gen(function* () {
+      const { primitives } = withTable({
+        query: [Effect.succeed({ Items: [indexEntry(contactId, createdAt)] })],
+        batchGetItem: [Effect.succeed({ Responses: { [physicalName]: [itemFor(contactId)] } })],
+      });
 
-        const page = yield* primitives.readEntityPage("listContacts", kind, keyOf, 1, undefined);
+      const page = yield* primitives.readEntityPage("listContacts", kind, keyOf, 1, undefined);
 
-        expect(page.nextCursor).toBeUndefined();
-      }),
-    ));
+      // Absent rather than `undefined`, which the API would encode as `null`.
+      expect(page).not.toHaveProperty("nextCursor");
+    }),
+  );
 
-  it("resumes from the index key and the table key the cursor names", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, primitives } = withTable({});
+  it.effect("resumes from the index key and the table key the cursor names", () =>
+    Effect.gen(function* () {
+      const { table, primitives } = withTable({});
 
-        yield* primitives.readEntityPage(
-          "listContacts",
-          kind,
-          keyOf,
-          25,
-          `${createdAt}#${contactId}`,
-        );
+      yield* primitives.readEntityPage(
+        "listContacts",
+        kind,
+        keyOf,
+        25,
+        `${createdAt}#${contactId}`,
+      );
 
-        expect(table.queryRequests[0]?.ExclusiveStartKey).toStrictEqual({
-          gsi1pk: str(kind),
-          gsi1sk: str(`${createdAt}#${contactId}`),
-          pk: str(`CONTACT#${contactId}`),
-          sk: str("META"),
-        });
-      }),
-    ));
+      expect(table.queryRequests[0]?.ExclusiveStartKey).toStrictEqual({
+        gsi1pk: str(kind),
+        gsi1sk: str(`${createdAt}#${contactId}`),
+        pk: str(`CONTACT#${contactId}`),
+        sk: str("META"),
+      });
+    }),
+  );
 
-  it("drops an index entry the base table no longer holds, rather than failing the page", () =>
-    Effect.runPromise(
+  it.effect(
+    "drops an index entry the base table no longer holds, rather than failing the page",
+    () =>
       Effect.gen(function* () {
         const { primitives } = withTable({
           query: [
@@ -358,39 +350,37 @@ describe("readEntityPage", () => {
 
         expect(page.items).toStrictEqual([itemFor(contactId)]);
       }),
-    ));
+  );
 
-  it("returns a page in index order when the batch answers reversed", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const first = itemFor(contactId);
-        const second = itemFor(otherContactId);
+  it.effect("returns a page in index order when the batch answers reversed", () =>
+    Effect.gen(function* () {
+      const first = itemFor(contactId);
+      const second = itemFor(otherContactId);
 
-        const { primitives } = withTable({
-          query: [
-            Effect.succeed({
-              Items: [indexEntry(contactId, createdAt), indexEntry(otherContactId, createdAt)],
-            }),
-          ],
-          batchGetItem: [Effect.succeed({ Responses: { [physicalName]: [second, first] } })],
-        });
+      const { primitives } = withTable({
+        query: [
+          Effect.succeed({
+            Items: [indexEntry(contactId, createdAt), indexEntry(otherContactId, createdAt)],
+          }),
+        ],
+        batchGetItem: [Effect.succeed({ Responses: { [physicalName]: [second, first] } })],
+      });
 
-        const page = yield* primitives.readEntityPage("listContacts", kind, keyOf, 25, undefined);
+      const page = yield* primitives.readEntityPage("listContacts", kind, keyOf, 25, undefined);
 
-        expect(page.items).toStrictEqual([first, second]);
-      }),
-    ));
+      expect(page.items).toStrictEqual([first, second]);
+    }),
+  );
 
-  it("never asks the index for a consistent read", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, primitives } = withTable({});
+  it.effect("never asks the index for a consistent read", () =>
+    Effect.gen(function* () {
+      const { table, primitives } = withTable({});
 
-        yield* primitives.readEntityPage("listContacts", kind, keyOf, 25, undefined);
+      yield* primitives.readEntityPage("listContacts", kind, keyOf, 25, undefined);
 
-        expect(table.queryRequests[0]).not.toHaveProperty("ConsistentRead");
-      }),
-    ));
+      expect(table.queryRequests[0]).not.toHaveProperty("ConsistentRead");
+    }),
+  );
 });
 
 describe("updateIf", () => {
@@ -406,61 +396,57 @@ describe("updateIf", () => {
     ReturnValues: "ALL_NEW" as const,
   };
 
-  it("returns the new attributes when ReturnValues is ALL_NEW", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const attributes = { ...contactKey(contactId), state: str("sending") };
+  it.effect("returns the new attributes when ReturnValues is ALL_NEW", () =>
+    Effect.gen(function* () {
+      const attributes = { ...contactKey(contactId), state: str("sending") };
 
-        const { table, primitives } = withTable({
-          updateItem: [Effect.succeed({ Attributes: attributes })],
-        });
+      const { table, primitives } = withTable({
+        updateItem: [Effect.succeed({ Attributes: attributes })],
+      });
 
-        expect(yield* primitives.updateIf("beginRun", request)).toStrictEqual({
-          applied: true,
-          attributes,
-        });
-        expect(table.updateItemRequests[0]?.ReturnValues).toBe("ALL_NEW");
-      }),
-    ));
+      expect(yield* primitives.updateIf("beginRun", request)).toStrictEqual({
+        applied: true,
+        attributes,
+      });
+      expect(table.updateItemRequests[0]?.ReturnValues).toBe("ALL_NEW");
+    }),
+  );
 
-  it("reports a failed condition as not applied rather than unavailable", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { primitives } = withTable({ updateItem: [conditionFailed] });
+  it.effect("reports a failed condition as not applied rather than unavailable", () =>
+    Effect.gen(function* () {
+      const { primitives } = withTable({ updateItem: [conditionFailed] });
 
-        expect(yield* primitives.updateIf("beginRun", request)).toStrictEqual({ applied: false });
-      }),
-    ));
+      expect(yield* primitives.updateIf("beginRun", request)).toStrictEqual({ applied: false });
+    }),
+  );
 
-  it("keeps a server error unavailable", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { primitives } = withTable({ updateItem: [Effect.fail(serverError)] });
+  it.effect("keeps a server error unavailable", () =>
+    Effect.gen(function* () {
+      const { primitives } = withTable({ updateItem: [Effect.fail(serverError)] });
 
-        const attempt = yield* Effect.result(primitives.updateIf("beginRun", request));
+      const attempt = yield* Effect.result(primitives.updateIf("beginRun", request));
 
-        expect(failureOf(attempt).reason).toBe("unavailable");
-        expect(failureOf(attempt).operationId).toBe("beginRun");
-      }),
-    ));
+      expect(failureOf(attempt).reason).toBe("unavailable");
+      expect(failureOf(attempt).operationId).toBe("beginRun");
+    }),
+  );
 
-  it("leaves a TransactionConflictException to the client's retry policy", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, primitives } = withTable({
-          updateItem: [
-            Effect.fail(new dynamodb.TransactionConflictException({ message: "conflict" })),
-          ],
-        });
+  it.effect("leaves a TransactionConflictException to the client's retry policy", () =>
+    Effect.gen(function* () {
+      const { table, primitives } = withTable({
+        updateItem: [
+          Effect.fail(new dynamodb.TransactionConflictException({ message: "conflict" })),
+        ],
+      });
 
-        const attempt = yield* Effect.result(primitives.updateIf("beginRun", request));
+      const attempt = yield* Effect.result(primitives.updateIf("beginRun", request));
 
-        // The scripted table sits above the client, whose default policy retries this class;
-        // the primitive itself sends once and reports what came back.
-        expect(failureOf(attempt).reason).toBe("unavailable");
-        expect(table.updateItemRequests).toHaveLength(1);
-      }),
-    ));
+      // The scripted table sits above the client, whose default policy retries this class;
+      // the primitive itself sends once and reports what came back.
+      expect(failureOf(attempt).reason).toBe("unavailable");
+      expect(table.updateItemRequests).toHaveLength(1);
+    }),
+  );
 });
 
 describe("runTransaction", () => {
@@ -485,87 +471,80 @@ describe("runTransaction", () => {
     ],
   };
 
-  it("sends one idempotency token per logical call, generated by the primitive", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, primitives } = withTable({});
+  it.effect("sends one idempotency token per logical call, generated by the primitive", () =>
+    Effect.gen(function* () {
+      const { table, primitives } = withTable({});
 
-        yield* primitives.runTransaction("claimRecipient", request);
-        yield* primitives.runTransaction("claimRecipient", request);
+      yield* primitives.runTransaction("claimRecipient", request);
+      yield* primitives.runTransaction("claimRecipient", request);
 
-        expect(table.transactionRequests.map((sent) => sent.ClientRequestToken)).toStrictEqual([
-          "token-1",
-          "token-2",
-        ]);
-        expect(table.transactionRequests[0]?.TransactItems).toStrictEqual(request.TransactItems);
-      }),
-    ));
+      expect(table.transactionRequests.map((sent) => sent.ClientRequestToken)).toStrictEqual([
+        "token-1",
+        "token-2",
+      ]);
+      expect(table.transactionRequests[0]?.TransactItems).toStrictEqual(request.TransactItems);
+    }),
+  );
 
-  it("retries a conflict-only cancellation as a new call, with a new token", () =>
-    Effect.runPromise(
-      onTestClock(
-        Effect.gen(function* () {
-          const { table, primitives } = withTable({
-            transactWriteItems: [cancelled("TransactionConflict", "None"), Effect.succeed({})],
-          });
+  it.effect("retries a conflict-only cancellation as a new call, with a new token", () =>
+    Effect.gen(function* () {
+      const { table, primitives } = withTable({
+        transactWriteItems: [cancelled("TransactionConflict", "None"), Effect.succeed({})],
+      });
 
-          expect(yield* primitives.runTransaction("claimRecipient", request)).toStrictEqual({
-            committed: true,
-          });
-          expect(table.transactionRequests.map((sent) => sent.ClientRequestToken)).toStrictEqual([
-            "token-1",
-            "token-2",
-          ]);
-        }),
-      ),
-    ));
+      const running = yield* Effect.forkChild(primitives.runTransaction("claimRecipient", request));
 
-  it("does not retry a condition-only cancellation", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, primitives } = withTable({
-          transactWriteItems: [cancelled("ConditionalCheckFailed", "None")],
-        });
+      yield* TestClock.adjust(pastEveryDelay);
 
-        expect(yield* primitives.runTransaction("claimRecipient", request)).toStrictEqual({
-          committed: false,
-          conditionFailures: new Set([0]),
-        });
-        expect(table.transactionRequests).toHaveLength(1);
-      }),
-    ));
+      expect(yield* Fiber.join(running)).toStrictEqual({ committed: true });
+      expect(table.transactionRequests.map((sent) => sent.ClientRequestToken)).toStrictEqual([
+        "token-1",
+        "token-2",
+      ]);
+    }),
+  );
 
-  it("does not retry a mix of ConditionalCheckFailed and TransactionConflict", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, primitives } = withTable({
-          transactWriteItems: [cancelled("ConditionalCheckFailed", "TransactionConflict")],
-        });
+  it.effect("does not retry a condition-only cancellation", () =>
+    Effect.gen(function* () {
+      const { table, primitives } = withTable({
+        transactWriteItems: [cancelled("ConditionalCheckFailed", "None")],
+      });
 
-        const attempt = yield* Effect.result(primitives.runTransaction("claimRecipient", request));
+      expect(yield* primitives.runTransaction("claimRecipient", request)).toStrictEqual({
+        committed: false,
+        conditionFailures: new Set([0]),
+      });
+      expect(table.transactionRequests).toHaveLength(1);
+    }),
+  );
 
-        expect(failureOf(attempt).reason).toBe("unavailable");
-        expect(table.transactionRequests).toHaveLength(1);
-      }),
-    ));
+  it.effect("does not retry a mix of ConditionalCheckFailed and TransactionConflict", () =>
+    Effect.gen(function* () {
+      const { table, primitives } = withTable({
+        transactWriteItems: [cancelled("ConditionalCheckFailed", "TransactionConflict")],
+      });
 
-  it("reports seven conflicts in a row as unavailable", () =>
-    Effect.runPromise(
-      onTestClock(
-        Effect.gen(function* () {
-          const conflicts = Array.from({ length: 7 }, () =>
-            cancelled("TransactionConflict", "None"),
-          );
+      const attempt = yield* Effect.result(primitives.runTransaction("claimRecipient", request));
 
-          const { table, primitives } = withTable({ transactWriteItems: conflicts });
+      expect(failureOf(attempt).reason).toBe("unavailable");
+      expect(table.transactionRequests).toHaveLength(1);
+    }),
+  );
 
-          const attempt = yield* Effect.result(
-            primitives.runTransaction("claimRecipient", request),
-          );
+  it.effect("reports seven conflicts in a row as unavailable", () =>
+    Effect.gen(function* () {
+      const conflicts = Array.from({ length: 7 }, () => cancelled("TransactionConflict", "None"));
 
-          expect(failureOf(attempt).reason).toBe("unavailable");
-          expect(table.transactionRequests).toHaveLength(7);
-        }),
-      ),
-    ));
+      const { table, primitives } = withTable({ transactWriteItems: conflicts });
+
+      const running = yield* Effect.forkChild(primitives.runTransaction("claimRecipient", request));
+
+      yield* TestClock.adjust(pastEveryDelay);
+
+      const attempt = yield* Effect.result(Fiber.join(running));
+
+      expect(failureOf(attempt).reason).toBe("unavailable");
+      expect(table.transactionRequests).toHaveLength(7);
+    }),
+  );
 });

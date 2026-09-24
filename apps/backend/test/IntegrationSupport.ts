@@ -20,7 +20,18 @@ import * as sesv2 from "@distilled.cloud/aws/sesv2";
 import * as sqs from "@distilled.cloud/aws/sqs";
 import type { EmailerClient } from "@emailer/api/Client";
 import * as Schemas from "@emailer/api/Schemas";
-import { Config, Crypto, Duration, Effect, Layer, Predicate, Schedule, Schema } from "effect";
+import {
+  Config,
+  Crypto,
+  Duration,
+  Effect,
+  Layer,
+  Option,
+  Predicate,
+  Schedule,
+  Schema,
+  Stream,
+} from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 
 import { newIdentifier, nowIso } from "../src/Identifiers.ts";
@@ -39,7 +50,7 @@ import { transactionPrimitives, writePrimitives } from "../src/storage/Primitive
 import { unsubscribeSigningKey } from "../src/consent/Unsubscribe.ts";
 import { encodeDispatchMessage } from "../src/sending/Dispatch.ts";
 
-import type { AddressStatus } from "../src/storage/Addresses.ts";
+import type { AddressStatus } from "@emailer/api/Schemas";
 import type { TableOperations } from "../src/storage/Items.ts";
 
 const simulatorHost = "@simulator.amazonses.com";
@@ -80,8 +91,6 @@ const RateLimitWindow = Schema.Struct({
 const decodeRateLimitWindow = Schema.decodeUnknownEffect(RateLimitWindow);
 
 export type SimulatorKind = "success" | "bounce" | "complaint";
-
-type SendRow = typeof StoredSendRow.Type;
 
 type RateLimitWindow = typeof RateLimitWindow.Type;
 
@@ -258,40 +267,30 @@ export const contactFor = (storage: LiveStorage, email: string) =>
     const id = yield* newIdentifier;
     const createdAt = yield* nowIso;
 
-    const outcome = yield* storage.createContact({ id, email, createdAt });
-
-    if (outcome !== "created") {
-      throw new Error(`${email} could not be created (${outcome})`);
-    }
+    yield* storage.createContact({ id, email, createdAt });
 
     return id;
   });
 
-const listAllMembers = (client: EmailerClient, listId: string) =>
-  Effect.gen(function* () {
-    const members: Array<Schemas.Contact> = [];
-    let cursor: string | undefined;
+/** Every member's address, paged at the largest size the contract admits. */
+const memberAddresses = (client: EmailerClient, listId: string) =>
+  Stream.paginate(undefined, (cursor: string | undefined) =>
+    client.lists
+      .listMembers({ params: { listId }, query: { limit: Schemas.maxPageSize, cursor } })
+      .pipe(Effect.map((page) => [page.items, Option.fromUndefinedOr(page.nextCursor)] as const)),
+  ).pipe(
+    Stream.map((member) => member.email),
+    Stream.runCollect,
+  );
 
-    for (;;) {
-      const page = yield* client.lists.listMembers({
-        params: { listId },
-        query:
-          cursor === undefined
-            ? { limit: Schemas.maxPageSize }
-            : { limit: Schemas.maxPageSize, cursor },
-      });
+/** The one simulator guard: refuses, before anything is sent, on any other address. */
+const requireSimulators = (addresses: ReadonlyArray<string>, refusal: string) => {
+  const other = addresses.find((address) => !address.endsWith(simulatorHost));
 
-      for (const member of page.items) {
-        members.push(member);
-      }
-
-      if (page.nextCursor === undefined) {
-        return members;
-      }
-
-      cursor = page.nextCursor;
-    }
-  });
+  if (other !== undefined) {
+    throw new Error(`${refusal}: ${other} is not a simulator address`);
+  }
+};
 
 /**
  * Pages every member and refuses unless each address is a mailbox-simulator address, then runs
@@ -304,15 +303,10 @@ export const submitToSimulatorList = <A, E, R>(
   submit: Effect.Effect<A, E, R>,
 ) =>
   Effect.gen(function* () {
-    const members = yield* listAllMembers(client, listId);
-
-    for (const member of members) {
-      if (!member.email.endsWith(simulatorHost)) {
-        throw new Error(
-          `refusing to send campaign ${campaignId}: ${member.email} is not a simulator address`,
-        );
-      }
-    }
+    requireSimulators(
+      yield* memberAddresses(client, listId),
+      `refusing to send campaign ${campaignId}`,
+    );
 
     return yield* submit;
   });
@@ -333,18 +327,10 @@ export const testToSimulators = (
   recipients: { readonly to: ReadonlyArray<string> } | { readonly listId: string },
 ) =>
   Effect.gen(function* () {
-    const addresses =
-      "to" in recipients
-        ? recipients.to
-        : (yield* listAllMembers(client, recipients.listId)).map((member) => member.email);
-
-    for (const address of addresses) {
-      if (!address.endsWith(simulatorHost)) {
-        throw new Error(
-          `refusing to test-send campaign ${campaignId}: ${address} is not a simulator address`,
-        );
-      }
-    }
+    requireSimulators(
+      "to" in recipients ? recipients.to : yield* memberAddresses(client, recipients.listId),
+      `refusing to test-send campaign ${campaignId}`,
+    );
 
     const params = { id: campaignId };
 
@@ -505,36 +491,25 @@ export const awaitCampaignFeedback = (
     }),
   );
 
+/** Every SEND row of a campaign, across pages: Distilled carries `LastEvaluatedKey` forward. */
 export const sendRows = (campaignId: string) =>
   Effect.gen(function* () {
     const tableName = yield* Config.String("EMAILER_TEST_TABLE_NAME");
-    const query = yield* dynamodb.query;
-    const rows: Array<SendRow> = [];
-    let startKey: dynamodb.AttributeMap | undefined;
 
-    const request = {
-      TableName: tableName,
-      KeyConditionExpression: "pk = :pk AND begins_with(sk, :prefix)",
-      ExpressionAttributeValues: {
-        ":pk": str(`CAMPAIGN#${campaignId}`),
-        ":prefix": str("SEND#"),
-      },
-      ConsistentRead: true,
-    };
-
-    do {
-      const page = yield* query(
-        startKey === undefined ? request : { ...request, ExclusiveStartKey: startKey },
+    return yield* dynamodb.query
+      .items({
+        TableName: tableName,
+        KeyConditionExpression: "pk = :pk AND begins_with(sk, :prefix)",
+        ExpressionAttributeValues: {
+          ":pk": str(`CAMPAIGN#${campaignId}`),
+          ":prefix": str("SEND#"),
+        },
+        ConsistentRead: true,
+      })
+      .pipe(
+        Stream.mapEffect((item) => decodeStoredSendRow(item)),
+        Stream.runCollect,
       );
-
-      for (const item of page.Items ?? []) {
-        rows.push(yield* decodeStoredSendRow(item));
-      }
-
-      startKey = page.LastEvaluatedKey;
-    } while (startKey !== undefined);
-
-    return rows;
   });
 
 export const campaignMeta = (campaignId: string) =>

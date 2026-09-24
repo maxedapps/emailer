@@ -1,11 +1,11 @@
-import { Effect, Option } from "effect";
-import { describe, expect, it } from "vitest";
+import * as Schemas from "@emailer/api/Schemas";
+import { Effect, Struct } from "effect";
+import { describe, expect, it } from "@effect/vitest";
 
 import { tableLogicalId } from "./Items.ts";
 import { contactOperations } from "./Contacts.ts";
 import {
   cancelled,
-  conditionFailed,
   contactId,
   createdAt,
   failureOf,
@@ -51,285 +51,263 @@ const create = (replies: ScriptedReplies) => {
 };
 
 describe("createContact", () => {
-  it("writes the contact and its address reservation in one transaction", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, run } = create({});
+  it.effect("writes the contact and its address reservation in one transaction", () =>
+    Effect.gen(function* () {
+      const { table, run } = create({});
 
-        expect(yield* run).toBe("created");
+      expect(yield* run).toBeUndefined();
 
-        const request = table.transactionRequests[0];
+      const request = table.transactionRequests[0];
 
-        expect(request?.ClientRequestToken).toBe("token-1");
-        expect(request?.TransactItems).toStrictEqual([
-          {
-            Put: {
-              Table: tableLogicalId,
-              Item: {
-                pk: { S: `CONTACT#${contactId}` },
-                sk: { S: "META" },
-                gsi1pk: { S: "contact" },
-                gsi1sk: { S: `${createdAt}#${contactId}` },
-                v: { N: "1" },
-                id: { S: contactId },
-                email: { S: email },
-                createdAt: { S: createdAt },
-              },
-              ConditionExpression: "attribute_not_exists(pk)",
+      expect(request?.ClientRequestToken).toBe("token-1");
+      expect(request?.TransactItems).toStrictEqual([
+        {
+          Put: {
+            Table: tableLogicalId,
+            Item: {
+              pk: { S: `CONTACT#${contactId}` },
+              sk: { S: "META" },
+              gsi1pk: { S: "contact" },
+              gsi1sk: { S: `${createdAt}#${contactId}` },
+              v: { N: "1" },
+              id: { S: contactId },
+              email: { S: email },
+              createdAt: { S: createdAt },
             },
+            ConditionExpression: "attribute_not_exists(pk)",
           },
-          {
-            Put: {
-              Table: tableLogicalId,
-              Item: {
-                pk: { S: `EMAIL#${email}` },
-                sk: { S: "META" },
-                v: { N: "1" },
-                contactId: { S: contactId },
-              },
-              ConditionExpression: "attribute_not_exists(pk)",
+        },
+        {
+          Put: {
+            Table: tableLogicalId,
+            Item: {
+              pk: { S: `EMAIL#${email}` },
+              sk: { S: "META" },
+              v: { N: "1" },
+              contactId: { S: contactId },
             },
+            ConditionExpression: "attribute_not_exists(pk)",
           },
-        ]);
-      }),
-    ));
+        },
+      ]);
+    }),
+  );
 
-  it("keys the reservation on the fully lowercased address, local part included", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const table = scriptedTable({});
+  it.effect("keys the reservation on the fully lowercased address, local part included", () =>
+    Effect.gen(function* () {
+      const table = scriptedTable({});
 
-        yield* operationsFor(table).createContact({
-          id: contactId,
-          email: "Sam.R@example.com",
-          createdAt,
-        });
+      yield* operationsFor(table).createContact({
+        id: contactId,
+        email: "Sam.R@example.com",
+        createdAt,
+      });
 
-        expect(table.transactionRequests[0]?.TransactItems[1]?.Put?.Item?.["pk"]).toStrictEqual({
-          S: "EMAIL#sam.r@example.com",
-        });
-        expect(table.transactionRequests[0]?.TransactItems[0]?.Put?.Item?.["email"]).toStrictEqual({
-          S: "Sam.R@example.com",
-        });
-      }),
-    ));
+      expect(table.transactionRequests[0]?.TransactItems[1]?.Put?.Item?.["pk"]).toStrictEqual({
+        S: "EMAIL#sam.r@example.com",
+      });
+      expect(table.transactionRequests[0]?.TransactItems[0]?.Put?.Item?.["email"]).toStrictEqual({
+        S: "Sam.R@example.com",
+      });
+    }),
+  );
 
-  it("stores bounded attributes as a map and omits an absent name", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const table = scriptedTable({});
+  it.effect("stores bounded attributes as a map and omits an absent name", () =>
+    Effect.gen(function* () {
+      const table = scriptedTable({});
 
-        yield* operationsFor(table).createContact({
-          id: contactId,
-          email,
-          createdAt,
-          attributes: { plan: "pro" },
-        });
+      yield* operationsFor(table).createContact({
+        id: contactId,
+        email,
+        createdAt,
+        attributes: { plan: "pro" },
+      });
 
-        const item = table.transactionRequests[0]?.TransactItems[0]?.Put?.Item ?? {};
+      const item = table.transactionRequests[0]?.TransactItems[0]?.Put?.Item ?? {};
 
-        expect(item["attributes"]).toStrictEqual({ M: { plan: { S: "pro" } } });
-        expect(item).not.toHaveProperty("name");
-      }),
-    ));
+      expect(item["attributes"]).toStrictEqual({ M: { plan: { S: "pro" } } });
+      expect(item).not.toHaveProperty("name");
+    }),
+  );
 
-  it("reports a taken address as an outcome rather than a failure", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { run } = create({
-          transactWriteItems: [cancelled("None", "ConditionalCheckFailed")],
-        });
+  it.effect("answers a taken address with the contract's conflict, naming it", () =>
+    Effect.gen(function* () {
+      const { run } = create({
+        transactWriteItems: [cancelled("None", "ConditionalCheckFailed")],
+      });
 
-        expect(yield* run).toBe("email-taken");
-      }),
-    ));
+      expect(yield* Effect.flip(run)).toStrictEqual(new Schemas.EmailAlreadyUsed({ email }));
+    }),
+  );
 
-  it("keeps a colliding identifier on the failure channel, where it is not an answer", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { run } = create({
-          transactWriteItems: [cancelled("ConditionalCheckFailed", "None")],
-        });
+  it.effect("keeps a colliding identifier on the failure channel, where it is not an answer", () =>
+    Effect.gen(function* () {
+      const { run } = create({
+        transactWriteItems: [cancelled("ConditionalCheckFailed", "None")],
+      });
 
-        expect(failureOf(yield* Effect.result(run)).reason).toBe("unavailable");
-      }),
-    ));
+      expect(failureOf(yield* Effect.result(run)).reason).toBe("unavailable");
+    }),
+  );
 
-  it("reports an unavailable provider instead of pretending the write happened", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { run } = create({ transactWriteItems: [Effect.fail(serverError)] });
+  it.effect("reports an unavailable provider instead of pretending the write happened", () =>
+    Effect.gen(function* () {
+      const { run } = create({ transactWriteItems: [Effect.fail(serverError)] });
 
-        // Captured once: the stub serves replies by call order, so running the same effect twice
-        // would take the default reply and report a success that never happened.
-        const attempt = yield* Effect.result(run);
+      // Captured once: the stub serves replies by call order, so running the same effect twice
+      // would take the default reply and report a success that never happened.
+      const attempt = yield* Effect.result(run);
 
-        expect(failureOf(attempt).reason).toBe("unavailable");
-        expect(failureOf(attempt).operationId).toBe("createContact");
-      }),
-    ));
+      expect(failureOf(attempt).reason).toBe("unavailable");
+      expect(failureOf(attempt).operationId).toBe("createContact");
+    }),
+  );
 });
 
 describe("getContact", () => {
-  it("reads strongly consistently and decodes the stored record", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const table = scriptedTable({ getItem: [Effect.succeed({ Item: contactItem })] });
-        const storage = operationsFor(table);
+  it.effect("reads strongly consistently and decodes the stored record", () =>
+    Effect.gen(function* () {
+      const table = scriptedTable({ getItem: [Effect.succeed({ Item: contactItem })] });
+      const storage = operationsFor(table);
 
-        const contact = yield* storage.getContact(contactId);
+      const contact = yield* storage.getContact(contactId);
 
-        expect(table.getItemRequests).toStrictEqual([
-          { Key: { pk: { S: `CONTACT#${contactId}` }, sk: { S: "META" } }, ConsistentRead: true },
-        ]);
-        expect(Option.getOrUndefined(contact)).toStrictEqual({
-          id: contactId,
-          email,
-          name: "Sam",
-          createdAt,
-        });
-      }),
-    ));
+      expect(table.getItemRequests).toStrictEqual([
+        { Key: { pk: { S: `CONTACT#${contactId}` }, sk: { S: "META" } }, ConsistentRead: true },
+      ]);
+      expect(contact).toStrictEqual({ id: contactId, email, name: "Sam", createdAt });
+    }),
+  );
 
-  it("decodes a stored attribute map back into the contract shape", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const table = scriptedTable({
-          getItem: [
-            Effect.succeed({
-              Item: { ...contactItem, attributes: { M: { plan: { S: "pro" } } } },
-            }),
-          ],
-        });
+  it.effect("decodes a stored attribute map back into the contract shape", () =>
+    Effect.gen(function* () {
+      const table = scriptedTable({
+        getItem: [
+          Effect.succeed({
+            Item: { ...contactItem, attributes: { M: { plan: { S: "pro" } } } },
+          }),
+        ],
+      });
 
-        const contact = yield* operationsFor(table).getContact(contactId);
+      const contact = yield* operationsFor(table).getContact(contactId);
 
-        expect(Option.getOrUndefined(contact)?.attributes).toStrictEqual({ plan: "pro" });
-      }),
-    ));
+      expect(contact.attributes).toStrictEqual({ plan: "pro" });
+    }),
+  );
 
-  it("returns none for a missing record", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const storage = operationsFor(scriptedTable({}));
+  it.effect("answers NotFound for a missing record", () =>
+    Effect.gen(function* () {
+      const storage = operationsFor(scriptedTable({}));
 
-        expect(Option.isNone(yield* storage.getContact(contactId))).toBe(true);
-      }),
-    ));
+      expect(yield* Effect.flip(storage.getContact(contactId))).toStrictEqual(
+        new Schemas.NotFound({ entity: "contact" }),
+      );
+    }),
+  );
 
-  it("treats a record that no longer satisfies the contract as corrupt", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const table = scriptedTable({
-          getItem: [Effect.succeed({ Item: { ...contactItem, email: { S: "not-an-address" } } })],
-        });
+  it.effect("treats a record that no longer satisfies the contract as corrupt", () =>
+    Effect.gen(function* () {
+      const table = scriptedTable({
+        getItem: [Effect.succeed({ Item: { ...contactItem, email: { S: "not-an-address" } } })],
+      });
 
-        const storage = operationsFor(table);
+      const storage = operationsFor(table);
 
-        const attempt = yield* Effect.result(storage.getContact(contactId));
+      const attempt = yield* Effect.result(storage.getContact(contactId));
 
-        expect(failureOf(attempt).reason).toBe("corrupt");
-      }),
-    ));
+      expect(failureOf(attempt).reason).toBe("corrupt");
+    }),
+  );
 
-  it("treats a record written by an unknown schema version as corrupt", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const table = scriptedTable({
-          getItem: [Effect.succeed({ Item: { ...contactItem, v: { N: "2" } } })],
-        });
+  it.effect("treats a record written by an unknown schema version as corrupt", () =>
+    Effect.gen(function* () {
+      const table = scriptedTable({
+        getItem: [Effect.succeed({ Item: { ...contactItem, v: { N: "2" } } })],
+      });
 
-        const storage = operationsFor(table);
+      const storage = operationsFor(table);
 
-        expect(failureOf(yield* Effect.result(storage.getContact(contactId))).reason).toBe(
-          "corrupt",
-        );
-      }),
-    ));
+      expect(failureOf(yield* Effect.result(storage.getContact(contactId))).reason).toBe("corrupt");
+    }),
+  );
 });
 
 describe("getContactByEmail", () => {
-  it("reads the reservation, then the contact it names", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const table = scriptedTable({
-          getItem: [
-            Effect.succeed({ Item: reservationItem }),
-            Effect.succeed({ Item: contactItem }),
-          ],
-        });
+  it.effect("reads the reservation, then the contact it names", () =>
+    Effect.gen(function* () {
+      const table = scriptedTable({
+        getItem: [Effect.succeed({ Item: reservationItem }), Effect.succeed({ Item: contactItem })],
+      });
 
-        const found = yield* operationsFor(table).getContactByEmail("SAM@example.com");
+      const found = yield* operationsFor(table).getContactByEmail("SAM@example.com");
 
-        expect(table.getItemRequests[0]?.Key).toStrictEqual({
-          pk: { S: `EMAIL#${email}` },
-          sk: { S: "META" },
-        });
-        expect(table.getItemRequests[1]?.Key).toStrictEqual({
-          pk: { S: `CONTACT#${contactId}` },
-          sk: { S: "META" },
-        });
-        expect(Option.getOrUndefined(found)?.id).toBe(contactId);
-      }),
-    ));
+      expect(table.getItemRequests[0]?.Key).toStrictEqual({
+        pk: { S: `EMAIL#${email}` },
+        sk: { S: "META" },
+      });
+      expect(table.getItemRequests[1]?.Key).toStrictEqual({
+        pk: { S: `CONTACT#${contactId}` },
+        sk: { S: "META" },
+      });
+      expect(found.id).toBe(contactId);
+    }),
+  );
 
-  it("returns none when no reservation holds the address, without a second read", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const table = scriptedTable({});
+  it.effect("answers NotFound when no reservation holds the address, without a second read", () =>
+    Effect.gen(function* () {
+      const table = scriptedTable({});
 
-        const found = yield* operationsFor(table).getContactByEmail(email);
+      expect(yield* Effect.flip(operationsFor(table).getContactByEmail(email))).toStrictEqual(
+        new Schemas.NotFound({ entity: "contact" }),
+      );
+      expect(table.getItemRequests).toHaveLength(1);
+    }),
+  );
 
-        expect(Option.isNone(found)).toBe(true);
-        expect(table.getItemRequests).toHaveLength(1);
-      }),
-    ));
+  it.effect("answers NotFound when the reservation names a contact that is not there", () =>
+    Effect.gen(function* () {
+      const table = scriptedTable({
+        getItem: [Effect.succeed({ Item: reservationItem }), Effect.succeed({})],
+      });
 
-  it("returns none when the reservation names a contact that is not there", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const table = scriptedTable({
-          getItem: [Effect.succeed({ Item: reservationItem }), Effect.succeed({})],
-        });
+      expect(yield* Effect.flip(operationsFor(table).getContactByEmail(email))).toStrictEqual(
+        new Schemas.NotFound({ entity: "contact" }),
+      );
+    }),
+  );
 
-        const found = yield* operationsFor(table).getContactByEmail(email);
+  it.effect("never answers with a contact that does not hold the address asked for", () =>
+    Effect.gen(function* () {
+      const table = scriptedTable({
+        getItem: [
+          Effect.succeed({ Item: reservationItem }),
+          Effect.succeed({ Item: { ...contactItem, email: { S: "someone@example.com" } } }),
+        ],
+      });
 
-        expect(Option.isNone(found)).toBe(true);
-      }),
-    ));
+      expect(yield* Effect.flip(operationsFor(table).getContactByEmail(email))).toStrictEqual(
+        new Schemas.NotFound({ entity: "contact" }),
+      );
+    }),
+  );
 
-  it("never answers with a contact that does not hold the address asked for", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const table = scriptedTable({
-          getItem: [
-            Effect.succeed({ Item: reservationItem }),
-            Effect.succeed({ Item: { ...contactItem, email: { S: "someone@example.com" } } }),
-          ],
-        });
+  it.effect("treats a reservation with no contact reference as corrupt", () =>
+    Effect.gen(function* () {
+      const table = scriptedTable({
+        getItem: [Effect.succeed({ Item: { pk: { S: `EMAIL#${email}` }, sk: { S: "META" } } })],
+      });
 
-        const found = yield* operationsFor(table).getContactByEmail(email);
+      const attempt = yield* Effect.result(operationsFor(table).getContactByEmail(email));
 
-        expect(Option.isNone(found)).toBe(true);
-      }),
-    ));
-
-  it("treats a reservation with no contact reference as corrupt", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const table = scriptedTable({
-          getItem: [Effect.succeed({ Item: { pk: { S: `EMAIL#${email}` }, sk: { S: "META" } } })],
-        });
-
-        const attempt = yield* Effect.result(operationsFor(table).getContactByEmail(email));
-
-        expect(failureOf(attempt).reason).toBe("corrupt");
-      }),
-    ));
+      expect(failureOf(attempt).reason).toBe("corrupt");
+    }),
+  );
 });
 
 describe("updateContact", () => {
   const found: ScriptedReplies = { getItem: [Effect.succeed({ Item: contactItem })] };
+
+  const withAttributes = { ...contactItem, attributes: { M: { plan: { S: "pro" } } } };
 
   const update = (
     replies: ScriptedReplies,
@@ -343,111 +321,120 @@ describe("updateContact", () => {
     };
   };
 
-  it("reports a contact that is not there rather than writing anything", () =>
-    Effect.runPromise(
+  const contactPut = (table: Table) => table.transactionRequests[0]?.TransactItems[0]?.Put;
+
+  it.effect("reports a contact that is not there rather than writing anything", () =>
+    Effect.gen(function* () {
+      const { table, run } = update({}, { name: "Maxi" });
+
+      expect(yield* Effect.flip(run)).toStrictEqual(new Schemas.NotFound({ entity: "contact" }));
+      expect(table.transactionRequests).toStrictEqual([]);
+    }),
+  );
+
+  it.effect(
+    "writes the whole item back with the attributes created order is built from unchanged",
+    () =>
       Effect.gen(function* () {
-        const { table, run } = update({}, { name: "Maxi" });
-
-        expect(yield* run).toStrictEqual({ outcome: "contact-missing" });
-        expect(table.updateItemRequests).toStrictEqual([]);
-        expect(table.transactionRequests).toStrictEqual([]);
-      }),
-    ));
-
-  it("replaces the whole attribute map rather than merging into it", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, run } = update(found, { attributes: { city: "Berlin" } });
-
-        expect(yield* run).toStrictEqual({
-          outcome: "updated",
-          contact: { id: contactId, email, name: "Sam", attributes: { city: "Berlin" }, createdAt },
-        });
-
-        const request = table.updateItemRequests[0];
-
-        expect(request?.UpdateExpression).toBe("SET #attributes = :attributes");
-        expect(request?.ExpressionAttributeValues?.[":attributes"]).toStrictEqual({
-          M: { city: { S: "Berlin" } },
-        });
-      }),
-    ));
-
-  it("clears a field on an explicit null and leaves an absent one alone", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, run } = update(found, { name: null });
-
-        expect(yield* run).toStrictEqual({
-          outcome: "updated",
-          contact: { id: contactId, email, createdAt },
-        });
-        expect(table.updateItemRequests[0]?.UpdateExpression).toBe("REMOVE #name");
-      }),
-    ));
-
-  it("conditions every update on the address just read, so a clear-only one still binds a value", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, run } = update(found, { name: null, attributes: null });
+        const { table, run } = update(found, { email: "new@example.com", name: "Maxi" });
 
         yield* run;
 
-        expect(table.updateItemRequests).toStrictEqual([
-          {
-            Key: { pk: { S: `CONTACT#${contactId}` }, sk: { S: "META" } },
-            UpdateExpression: "REMOVE #name, #attributes",
-            ConditionExpression: "attribute_exists(pk) AND #email = :currentEmail",
-            ExpressionAttributeNames: {
-              "#name": "name",
-              "#attributes": "attributes",
-              "#email": "email",
+        // Asserted whole: `gsi1sk`, `id` and `createdAt` carry the values just read, so the contact
+        // keeps its place in created order.
+        expect(contactPut(table)?.Item).toStrictEqual({
+          ...contactItem,
+          email: { S: "new@example.com" },
+          name: { S: "Maxi" },
+        });
+      }),
+  );
+
+  it.effect("replaces the whole attribute map rather than merging into it", () =>
+    Effect.gen(function* () {
+      const { table, run } = update(
+        { getItem: [Effect.succeed({ Item: withAttributes })] },
+        { attributes: { city: "Berlin" } },
+      );
+
+      expect(yield* run).toStrictEqual({
+        id: contactId,
+        email,
+        name: "Sam",
+        attributes: { city: "Berlin" },
+        createdAt,
+      });
+      expect(contactPut(table)?.Item).toStrictEqual({
+        ...contactItem,
+        attributes: { M: { city: { S: "Berlin" } } },
+      });
+    }),
+  );
+
+  it.effect("clears a field on an explicit null and leaves an absent one alone", () =>
+    Effect.gen(function* () {
+      const { table, run } = update(
+        { getItem: [Effect.succeed({ Item: withAttributes })] },
+        { name: null },
+      );
+
+      expect(yield* run).toStrictEqual({
+        id: contactId,
+        email,
+        attributes: { plan: "pro" },
+        createdAt,
+      });
+      expect(contactPut(table)?.Item).toStrictEqual(Struct.omit(withAttributes, ["name"]));
+    }),
+  );
+
+  it.effect("writes the contact alone when only the spelling of the address changes", () =>
+    Effect.gen(function* () {
+      const { table, run } = update(found, { email: "SAM@example.com" });
+
+      expect(yield* run).toStrictEqual({
+        id: contactId,
+        email: "SAM@example.com",
+        name: "Sam",
+        createdAt,
+      });
+
+      // One reservation item holds both spellings, so there is nothing to move and no opt-out to
+      // check. The condition also holds once the write has applied, so a repeat is no lost race.
+      expect(table.transactionRequests).toStrictEqual([
+        {
+          ClientRequestToken: "token-1",
+          TransactItems: [
+            {
+              Put: {
+                Table: tableLogicalId,
+                Item: { ...contactItem, email: { S: "SAM@example.com" } },
+                ConditionExpression:
+                  "attribute_exists(pk) AND (#email = :currentEmail OR #email = :email)",
+                ExpressionAttributeNames: { "#email": "email" },
+                ExpressionAttributeValues: {
+                  ":currentEmail": { S: email },
+                  ":email": { S: "SAM@example.com" },
+                },
+              },
             },
-            ExpressionAttributeValues: { ":currentEmail": { S: email } },
-          },
-        ]);
-      }),
-    ));
+          ],
+        },
+      ]);
+    }),
+  );
 
-  it("still binds values when a change sets something alongside a clear", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, run } = update(found, { name: null, attributes: { plan: "pro" } });
-
-        yield* run;
-
-        const request = table.updateItemRequests[0];
-
-        expect(request?.UpdateExpression).toBe("SET #attributes = :attributes REMOVE #name");
-        expect(request?.ExpressionAttributeValues).toStrictEqual({
-          ":attributes": { M: { plan: { S: "pro" } } },
-          ":currentEmail": { S: email },
-        });
-      }),
-    ));
-
-  it("writes nothing at all when the payload asks for no change", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, run } = update(found, {});
-
-        expect(yield* run).toStrictEqual({
-          outcome: "updated",
-          contact: { id: contactId, email, name: "Sam", createdAt },
-        });
-        expect(table.updateItemRequests).toStrictEqual([]);
-        expect(table.transactionRequests).toStrictEqual([]);
-      }),
-    ));
-
-  it("moves the reservation when the address changes, unless the address left is opted out", () =>
-    Effect.runPromise(
+  it.effect(
+    "moves the reservation when the address changes, unless the address left is opted out",
+    () =>
       Effect.gen(function* () {
         const { table, run } = update(found, { email: "new@example.com" });
 
         expect(yield* run).toStrictEqual({
-          outcome: "updated",
-          contact: { id: contactId, email: "new@example.com", name: "Sam", createdAt },
+          id: contactId,
+          email: "new@example.com",
+          name: "Sam",
+          createdAt,
         });
 
         expect(table.transactionRequests).toStrictEqual([
@@ -455,24 +442,23 @@ describe("updateContact", () => {
             ClientRequestToken: "token-1",
             TransactItems: [
               {
-                ConditionCheck: {
+                Put: {
                   Table: tableLogicalId,
-                  Key: { pk: { S: `UNSUBSCRIBE#${email}` }, sk: { S: "UNSUBSCRIBE" } },
-                  ConditionExpression: "attribute_not_exists(pk)",
-                },
-              },
-              {
-                Update: {
-                  Table: tableLogicalId,
-                  Key: { pk: { S: `CONTACT#${contactId}` }, sk: { S: "META" } },
-                  UpdateExpression: "SET #email = :email",
+                  Item: { ...contactItem, email: { S: "new@example.com" } },
                   ConditionExpression:
                     "attribute_exists(pk) AND (#email = :currentEmail OR #email = :email)",
                   ExpressionAttributeNames: { "#email": "email" },
                   ExpressionAttributeValues: {
-                    ":email": { S: "new@example.com" },
                     ":currentEmail": { S: email },
+                    ":email": { S: "new@example.com" },
                   },
+                },
+              },
+              {
+                ConditionCheck: {
+                  Table: tableLogicalId,
+                  Key: { pk: { S: `UNSUBSCRIBE#${email}` }, sk: { S: "UNSUBSCRIBE" } },
+                  ConditionExpression: "attribute_not_exists(pk)",
                 },
               },
               {
@@ -497,99 +483,38 @@ describe("updateContact", () => {
           },
         ]);
       }),
-    ));
+  );
 
-  it("never rewrites the attributes created order is built from", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, run } = update(found, { email: "new@example.com", name: "Maxi" });
+  it.effect("keeps an update that lost a race on the same mailbox on the failure channel", () =>
+    Effect.gen(function* () {
+      const { run } = update(
+        { ...found, transactWriteItems: [cancelled("ConditionalCheckFailed")] },
+        { name: "Maxi" },
+      );
 
-        yield* run;
+      expect(failureOf(yield* Effect.result(run)).reason).toBe("unavailable");
+    }),
+  );
 
-        const expression = table.transactionRequests[0]?.TransactItems[1]?.Update?.UpdateExpression;
+  it.effect("answers an address another contact already holds with a conflict naming it", () =>
+    Effect.gen(function* () {
+      const { run } = update(
+        {
+          ...found,
+          transactWriteItems: [cancelled("None", "None", "None", "ConditionalCheckFailed")],
+        },
+        { email: "new@example.com" },
+      );
 
-        expect(expression).toBe("SET #email = :email, #name = :name");
-        expect(expression).not.toContain("gsi1sk");
-        expect(expression).not.toContain("createdAt");
-      }),
-    ));
+      expect(yield* Effect.flip(run)).toStrictEqual(
+        new Schemas.EmailAlreadyUsed({ email: "new@example.com" }),
+      );
+    }),
+  );
 
-  it("takes the plain path when only the spelling of the address changes", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, run } = update(found, { email: "SAM@example.com" });
-
-        expect(yield* run).toStrictEqual({
-          outcome: "updated",
-          contact: { id: contactId, email: "SAM@example.com", name: "Sam", createdAt },
-        });
-        expect(table.transactionRequests).toStrictEqual([]);
-        expect(table.updateItemRequests[0]?.UpdateExpression).toBe("SET #email = :email");
-        // Also true once the write has applied, so a lost response and a retry is not a lost race.
-        expect(table.updateItemRequests[0]?.ConditionExpression).toBe(
-          "attribute_exists(pk) AND (#email = :currentEmail OR #email = :email)",
-        );
-      }),
-    ));
-
-  it("keeps an update that lost a race on the plain path on the failure channel", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { run } = update({ ...found, updateItem: [conditionFailed] }, { name: "Maxi" });
-
-        expect(failureOf(yield* Effect.result(run)).reason).toBe("unavailable");
-      }),
-    ));
-
-  it("reports an address another contact already holds", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { run } = update(
-          {
-            ...found,
-            transactWriteItems: [cancelled("None", "None", "None", "ConditionalCheckFailed")],
-          },
-          { email: "new@example.com" },
-        );
-
-        expect(yield* run).toStrictEqual({ outcome: "email-taken", email: "new@example.com" });
-      }),
-    ));
-
-  it("refuses to move a contact off an address that opted out", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { run } = update(
-          {
-            ...found,
-            transactWriteItems: [cancelled("ConditionalCheckFailed", "None", "None", "None")],
-          },
-          { email: "new@example.com" },
-        );
-
-        expect(yield* run).toStrictEqual({ outcome: "opted-out", email });
-      }),
-    ));
-
-  it("answers the opt-out first when the new address is taken as well", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { run } = update(
-          {
-            ...found,
-            transactWriteItems: [
-              cancelled("ConditionalCheckFailed", "None", "None", "ConditionalCheckFailed"),
-            ],
-          },
-          { email: "new@example.com" },
-        );
-
-        expect(yield* run).toStrictEqual({ outcome: "opted-out", email });
-      }),
-    ));
-
-  it("keeps a contact changed underneath the read on the failure channel", () =>
-    Effect.runPromise(
+  it.effect(
+    "refuses to move a contact off an address that opted out, naming the address left",
+    () =>
       Effect.gen(function* () {
         const { run } = update(
           {
@@ -599,7 +524,37 @@ describe("updateContact", () => {
           { email: "new@example.com" },
         );
 
-        expect(failureOf(yield* Effect.result(run)).reason).toBe("unavailable");
+        expect(yield* Effect.flip(run)).toStrictEqual(new Schemas.AddressOptedOut({ email }));
       }),
-    ));
+  );
+
+  it.effect("answers the opt-out first when the new address is taken as well", () =>
+    Effect.gen(function* () {
+      const { run } = update(
+        {
+          ...found,
+          transactWriteItems: [
+            cancelled("None", "ConditionalCheckFailed", "None", "ConditionalCheckFailed"),
+          ],
+        },
+        { email: "new@example.com" },
+      );
+
+      expect(yield* Effect.flip(run)).toStrictEqual(new Schemas.AddressOptedOut({ email }));
+    }),
+  );
+
+  it.effect("keeps a contact changed underneath the read on the failure channel", () =>
+    Effect.gen(function* () {
+      const { run } = update(
+        {
+          ...found,
+          transactWriteItems: [cancelled("ConditionalCheckFailed", "None", "None", "None")],
+        },
+        { email: "new@example.com" },
+      );
+
+      expect(failureOf(yield* Effect.result(run)).reason).toBe("unavailable");
+    }),
+  );
 });

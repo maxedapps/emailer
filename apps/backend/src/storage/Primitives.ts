@@ -1,6 +1,6 @@
 import type * as dynamodb from "@distilled.cloud/aws/dynamodb";
 import type * as AWS from "alchemy/AWS";
-import { Data, Duration, Effect, Option, Predicate, Random, Schedule, Schema } from "effect";
+import { Data, Duration, Effect, Predicate, Random, Schedule, Schema } from "effect";
 
 import { corrupt, StorageFailure, unavailable } from "./Errors.ts";
 import { attributeOf, listingIndexName, operationTimeout, str, tableLogicalId } from "./Items.ts";
@@ -54,9 +54,13 @@ const isConflictCancellation = (error: TaggedWriteFailure) => {
   );
 };
 
+/**
+ * A page as the contract answers it. On the last page `nextCursor` is absent rather than
+ * `undefined`, which the API would encode as `null`.
+ */
 export interface StoredPage<Item, Cursor> {
   readonly items: ReadonlyArray<Item>;
-  readonly nextCursor: Cursor | undefined;
+  readonly nextCursor?: Cursor;
 }
 
 const IndexEntry = Schema.Struct({ gsi1sk: attributeOf(Schema.String) });
@@ -73,10 +77,10 @@ const decodeIndexEntry = Schema.decodeUnknownEffect(IndexEntry);
  */
 const nextCursorOf = (operationId: string, lastEvaluatedKey: dynamodb.AttributeMap | undefined) =>
   lastEvaluatedKey === undefined
-    ? Effect.succeedNone
+    ? Effect.undefined
     : decodeIndexEntry(lastEvaluatedKey).pipe(
         Effect.mapError(corrupt(operationId)),
-        Effect.map((entry) => Option.some(entry.gsi1sk)),
+        Effect.map((entry) => entry.gsi1sk),
       );
 
 const responseItems = (response: dynamodb.BatchGetItemOutput): Array<dynamodb.AttributeMap> => {
@@ -133,21 +137,6 @@ type UpdateIfResult =
 
 export const updatePrimitives = (operations: Pick<TableOperations, "updateItem">) => {
   /**
-   * A conditional single-item update. A failed condition is **not** swallowed: the caller has
-   * already established that the item exists, so a condition failure means it was concurrently
-   * removed or moved. That is a lost race, which resolves by re-reading and repeating the request,
-   * not a business outcome — and never a silent success.
-   */
-  const updateRecord = (operationId: string, request: AWS.DynamoDB.UpdateItemRequest) =>
-    operations
-      .updateItem(request)
-      .pipe(
-        Effect.timeout(operationTimeout),
-        Effect.mapError(unavailable(operationId)),
-        Effect.asVoid,
-      );
-
-  /**
    * A conditional single-item update whose failed condition is a documented outcome. `ReturnValues`
    * is honoured so a caller can read the item that was written; any other error, including a
    * timeout, is still unavailable.
@@ -171,7 +160,7 @@ export const updatePrimitives = (operations: Pick<TableOperations, "updateItem">
       Effect.mapError(unavailable(operationId)),
     );
 
-  return { updateRecord, updateIf } as const;
+  return { updateIf } as const;
 };
 
 export type UpdatePrimitives = ReturnType<typeof updatePrimitives>;
@@ -335,10 +324,12 @@ const pagePrimitives = (primitives: QueryPrimitives & BatchPrimitives) => {
         return item === undefined ? [] : [item];
       });
 
-      return {
-        items,
-        nextCursor: Option.getOrUndefined(yield* nextCursorOf(operationId, page.LastEvaluatedKey)),
-      } satisfies StoredPage<dynamodb.AttributeMap, string>;
+      const nextCursor = yield* nextCursorOf(operationId, page.LastEvaluatedKey);
+
+      return (nextCursor === undefined ? { items } : { items, nextCursor }) satisfies StoredPage<
+        dynamodb.AttributeMap,
+        string
+      >;
     });
 
   return { readEntityPage } as const;

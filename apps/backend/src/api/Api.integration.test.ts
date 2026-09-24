@@ -828,9 +828,7 @@ describe("the deployed table", () => {
 
         const members = yield* storage.listMembers(listId, 100, undefined);
 
-        expect(Option.getOrUndefined(members)?.items.map((contact) => contact.id)).toStrictEqual([
-          contactId,
-        ]);
+        expect(members.items.map((contact) => contact.id)).toStrictEqual([contactId]);
 
         yield* storage.deleteList(listId);
         yield* storage.deleteContact(contactId);
@@ -846,10 +844,12 @@ describe("the deployed table", () => {
         const listId = yield* newIdentifier;
         const now = yield* nowIso;
         // The contact exists, so the refusal can only come from the list check: slot 0 checks the
-        // contact and would answer `contact-missing` first whatever the list slot holds.
+        // contact and would answer a missing contact first whatever the list slot holds.
         const contactId = yield* contactFor(storage, yield* uniqueAddress);
 
-        expect(yield* storage.addMember(listId, contactId, now)).toBe("list-missing");
+        expect(yield* Effect.flip(storage.addMember(listId, contactId, now))).toStrictEqual(
+          new Schemas.NotFound({ entity: "list" }),
+        );
 
         // No read path shows a membership of a list that is not there, so the absence of both
         // directions is proven by creating the list and adding the contact again: both member
@@ -876,7 +876,7 @@ describe("the deployed listing index", () => {
         const now = yield* nowIso;
         const email = yield* uniqueAddress;
 
-        expect(yield* storage.createContact({ id, email, createdAt: now })).toBe("created");
+        yield* storage.createContact({ id, email, createdAt: now });
 
         // The index is eventually consistent, so the entry may take a moment to appear. After a
         // large import the first page of 100 is older contacts, so walk cursors until this id.
@@ -1016,19 +1016,21 @@ describe("the deployed contact identity", () => {
         const now = yield* nowIso;
         const email = yield* uniqueAddress;
 
-        expect(yield* storage.createContact({ id, email, createdAt: now })).toBe("created");
+        yield* storage.createContact({ id, email, createdAt: now });
 
         expect(
-          yield* storage.createContact({
-            id: yield* newIdentifier,
-            email: email.toUpperCase(),
-            createdAt: now,
-          }),
-        ).toBe("email-taken");
+          yield* Effect.flip(
+            storage.createContact({
+              id: yield* newIdentifier,
+              email: email.toUpperCase(),
+              createdAt: now,
+            }),
+          ),
+        ).toStrictEqual(new Schemas.EmailAlreadyUsed({ email: email.toUpperCase() }));
 
         const found = yield* storage.getContactByEmail(email.toUpperCase());
 
-        expect(Option.getOrUndefined(found)?.id).toBe(id);
+        expect(found.id).toBe(id);
 
         yield* storage.deleteContact(id);
       }),
@@ -1049,15 +1051,17 @@ describe("the deployed contact identity", () => {
 
         const updated = yield* storage.updateContact(id, { email: replacement });
 
-        expect(updated.outcome).toBe("updated");
-        expect(Option.isNone(yield* storage.getContactByEmail(original))).toBe(true);
-        expect(Option.getOrUndefined(yield* storage.getContactByEmail(replacement))?.id).toBe(id);
+        expect(updated.email).toBe(replacement);
+        expect(yield* Effect.flip(storage.getContactByEmail(original))).toStrictEqual(
+          new Schemas.NotFound({ entity: "contact" }),
+        );
+        expect((yield* storage.getContactByEmail(replacement)).id).toBe(id);
 
         yield* storage.deleteContact(id);
       }),
     ));
 
-  it("clears a field, which binds no expression values at all", () =>
+  it("clears fields by writing the contact without them", () =>
     live(
       Effect.gen(function* () {
         const settings = yield* configuration;
@@ -1074,19 +1078,12 @@ describe("the deployed contact identity", () => {
           attributes: { plan: "pro" },
         });
 
-        // All REMOVE and no SET. An empty ExpressionAttributeValues is rejected by the service,
-        // so this fails against real DynamoDB if the key is sent rather than omitted.
+        // The whole item is written, so a cleared field is simply absent from it.
         const cleared = yield* storage.updateContact(id, { name: null, attributes: null });
-
-        expect(cleared.outcome).toBe("updated");
-
         const stored = yield* storage.getContact(id);
 
-        expect(Option.getOrUndefined(stored)).toStrictEqual({
-          id,
-          email: Option.getOrUndefined(stored)?.email ?? "",
-          createdAt: now,
-        });
+        expect(stored).toStrictEqual({ id, email: stored.email, createdAt: now });
+        expect(cleared).toStrictEqual(stored);
 
         yield* storage.deleteContact(id);
       }),
@@ -1107,16 +1104,18 @@ describe("the deployed contact identity", () => {
         yield* storage.createList({ id: listId, name: "cascade probe", createdAt: now });
         yield* storage.addMember(listId, id, now);
 
-        expect(yield* storage.deleteContact(id)).toBe("deleted");
+        yield* storage.deleteContact(id);
 
         const members = yield* storage.listMembers(listId, 100, undefined);
 
-        expect(Option.getOrUndefined(members)?.items).toStrictEqual([]);
-        expect(Option.isNone(yield* storage.getContact(id))).toBe(true);
+        expect(members.items).toStrictEqual([]);
+        expect(yield* Effect.flip(storage.getContact(id))).toStrictEqual(
+          new Schemas.NotFound({ entity: "contact" }),
+        );
 
         // The reverse item is gone too. No read path exposes it, so it is proven by rebuilding the
         // contact and re-adding it: both member `Put`s are conditional on absence, and `addMember`
-        // reports `already-member` if either survives. Asserting `contact-missing` before the
+        // reports `already-member` if either survives. Asserting a missing contact before the
         // rebuild would prove nothing — the contact check is slot 0 and answers first whatever the
         // membership slots hold.
         yield* storage.createContact({ id, email, createdAt: now });
@@ -1148,15 +1147,11 @@ describe("the deployed delete cascade", () => {
         for (let batch = 0; batch < 3; batch += 1) {
           const candidates = yield* Effect.forEach(Array.from({ length: 20 }), () =>
             Effect.gen(function* () {
-              return { id: yield* newIdentifier, email: yield* uniqueAddress };
+              return { id: yield* newIdentifier, email: yield* uniqueAddress, createdAt: now };
             }),
           );
 
           const result = yield* storage.importContacts(listId, candidates, now);
-
-          if (result.outcome !== "imported") {
-            throw new Error("the probe list vanished mid-import");
-          }
 
           members.push(...result.contacts.map((entry) => entry.contactId));
         }
@@ -1165,14 +1160,18 @@ describe("the deployed delete cascade", () => {
 
         const before = yield* storage.listMembers(listId, 100, undefined);
 
-        expect(Option.getOrUndefined(before)?.items).toHaveLength(60);
+        expect(before.items).toHaveLength(60);
 
-        expect(yield* storage.deleteList(listId)).toBe("deleted");
+        yield* storage.deleteList(listId);
 
-        expect(Option.isNone(yield* storage.getList(listId))).toBe(true);
-        expect(Option.isNone(yield* storage.listMembers(listId, 100, undefined))).toBe(true);
+        expect(yield* Effect.flip(storage.getList(listId))).toStrictEqual(
+          new Schemas.NotFound({ entity: "list" }),
+        );
+        expect(yield* Effect.flip(storage.listMembers(listId, 100, undefined))).toStrictEqual(
+          new Schemas.NotFound({ entity: "list" }),
+        );
 
-        // `listMembers` reads the list's META first, so its `none` says the list is gone and
+        // `listMembers` reads the list's META first, so its `NotFound` says the list is gone and
         // nothing about the members. The reverse items are proven separately: rebuilding the list
         // under the same identifier and re-adding a former member can only report `added` if the
         // `CONTACT#…/LISTOF#<listId>` item went with the cascade, since that member `Put` is
@@ -1187,10 +1186,10 @@ describe("the deployed delete cascade", () => {
 
         expect(yield* storage.addMember(listId, rebuilt, now)).toBe("added");
 
-        expect(yield* storage.deleteList(listId)).toBe("deleted");
+        yield* storage.deleteList(listId);
 
         for (const contactId of members) {
-          expect(yield* storage.deleteContact(contactId)).toBe("deleted");
+          yield* storage.deleteContact(contactId);
         }
       }),
     ),
@@ -1232,7 +1231,11 @@ describe("the deployed delete cascade", () => {
         const interleaved = yield* liveStorage(settings.tableName, moveBeforeCommit);
 
         const attempt = yield* Effect.result(
-          interleaved.importContacts(listId, [{ id: original, email: address }], yield* nowIso),
+          interleaved.importContacts(
+            listId,
+            [{ id: original, email: address, createdAt: now }],
+            yield* nowIso,
+          ),
         );
 
         // Slot 0 checks the list, slot 1 checks the contact exists, slot 2 is the holder check.
@@ -1248,11 +1251,7 @@ describe("the deployed delete cascade", () => {
 
         const members = yield* storage.listMembers(listId, 25, undefined);
 
-        const memberIds = Option.isSome(members)
-          ? members.value.items.map((contact) => contact.id)
-          : [];
-
-        expect(memberIds).not.toContain(original);
+        expect(members.items.map((contact) => contact.id)).not.toContain(original);
 
         yield* storage.deleteList(listId);
         yield* storage.deleteContact(original);
