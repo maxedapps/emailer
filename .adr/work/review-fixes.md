@@ -1,6 +1,6 @@
 # Review fixes and simplification
 
-> **Status:** In progress
+> **Status:** In progress (T13 delivery pending)
 > **ADRs:** amends [0019](../0019-markdown-campaign-bodies.md) in place (text part); lifecycle notes and clerical fixes on [0003](../0003-feedback-events-through-eventbridge.md), [0012](../0012-reputation-guardrails.md), [0013](../0013-repeat-safe-writes.md), [0015](../0015-one-shot-scheduler-per-campaign.md), [0016](../0016-cancelling-pending-campaign-runs.md), [0018](../0018-optional-dns-management.md), [0020](../0020-drafts-previews-and-test-sends.md); constrained by [0008](../0008-storage-capabilities-and-error-boundaries.md), [0011](../0011-open-recipient-set-and-paced-dispatch.md), [0013](../0013-repeat-safe-writes.md), [0020](../0020-drafts-previews-and-test-sends.md)
 > **Updated:** 2026-09-24
 
@@ -97,13 +97,14 @@ All from this session, 2026-09-23, at HEAD `9ebb2fc`. The review lanes ran read-
   - Delete "still settles an already-claimed recipient after a stale begin". Its second half calls only the in-file fake. The real rule is pinned in `storage/Campaigns.test.ts:1543`.
 - **Starts at:** `apps/backend/src/sending/Dispatching.test.ts:719-756, 854-883`; `fixture`/`mailerDouble` near :363-461.
 - **Depends on:** none
-- **Status:** Pending
+- **Status:** Verified
 - **Tests:** `Dispatching.test.ts` (unit) protects:
   - an unknown SES outcome is never resent;
   - a throttle retries with 1/2/4 s backoff and recovers.
 - **Verify:**
   - Run `pnpm exec vitest run --project unit apps/backend/src/sending/Dispatching.test.ts`. Expect every case to pass, and 32 cases in total.
   - Remove the backoff `Effect.sleep(backoff)` locally. Expect the backoff test to fail. Revert.
+- **Evidence:** `c49943a`. Dispatching tests 32/32. Removing the backoff `Effect.sleep` fails the backoff test (4 sends instead of 3); resending after an uncertain outcome fails the new uncertain case.
 
 #### T2 — One settlement per claimed recipient
 
@@ -115,9 +116,10 @@ All from this session, 2026-09-23, at HEAD `9ebb2fc`. The review lanes ran read-
   - Keep `runSlice`'s three early-return guard `if`s as they are.
 - **Starts at:** `apps/backend/src/sending/Dispatching.ts:231-322`
 - **Depends on:** T1
-- **Status:** Pending
+- **Status:** Verified
 - **Tests:** `Dispatching.test.ts` (unit), including T1's cases, protects the settle and pause behaviour, unchanged.
 - **Verify:** run `pnpm exec vitest run --project unit apps/backend/src/sending`. Expect all to pass, with `Dispatching.ts` about 30 lines shorter.
+- **Evidence:** `d4eeecf`, 33 lines shorter. Sending tests 78/78. The guard `if`s in `runSlice` are unchanged. The final review confirmed every outcome behaves as before.
 
 #### T3 — Admission failures are storage failures at their source
 
@@ -130,7 +132,7 @@ All from this session, 2026-09-23, at HEAD `9ebb2fc`. The review lanes ran read-
   - `outcomeOf` in `TestSends.ts:35` takes `Result.Result<SubmissionOutcome, SubmissionUncertain>`.
 - **Starts at:** `apps/backend/src/sending/SendGuard.ts:35-40, 72-116`; `apps/backend/src/campaigns/TestSends.ts:33-44, 89`
 - **Depends on:** none
-- **Status:** Pending
+- **Status:** Verified
 - **Tests:**
   - **The `SendGuardLive` mapping is untested wiring,** like T6, protected by review only. As `SendGuard.ts` says, "tests stub the service", and the widened service type can't catch a restored `orDie`, because `never` is assignable to `StorageFailure`.
   - **The `consumeSlot` mapping is protected by typecheck:** without it, `Api.ts`'s `test` handler fails with `RateLimiterError`, an error that endpoint doesn't declare.
@@ -138,6 +140,7 @@ All from this session, 2026-09-23, at HEAD `9ebb2fc`. The review lanes ran read-
 - **Verify:** run `pnpm exec vitest run --project unit apps/backend/src/campaigns apps/backend/src/sending apps/backend/src/api`. Expect all to pass, then run `pnpm lint` and expect 0 diagnostics.
 - **Risk/recovery:**
   - The dispatcher already dies on any failure (`reportedAndFatal`). The only change there is that the sanitized "storage operation failed" line is now logged.
+- **Evidence:** `5c7166c`. Campaigns, sending and api tests 252/252; repo-wide lint 0. Removing the `consumeSlot` mapping fails tsc at `Api.ts:77` (TS2322).
 
 #### T4 — Let the types carry the boundary
 
@@ -147,11 +150,12 @@ All from this session, 2026-09-23, at HEAD `9ebb2fc`. The review lanes ran read-
   - `Mailer.ts`'s `rejectionCodes` becomes `const rejectionCodes: Partial<Record<sesv2.SendEmailError["_tag"], Schemas.RejectionCode>> = { … }` with the same nine entries, looked up with `rejectionCodes[error._tag]`.
 - **Starts at:** `apps/backend/src/Diagnostics.ts:6-61`; `apps/backend/src/sending/Mailer.ts:41-51, 122`
 - **Depends on:** none
-- **Status:** Pending
+- **Status:** Verified
 - **Tests:**
   - `Diagnostics.test.ts` (15 cases, including `TypeError` and `Error`), `Api.test.ts` and `Mailer.test.ts` (unit) protect cause naming, the 503 mapping and rejection classification, unchanged.
   - A misspelled table key is caught by typecheck.
 - **Verify:** run `pnpm typecheck && pnpm lint && pnpm exec vitest run --project unit apps/backend/src/Diagnostics.test.ts apps/backend/src/api apps/backend/src/sending/Mailer.test.ts`. Expect every step to exit 0.
+- **Evidence:** `87dc711`. 102 tests across Diagnostics, api and Mailer. A misspelled rejection key fails tsc with TS2561.
 
 #### T5 — Return pages in query order by key, not by position or collation
 
@@ -160,7 +164,7 @@ All from this session, 2026-09-23, at HEAD `9ebb2fc`. The review lanes ran read-
   - In `listMembers`, index the decoded contacts by id and emit them in the order of the queried member keys. This deletes the `localeCompare` sort and its comment.
 - **Starts at:** `apps/backend/src/storage/Primitives.ts:329-349`; `apps/backend/src/storage/Membership.ts:235-247`
 - **Depends on:** none
-- **Status:** Pending
+- **Status:** Verified
 - **Tests:** these unit cases protect index or query order, dropping missing items rather than failing, and no positional matching:
   - `Primitives.test.ts:363` "returns a page in index order when the batch answers reversed";
   - `Primitives.test.ts:208`;
@@ -171,6 +175,7 @@ All from this session, 2026-09-23, at HEAD `9ebb2fc`. The review lanes ran read-
     - the test expects `[contactId, otherContactId]`.
   - **Don't just flip the expectation.** That would leave batch reordering untested.
 - **Verify:** run `pnpm exec vitest run --project unit apps/backend/src/storage`. Expect all to pass.
+- **Evidence:** `7a8ef74`. Storage, campaigns and audience tests 331/331. Returning batch order fails the rewritten `Membership.test.ts` case.
 
 #### T6 — Leave a margin between the slice deadline and the Lambda timeout
 
@@ -179,12 +184,13 @@ All from this session, 2026-09-23, at HEAD `9ebb2fc`. The review lanes ran read-
   - Pass `now + Duration.toMillis(invocationTimeout) - Duration.toMillis(sliceMargin)` to `runSlice`, with a one-line comment: the reservation covers one attempt, and the margin covers a rate-limited retry tail.
 - **Starts at:** `apps/backend/src/sending/Dispatcher.ts:15, 57-60`
 - **Depends on:** none
-- **Status:** Pending
+- **Status:** Verified
 - **Tests:**
   - No unit test: `Dispatcher.ts` is Lambda wiring with no unit harness, and the budget arithmetic it feeds is already covered by the `Dispatching.test.ts` overrun cases.
   - The live suite's multi-page campaigns check that slices still continue (T11).
   - No ADR change: this restores ADR-0013:32's "genuine crashes are now the only way to reach that state", apart from the extreme-contention residual ADR-0011 already accepts.
 - **Verify:** run `pnpm typecheck`. Expect exit 0. The T11 integration run is expected to pass.
+- **Evidence:** `1a9e219`. Typecheck and sending tests pass; the live gate is T11.
 
 #### T7 — Remove the copied shapes in two stores
 
@@ -200,12 +206,13 @@ All from this session, 2026-09-23, at HEAD `9ebb2fc`. The review lanes ran read-
   - The anti-slop lint rule forbids `...(c ? {} : {…})`, so each ternary picks between whole objects.
 - **Starts at:** `apps/backend/src/storage/Campaigns.ts:127-172, 298-308, 701-787, 789-792`; `apps/backend/src/storage/Addresses.ts:54-69, 237-290`
 - **Depends on:** none
-- **Status:** Pending
+- **Status:** Verified
 - **Tests:** these unit cases protect the exact DynamoDB requests and the records they produce, unchanged:
   - `storage/Campaigns.test.ts:1667-1696, 1756-1805`, which pin the exact requests;
   - `storage/Addresses.test.ts:337-379`, which pins the exact record with and without optional parts;
   - `Campaigns.test.ts`.
 - **Verify:** run `pnpm exec vitest run --project unit apps/backend/src/storage apps/backend/src/campaigns`. Expect all to pass, with about 80 lines fewer across the two files.
+- **Evidence:** `3c4ebab`, net −79 lines across the two files. Storage tests 331/331, with the exact-request and exact-record pins unchanged.
 
 #### T8 — CLI keeps typed errors and prints readable failures
 
@@ -225,7 +232,7 @@ All from this session, 2026-09-23, at HEAD `9ebb2fc`. The review lanes ran read-
   - **`Flags.ts` `pageQuery`:** return `{ limit: Option.getOrUndefined(limit), cursor: Option.getOrUndefined(cursor) }` and delete the `PageQuery` interface.
 - **Starts at:** `apps/cli/src/Client.ts:21-28`; `apps/cli/src/Diagnostics.ts:22-23`; `apps/backend/src/feedback/ReplayFeedback.ts:250-251`; `apps/cli/src/commands/Campaigns.ts:15-85`; `apps/cli/src/Flags.ts:32-49`
 - **Depends on:** none
-- **Status:** Pending
+- **Status:** Verified
 - **Tests:**
   - **`apps/cli/src/Diagnostics.test.ts` (unit, new cases):**
     - a schema failure prints its message and no `~effect/Schema` tree;
@@ -239,6 +246,9 @@ All from this session, 2026-09-23, at HEAD `9ebb2fc`. The review lanes ran read-
   - Run `pnpm exec vitest run --project unit apps/cli apps/backend/src/feedback`. Expect all to pass.
   - Run `EMAILER_API_URL=http://127.0.0.1:59999 EMAILER_API_TOKEN=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa node apps/cli/src/main.ts contacts get 00000000-0000-4000-8000-000000000000`. Expect one stderr line starting `emailer: Transport error` and ending in `ECONNREFUSED 127.0.0.1:59999`, and exit 1.
   - Run it again with `EMAILER_API_URL` unset. Expect stderr to name `EMAILER_API_URL`, contain no `~effect/Schema`, and not repeat the message. The schema message itself spans two lines.
+- **Evidence:** `ed6f9e2`. CLI and feedback tests 190/190. Reverting to the old renderer fails 3 CLI and 2 replay cases. Verify runs:
+  - refused port: one line, `Transport error (GET …): fetch failed: connect ECONNREFUSED 127.0.0.1:59999`, exit 1;
+  - API URL unset: `SchemaError(Expected string` / `at ["EMAILER_API_URL"])`, printed once.
 
 #### T9 — A correct plain-text part for Markdown campaigns
 
@@ -256,7 +266,7 @@ All from this session, 2026-09-23, at HEAD `9ebb2fc`. The review lanes ran read-
     - Amend `wiki/email/html-email.md:23` the same way.
 - **Starts at:** `apps/cli/src/Markdown.ts:135-220`
 - **Depends on:** none
-- **Status:** Pending
+- **Status:** Verified
 - **Tests:** `apps/cli/src/Markdown.test.ts` (unit) and `commands/Campaigns.test.ts:522` (CLI) protect the text part's structure and fidelity.
   - Update the four pinned cases:
     - `["# Title", "Title"]`;
@@ -268,9 +278,10 @@ All from this session, 2026-09-23, at HEAD `9ebb2fc`. The review lanes ran read-
     - `"1. one\n   continued\n2. two"` → `"1. one\n   continued\n2. two"`;
     - `"- [x] done\n- [ ] todo"` → `"- [x] done\n- [ ] todo"`;
     - `"## See [the Docs](https://example.com/Docs/Page?Ref=A)"` → `"See the Docs (https://example.com/Docs/Page?Ref=A)"`;
-    - `'<div align="center"><img src="https://x/y.png"></div>\n\nafter'` → `"after"`;
-    - `"Tom &amp; Jerry, a &lt; b"` → `"Tom & Jerry, a < b"`.
+    - `'<div align="center"><img src="https://example.com/logo.png"></div>\n\nafter'` → `"after"`;
+    - `"Salt &amp; pepper, a &lt; b"` → `"Salt & pepper, a < b"`.
 - **Verify:** run `pnpm exec vitest run --project unit apps/cli`. Expect all to pass.
+- **Evidence:** `73ebe4d`, with fixtures neutralized in `0517851`. CLI tests pass. The final review compared 46 inputs against `9ebb2fc`: the HTML part was byte-identical, and the text part was sensible for every input.
 
 #### T10 — Documentation drift
 
@@ -291,12 +302,13 @@ All from this session, 2026-09-23, at HEAD `9ebb2fc`. The review lanes ran read-
     - ADR-0013 header: "Superseded in part: ADR-0016 (enqueue and resume no longer accept an already queued campaign; lifecycle commands are single-item transactions with a request token)".
 - **Starts at:** the files and lines named above
 - **Depends on:** none
-- **Status:** Pending
+- **Status:** Verified
 - **Tests:** documentation only.
 - **Verify:**
   - Run `grep -n "Retry.none" wiki/effect/retries-and-concurrency.md`. Expect no conditional-write mention.
   - Run `pnpm format:check`. Expect exit 0.
   - Every edited relative link resolves (`test -f` on each target).
+- **Evidence:** `e6293db`. All edited links resolve, and the final review checked each edit against the code and ADRs.
 
 #### T11 — Live gate
 
@@ -309,7 +321,7 @@ All from this session, 2026-09-23, at HEAD `9ebb2fc`. The review lanes ran read-
   - If `sender-name` merged into `main` first, merge `main` in beforehand, so this gate runs on the merged code.
 - **Starts at:** README "Develop and test"
 - **Depends on:** T1–T10
-- **Status:** Pending
+- **Status:** Verified
 - **Tests:** the full live suite (all 5 integration files, including `CampaignCancellation.integration.test.ts`) protects the deployed behaviour end to end.
 - **Verify:**
   - `pnpm check` exits 0.
@@ -318,6 +330,11 @@ All from this session, 2026-09-23, at HEAD `9ebb2fc`. The review lanes ran read-
 - **Risk/recovery:**
   - A stale alarm name gives one false `ResourceNotFound`: re-point it and re-run.
   - An expired SSO profile: export CLI credentials, following README and project memory.
+- **Evidence:** 2026-09-24, on the merged branch (`main` at `3ca4953` merged in as `27a54a9`), stage `test-review`:
+  - `pnpm check` passed with 903 unit tests, and each of the 13 branch commits before the merge passed `pnpm check` on its own.
+  - The deploy created 31 resources in 95 s. Nine `.env.test` values were pointed at the stage: the plan's seven plus the preview URL and secret.
+  - `pnpm test:integration`: 5 files, 41/41 passed in 477 s.
+  - `alchemy destroy`: 31 deleted in 106 s. The inventory shows no function, table, queue, alarm, schedule group, topic, log group, rule, configuration set, role or event-source mapping left for the stage, and no simulator entries on the account suppression list.
 
 #### T12 — Close ADR-0016's live confirmation
 
@@ -328,12 +345,13 @@ All from this session, 2026-09-23, at HEAD `9ebb2fc`. The review lanes ran read-
   - Record T11's results in this document's Evidence fields.
 - **Starts at:** `.adr/0016-cancelling-pending-campaign-runs.md:1-8`; `.adr/work/queued-campaign-cancellation.md:1-5`
 - **Depends on:** T11
-- **Status:** Pending
+- **Status:** Verified
 - **Tests:** documentation only; the evidence is T11's run.
 - **Verify:**
   - The ADR header shows Status Accepted with a Confirmed line.
   - The work doc status is Complete.
   - `pnpm format:check` exits 0.
+- **Evidence:** ADR-0016 has a Confirmed line, and the T6 clause is gone from its Authority line. `queued-campaign-cancellation.md` is Complete. Its T6 is closed by the user's decision, and it says the queued-cancel CLI walkthrough was not run separately.
 
 #### T13 — Delivery
 
@@ -367,7 +385,17 @@ All from this session, 2026-09-23, at HEAD `9ebb2fc`. The review lanes ran read-
 
 ## Handoff
 
-- **Next action:** create the worktree and branch `review-fixes` from `main`, commit this document, and start T1.
+- **Next action:** T13, the leak and persona scans, then push and open the PR. After the user merges the PR: remove the worktree and delete the branch.
+- **Deviations** (none changes a decision; all are within the approved outcome):
+  - Three lanes worked in parallel, so commits interleave rather than follow the task order. Each of the 13 commits passed `pnpm check` on its own.
+  - The live gate used the dedicated stage `test-review` instead of `test`, so it could not collide with another worktree's stage.
+  - T3 keeps a reworded comment on the annotated `DescribeAlarms` const instead of deleting it.
+  - T4 keeps the first two sentences of `describeCause`'s doc comment.
+  - T7's `pauseRun` keeps two whole request objects that share one values object.
+  - T8 refuses file and Markdown bodies with one wording ("The campaign body is refused: <schema message>"). The render helper exists twice, in the CLI and in the replay tool, so production code grew by about +54 lines instead of about +20.
+  - T9 adds a `checkbox()` override, because marked puts a loose task list's box inside the paragraph, and an extra loose-task-list test. It also rewrites the wiki's escaping sentence and the `unescapeHtml` comment so they stay accurate.
+  - On 2026-09-24 the user ruled that the repo must hold no operator or company details. Two test fixtures were neutralized (`0517851`), and the scratch paths were removed from this document.
+- **Resources:** the worktree `~/worktrees/emailer/review-fixes` and the branch `review-fixes` stay until the PR is merged. The stage `test-review` is destroyed and verified gone. The worktree's `.env.test` is untracked and points at that destroyed stage.
 - **Reviews:** [review-fixes-review.md](review-fixes-review.md). Independent plan review, round 1: Changes required. All seven findings were accepted and applied:
   - R1: T5 rewrites the member-order fixture.
   - R2: the T8 render rule covers `ConfigError`, and the Verify step uses a refused port.
@@ -383,4 +411,5 @@ All from this session, 2026-09-23, at HEAD `9ebb2fc`. The review lanes ran read-
   - N3: T13 states that there is no CI.
 
   Round 3: Clear.
+  - Implementation: [review-fixes-implementation-review.md](review-fixes-implementation-review.md). An independent plan-backed review of `9ebb2fc..6139b21`: Clear, with no findings. Its one note, fixtures still quoted in this document, is fixed.
 - **Complexity gate:** built-in; each task was challenged for a smaller alternative. Rejected simplifications and additions are listed under Out of scope.

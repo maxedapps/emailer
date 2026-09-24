@@ -3,7 +3,8 @@
 - Status: Accepted
 - Date: 2026-09-17
 - Accepted: 2026-09-17
-- Authority: The user requested queued-campaign cancellation, explicitly allowed substantial refactoring, requested a detailed implementation plan, and on 2026-09-17 authorized implementation with `/implement-plan .adr/work/queued-campaign-cancellation.md`. Live confirmation remains the plan's T6 gate.
+- Confirmed: 2026-09-24. `CampaignCancellation.integration.test.ts` passed in two full live runs, both on ephemeral stages that were destroyed afterwards: ADR-0020's run on `test` (5 files, 40 cases) and the [review-fixes](work/review-fixes.md) live gate on `test-review` (5 files, 41 cases).
+- Authority: The user requested queued-campaign cancellation, explicitly allowed substantial refactoring, requested a detailed implementation plan, and on 2026-09-17 authorized implementation with `/implement-plan .adr/work/queued-campaign-cancellation.md`.
 - Supersedes in part: [ADR-0015](0015-one-shot-scheduler-per-campaign.md), for cancellation transitions, removing run tokens, campaign-named schedules and delete-before-create replacement; [ADR-0013](0013-repeat-safe-writes.md), for the single-item update mechanism used by campaign lifecycle commands.
 - Superseded in part: [ADR-0020](0020-drafts-previews-and-test-sends.md), for the cancel-only conflict: every wrong-state operation now answers one `CampaignStateConflict`.
 - Preserves: [ADR-0011](0011-open-recipient-set-and-paced-dispatch.md), for recipient identity, worker guards and late settlements; [ADR-0014](0014-campaign-body-item-and-summaries.md), for the META/BODY split.
