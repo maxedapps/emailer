@@ -1,7 +1,7 @@
-import { CampaignNotFound } from "@emailer/api/Errors";
+import { CampaignNotFound, CampaignStateConflict } from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
 import * as AWS from "alchemy/AWS";
-import { Context, Crypto, Effect, Layer, Schema } from "effect";
+import { Context, Crypto, Data, Effect, Layer, Schema } from "effect";
 
 import {
   bodyKey,
@@ -21,6 +21,7 @@ import type { TableOperations } from "./Items.ts";
 import type {
   PagePrimitives,
   ReadPrimitives,
+  StoredItem,
   StoredPage,
   TransactionPrimitives,
   TransactionTokens,
@@ -167,6 +168,40 @@ type ControlOf<Stored> = Stored extends unknown
   : never;
 
 export type CampaignControl = ControlOf<CampaignRecord>;
+
+/** The run a worker holds is no longer the campaign's: it moved on to another run or state. */
+export class RunSuperseded extends Data.TaggedError("RunSuperseded") {}
+
+/**
+ * The state a command observed no longer holds. `current` is the campaign's control as the refused
+ * condition found it, or undefined when the campaign is gone.
+ */
+export class CampaignChanged extends Data.TaggedError("CampaignChanged")<{
+  readonly current: CampaignControl | undefined;
+}> {}
+
+/** A settlement's send row is no longer this attempt's to settle, or its campaign is gone. */
+export class SettlementNotApplied extends Data.TaggedError("SettlementNotApplied") {}
+
+/** Another slice already wrote this recipient's send row. */
+class AlreadyClaimed extends Data.TaggedError("AlreadyClaimed") {}
+
+const superseded = () => new RunSuperseded();
+
+const changed = (operation: string) => (current: StoredItem) =>
+  current === undefined
+    ? Effect.fail(new CampaignChanged({ current: undefined }))
+    : Effect.flatMap(readCampaign(operation, current), (control) =>
+        Effect.fail(new CampaignChanged({ current: control })),
+      );
+
+/** A draft write refused because the campaign is gone, or is no longer a draft. */
+const notADraft = (operation: string) => (current: StoredItem) =>
+  current === undefined
+    ? Effect.fail(new CampaignNotFound())
+    : Effect.flatMap(readCampaign(operation, current), (stored) =>
+        Effect.fail(new CampaignStateConflict({ state: stored.state })),
+      );
 
 export type RunSource = {
   readonly state: "draft" | "scheduled" | "paused";
@@ -317,7 +352,7 @@ export const campaignOperations = (
     UpdatePrimitives &
     PagePrimitives,
 ) => {
-  const { readEntityPage, readItem, recordOnce, runTransaction, updateIf } = primitives;
+  const { readEntityPage, readItem, recordOnce, transact, updateIf } = primitives;
   const { getCampaignBody, getCampaign } = campaignReads(primitives);
 
   // Both keys are fresh identifiers, so an item already there can only be this request landing
@@ -379,8 +414,12 @@ export const campaignOperations = (
     return control;
   });
 
+  /**
+   * A command's change of state, as a single-item transaction so that a transport retry reuses its
+   * `ClientRequestToken`. A refused change answers the campaign as it now is.
+   */
   const commitLifecycle = (
-    operationId: string,
+    operation: string,
     id: string,
     update: {
       readonly UpdateExpression: string;
@@ -388,18 +427,18 @@ export const campaignOperations = (
       readonly ExpressionAttributeValues: Record<string, ReturnType<typeof str>>;
     },
   ) =>
-    runTransaction(operationId, {
-      TransactItems: [
-        {
-          Update: {
-            Table: tableLogicalId,
-            Key: campaignKey(id),
-            ExpressionAttributeNames: stateName,
-            ...update,
-          },
+    transact(operation, [
+      {
+        Update: {
+          Table: tableLogicalId,
+          Key: campaignKey(id),
+          ExpressionAttributeNames: stateName,
+          ReturnValuesOnConditionCheckFailure: "ALL_OLD",
+          ...update,
         },
-      ],
-    });
+        refused: changed(operation),
+      },
+    ]);
 
   /**
    * Starts a new run, and only from the state and token the caller observed: the campaign becomes
@@ -415,14 +454,14 @@ export const campaignOperations = (
     target: "queued" | "scheduled",
     queuedAt: string,
   ) {
-    const operationId =
+    const operation =
       target === "scheduled"
         ? "scheduleCampaign"
         : expected.state === "paused"
           ? "resumeCampaign"
           : "enqueueCampaign";
 
-    const outcome = yield* commitLifecycle(operationId, id, {
+    yield* commitLifecycle(operation, id, {
       UpdateExpression:
         "SET #state = :target, queuedAt = :queuedAt, runToken = :run, runAccepted = accepted, runBounced = bounced, runComplained = complained REMOVE pausedReason",
       ConditionExpression: `#state = :expectedState AND ${observedTokenCondition(expected.runToken)}`,
@@ -434,49 +473,44 @@ export const campaignOperations = (
         ...observedTokenValues(expected.runToken),
       },
     });
-
-    return outcome.committed ? target : ("conflict" as const);
   });
 
   const cancelCampaign = Effect.fn("Storage.cancelCampaign")(function* (
     id: string,
     source: CancelSource,
   ) {
-    const outcome =
-      source.state === "scheduled"
-        ? yield* commitLifecycle("cancelCampaign", id, {
-            UpdateExpression: "SET #state = :draft REMOVE queuedAt",
-            ConditionExpression: "#state = :scheduled AND runToken = :expected",
+    yield* source.state === "scheduled"
+      ? commitLifecycle("cancelCampaign", id, {
+          UpdateExpression: "SET #state = :draft REMOVE queuedAt",
+          ConditionExpression: "#state = :scheduled AND runToken = :expected",
+          ExpressionAttributeValues: {
+            ":draft": str("draft"),
+            ":scheduled": str("scheduled"),
+            ":expected": str(source.runToken),
+          },
+        })
+      : source.started
+        ? commitLifecycle("cancelCampaign", id, {
+            UpdateExpression: "SET #state = :paused, pausedReason = :manual",
+            ConditionExpression:
+              "#state = :queued AND runToken = :expected AND attribute_exists(startedAt)",
             ExpressionAttributeValues: {
-              ":draft": str("draft"),
-              ":scheduled": str("scheduled"),
+              ":paused": str("paused"),
+              ":manual": str("manual"),
+              ":queued": str("queued"),
               ":expected": str(source.runToken),
             },
           })
-        : source.started
-          ? yield* commitLifecycle("cancelCampaign", id, {
-              UpdateExpression: "SET #state = :paused, pausedReason = :manual",
-              ConditionExpression:
-                "#state = :queued AND runToken = :expected AND attribute_exists(startedAt)",
-              ExpressionAttributeValues: {
-                ":paused": str("paused"),
-                ":manual": str("manual"),
-                ":queued": str("queued"),
-                ":expected": str(source.runToken),
-              },
-            })
-          : yield* commitLifecycle("cancelCampaign", id, {
-              UpdateExpression: "SET #state = :draft REMOVE queuedAt",
-              ConditionExpression:
-                "#state = :queued AND runToken = :expected AND attribute_not_exists(startedAt)",
-              ExpressionAttributeValues: {
-                ":draft": str("draft"),
-                ":queued": str("queued"),
-                ":expected": str(source.runToken),
-              },
-            });
-
-    return outcome.committed ? ("applied" as const) : ("conflict" as const);
+        : commitLifecycle("cancelCampaign", id, {
+            UpdateExpression: "SET #state = :draft REMOVE queuedAt",
+            ConditionExpression:
+              "#state = :queued AND runToken = :expected AND attribute_not_exists(startedAt)",
+            ExpressionAttributeValues: {
+              ":draft": str("draft"),
+              ":queued": str("queued"),
+              ":expected": str(source.runToken),
+            },
+          });
   });
 
   const beginRun = Effect.fn("Storage.beginRun")(function* (
@@ -484,41 +518,38 @@ export const campaignOperations = (
     runToken: string,
     now: string,
   ) {
-    const outcome = yield* updateIf("beginRun", {
-      Key: campaignKey(id),
-      UpdateExpression: "SET #state = :sending, startedAt = if_not_exists(startedAt, :now)",
-      ConditionExpression: "runToken = :run AND #state IN (:queued, :sending, :scheduled)",
-      ExpressionAttributeNames: stateName,
-      ExpressionAttributeValues: {
-        ":sending": str("sending"),
-        ":now": str(now),
-        ":run": str(runToken),
-        ":queued": str("queued"),
-        ":scheduled": str("scheduled"),
+    const begun = yield* updateIf(
+      "beginRun",
+      {
+        Key: campaignKey(id),
+        UpdateExpression: "SET #state = :sending, startedAt = if_not_exists(startedAt, :now)",
+        ConditionExpression: "runToken = :run AND #state IN (:queued, :sending, :scheduled)",
+        ExpressionAttributeNames: stateName,
+        ExpressionAttributeValues: {
+          ":sending": str("sending"),
+          ":now": str(now),
+          ":run": str(runToken),
+          ":queued": str("queued"),
+          ":scheduled": str("scheduled"),
+        },
+        ReturnValues: "ALL_NEW",
       },
-      ReturnValues: "ALL_NEW",
-    });
+      superseded,
+    );
 
-    if (!outcome.applied) {
-      return "stale" as const;
-    }
-
-    const stored = yield* readSending("beginRun", outcome.attributes);
+    const stored = yield* readSending("beginRun", begun);
 
     return {
-      outcome: "running" as const,
-      campaign: {
-        listId: stored.listId,
-        subject: stored.subject,
-        cursor: stored.cursor,
-        filter: stored.filter,
-        run: {
-          accepted: stored.accepted - stored.runAccepted,
-          bounced: stored.bounced - stored.runBounced,
-          complained: stored.complained - stored.runComplained,
-        },
-      } satisfies CampaignRun,
-    };
+      listId: stored.listId,
+      subject: stored.subject,
+      cursor: stored.cursor,
+      filter: stored.filter,
+      run: {
+        accepted: stored.accepted - stored.runAccepted,
+        bounced: stored.bounced - stored.runBounced,
+        complained: stored.complained - stored.runComplained,
+      },
+    } satisfies CampaignRun;
   });
 
   const claimRecipient = Effect.fn("Storage.claimRecipient")(function* (
@@ -529,45 +560,38 @@ export const campaignOperations = (
     sendId: string,
     now: string,
   ) {
-    const outcome = yield* runTransaction("claimRecipient", {
-      TransactItems: [
-        {
-          ConditionCheck: {
-            Table: tableLogicalId,
-            Key: campaignKey(id),
-            ConditionExpression: "#state = :sending AND runToken = :run",
-            ExpressionAttributeNames: stateName,
-            ExpressionAttributeValues: sendingAndRun(runToken),
-          },
-        },
-        {
-          Put: {
-            Table: tableLogicalId,
-            Item: {
-              ...sendKey(id, contactId),
-              ...(yield* writeSend({
-                state: "unconfirmed",
-                sendId,
-                contactId,
-                recipient,
-                startedAt: now,
-              })),
-            },
-            ConditionExpression: "attribute_not_exists(pk)",
-          },
-        },
-      ],
+    const row = yield* writeSend({
+      state: "unconfirmed",
+      sendId,
+      contactId,
+      recipient,
+      startedAt: now,
     });
 
-    if (outcome.committed) {
-      return "claimed" as const;
-    }
-
-    if (outcome.conditionFailures.has(0)) {
-      return "stale" as const;
-    }
-
-    return "already-claimed" as const;
+    // The run comes first: a superseded run decides over a row another slice already claimed.
+    return yield* transact("claimRecipient", [
+      {
+        ConditionCheck: {
+          Table: tableLogicalId,
+          Key: campaignKey(id),
+          ConditionExpression: "#state = :sending AND runToken = :run",
+          ExpressionAttributeNames: stateName,
+          ExpressionAttributeValues: sendingAndRun(runToken),
+        },
+        refused: superseded,
+      },
+      {
+        Put: {
+          Table: tableLogicalId,
+          Item: { ...sendKey(id, contactId), ...row },
+          ConditionExpression: "attribute_not_exists(pk)",
+        },
+        refused: () => new AlreadyClaimed(),
+      },
+    ]).pipe(
+      Effect.as("claimed" as const),
+      Effect.catchTag("AlreadyClaimed", () => Effect.succeed("already-claimed" as const)),
+    );
   });
 
   const skipRecipient = Effect.fn("Storage.skipRecipient")(function* (
@@ -578,50 +602,43 @@ export const campaignOperations = (
     reason: Schemas.SkipReason,
     now: string,
   ) {
-    const outcome = yield* runTransaction("skipRecipient", {
-      TransactItems: [
-        {
-          Put: {
-            Table: tableLogicalId,
-            Item: {
-              ...sendKey(id, contactId),
-              ...(yield* writeSend({
-                state: "skipped",
-                contactId,
-                recipient,
-                skipReason: reason,
-                startedAt: now,
-                finishedAt: now,
-              })),
-            },
-            ConditionExpression: "attribute_not_exists(pk)",
-          },
-        },
-        {
-          Update: {
-            Table: tableLogicalId,
-            Key: campaignKey(id),
-            UpdateExpression: "ADD skipped :one",
-            ConditionExpression: "#state = :sending AND runToken = :run",
-            ExpressionAttributeNames: stateName,
-            ExpressionAttributeValues: {
-              ":one": num(1),
-              ...sendingAndRun(runToken),
-            },
-          },
-        },
-      ],
+    const row = yield* writeSend({
+      state: "skipped",
+      contactId,
+      recipient,
+      skipReason: reason,
+      startedAt: now,
+      finishedAt: now,
     });
 
-    if (outcome.committed) {
-      return "skipped" as const;
-    }
-
-    if (outcome.conditionFailures.has(0)) {
-      return "already-claimed" as const;
-    }
-
-    return "stale" as const;
+    // The row comes first: a recipient already settled by an earlier slice stays settled.
+    return yield* transact("skipRecipient", [
+      {
+        Put: {
+          Table: tableLogicalId,
+          Item: { ...sendKey(id, contactId), ...row },
+          ConditionExpression: "attribute_not_exists(pk)",
+        },
+        refused: () => new AlreadyClaimed(),
+      },
+      {
+        Update: {
+          Table: tableLogicalId,
+          Key: campaignKey(id),
+          UpdateExpression: "ADD skipped :one",
+          ConditionExpression: "#state = :sending AND runToken = :run",
+          ExpressionAttributeNames: stateName,
+          ExpressionAttributeValues: {
+            ":one": num(1),
+            ...sendingAndRun(runToken),
+          },
+        },
+        refused: superseded,
+      },
+    ]).pipe(
+      Effect.as("skipped" as const),
+      Effect.catchTag("AlreadyClaimed", () => Effect.succeed("already-claimed" as const)),
+    );
   });
 
   const settleRecipient = Effect.fn("Storage.settleRecipient")(function* (
@@ -633,36 +650,37 @@ export const campaignOperations = (
   ) {
     const terminal = settlementWrite(settlement);
 
-    const outcome = yield* runTransaction("settleRecipient", {
-      TransactItems: [
-        {
-          Update: {
-            Table: tableLogicalId,
-            Key: sendKey(id, contactId),
-            UpdateExpression: terminal.expression,
-            ConditionExpression: "#state = :unconfirmed AND sendId = :sendId",
-            ExpressionAttributeNames: stateName,
-            ExpressionAttributeValues: {
-              ...terminal.values,
-              ":finishedAt": str(now),
-              ":unconfirmed": str("unconfirmed"),
-              ":sendId": str(sendId),
-            },
-          },
-        },
-        {
-          Update: {
-            Table: tableLogicalId,
-            Key: campaignKey(id),
-            UpdateExpression: `ADD ${terminal.counter} :one`,
-            ConditionExpression: "attribute_exists(pk)",
-            ExpressionAttributeValues: { ":one": num(1) },
-          },
-        },
-      ],
-    });
+    // The row is no longer this attempt's to settle, or the campaign is gone.
+    const notApplied = () => new SettlementNotApplied();
 
-    return outcome.committed ? ("settled" as const) : ("not-current" as const);
+    yield* transact("settleRecipient", [
+      {
+        Update: {
+          Table: tableLogicalId,
+          Key: sendKey(id, contactId),
+          UpdateExpression: terminal.expression,
+          ConditionExpression: "#state = :unconfirmed AND sendId = :sendId",
+          ExpressionAttributeNames: stateName,
+          ExpressionAttributeValues: {
+            ...terminal.values,
+            ":finishedAt": str(now),
+            ":unconfirmed": str("unconfirmed"),
+            ":sendId": str(sendId),
+          },
+        },
+        refused: notApplied,
+      },
+      {
+        Update: {
+          Table: tableLogicalId,
+          Key: campaignKey(id),
+          UpdateExpression: `ADD ${terminal.counter} :one`,
+          ConditionExpression: "attribute_exists(pk)",
+          ExpressionAttributeValues: { ":one": num(1) },
+        },
+        refused: notApplied,
+      },
+    ]);
   });
 
   /**
@@ -683,16 +701,18 @@ export const campaignOperations = (
     const from = previous === undefined ? "attribute_not_exists(#cursor)" : "#cursor = :previous";
     const values = { ...sendingAndRun(runToken), ":next": str(next), ":slice": str(sliceId) };
 
-    const outcome = yield* updateIf("checkpoint", {
-      Key: campaignKey(id),
-      UpdateExpression: "SET #cursor = :next, sliceId = :slice",
-      ConditionExpression: `#state = :sending AND runToken = :run AND (${from} OR ${alreadyMine})`,
-      ExpressionAttributeNames: stateAndCursorNames,
-      ExpressionAttributeValues:
-        previous === undefined ? values : { ...values, ":previous": str(previous) },
-    });
-
-    return outcome.applied ? ("updated" as const) : ("condition-failed" as const);
+    yield* updateIf(
+      "checkpoint",
+      {
+        Key: campaignKey(id),
+        UpdateExpression: "SET #cursor = :next, sliceId = :slice",
+        ConditionExpression: `#state = :sending AND runToken = :run AND (${from} OR ${alreadyMine})`,
+        ExpressionAttributeNames: stateAndCursorNames,
+        ExpressionAttributeValues:
+          previous === undefined ? values : { ...values, ":previous": str(previous) },
+      },
+      superseded,
+    );
   });
 
   const completeRun = Effect.fn("Storage.completeRun")(function* (
@@ -700,19 +720,21 @@ export const campaignOperations = (
     runToken: string,
     now: string,
   ) {
-    const outcome = yield* updateIf("completeRun", {
-      Key: campaignKey(id),
-      UpdateExpression: "SET #state = :completed, finishedAt = :now REMOVE #cursor, sliceId",
-      ConditionExpression: "#state = :sending AND runToken = :run",
-      ExpressionAttributeNames: stateAndCursorNames,
-      ExpressionAttributeValues: {
-        ":completed": str("completed"),
-        ":now": str(now),
-        ...sendingAndRun(runToken),
+    yield* updateIf(
+      "completeRun",
+      {
+        Key: campaignKey(id),
+        UpdateExpression: "SET #state = :completed, finishedAt = :now REMOVE #cursor, sliceId",
+        ConditionExpression: "#state = :sending AND runToken = :run",
+        ExpressionAttributeNames: stateAndCursorNames,
+        ExpressionAttributeValues: {
+          ":completed": str("completed"),
+          ":now": str(now),
+          ...sendingAndRun(runToken),
+        },
       },
-    });
-
-    return outcome.applied ? ("completed" as const) : ("stale" as const);
+      superseded,
+    );
   });
 
   const pauseRun = Effect.fn("Storage.pauseRun")(function* (
@@ -723,7 +745,7 @@ export const campaignOperations = (
   ) {
     const values = { ":paused": str("paused"), ":reason": str(reason), ...sendingAndRun(runToken) };
 
-    const outcome = yield* updateIf(
+    yield* updateIf(
       "pauseRun",
       cursor === undefined
         ? {
@@ -740,14 +762,14 @@ export const campaignOperations = (
             ExpressionAttributeNames: stateAndCursorNames,
             ExpressionAttributeValues: { ...values, ":cursor": str(cursor) },
           },
+      superseded,
     );
-
-    return outcome.applied ? ("paused" as const) : ("stale" as const);
   });
 
   // One fixed shape: the caller merges the change into the whole draft, so META's editable fields
   // and BODY are rewritten together, and only while the campaign is still a draft. A campaign
-  // deleted meanwhile fails the same condition, since its state no longer exists.
+  // deleted meanwhile fails the same condition, since its state no longer exists, and the item the
+  // condition returns tells the two apart.
   const updateDraft = Effect.fn("Storage.updateDraft")(function* (campaign: Schemas.Campaign) {
     const values = {
       ":subject": str(campaign.subject),
@@ -755,49 +777,45 @@ export const campaignOperations = (
       ":draft": str("draft"),
     };
 
-    const outcome = yield* runTransaction("updateDraft", {
-      TransactItems: [
-        {
-          Update: {
-            Table: tableLogicalId,
-            Key: campaignKey(campaign.id),
-            ConditionExpression: "#state = :draft",
-            ExpressionAttributeNames: draftNames,
-            ...(campaign.filter === undefined
-              ? {
-                  UpdateExpression: "SET subject = :subject, listId = :listId REMOVE #filter",
-                  ExpressionAttributeValues: values,
-                }
-              : {
-                  UpdateExpression: "SET subject = :subject, listId = :listId, #filter = :filter",
-                  ExpressionAttributeValues: { ...values, ":filter": strMap(campaign.filter) },
-                }),
-          },
+    yield* transact("updateDraft", [
+      {
+        Update: {
+          Table: tableLogicalId,
+          Key: campaignKey(campaign.id),
+          ConditionExpression: "#state = :draft",
+          ExpressionAttributeNames: draftNames,
+          ReturnValuesOnConditionCheckFailure: "ALL_OLD",
+          ...(campaign.filter === undefined
+            ? {
+                UpdateExpression: "SET subject = :subject, listId = :listId REMOVE #filter",
+                ExpressionAttributeValues: values,
+              }
+            : {
+                UpdateExpression: "SET subject = :subject, listId = :listId, #filter = :filter",
+                ExpressionAttributeValues: { ...values, ":filter": strMap(campaign.filter) },
+              }),
         },
-        { Put: { Table: tableLogicalId, Item: yield* bodyItem(campaign) } },
-      ],
-    });
-
-    return outcome.committed ? ("updated" as const) : ("conflict" as const);
+        refused: notADraft("updateDraft"),
+      },
+      { Put: { Table: tableLogicalId, Item: yield* bodyItem(campaign) } },
+    ]);
   });
 
   const deleteDraft = Effect.fn("Storage.deleteDraft")(function* (id: string) {
-    const outcome = yield* runTransaction("deleteDraft", {
-      TransactItems: [
-        {
-          Delete: {
-            Table: tableLogicalId,
-            Key: campaignKey(id),
-            ConditionExpression: "#state = :draft",
-            ExpressionAttributeNames: stateName,
-            ExpressionAttributeValues: { ":draft": str("draft") },
-          },
+    yield* transact("deleteDraft", [
+      {
+        Delete: {
+          Table: tableLogicalId,
+          Key: campaignKey(id),
+          ConditionExpression: "#state = :draft",
+          ExpressionAttributeNames: stateName,
+          ExpressionAttributeValues: { ":draft": str("draft") },
+          ReturnValuesOnConditionCheckFailure: "ALL_OLD",
         },
-        { Delete: { Table: tableLogicalId, Key: bodyKey(id) } },
-      ],
-    });
-
-    return outcome.committed ? ("deleted" as const) : ("conflict" as const);
+        refused: notADraft("deleteDraft"),
+      },
+      { Delete: { Table: tableLogicalId, Key: bodyKey(id) } },
+    ]);
   });
 
   return {

@@ -820,8 +820,8 @@ describe("the deployed table", () => {
         const contactId = yield* contactFor(storage, yield* uniqueAddress);
         yield* storage.createList({ id: listId, name: "condition probe", createdAt: now });
 
-        expect(yield* storage.addMember(listId, contactId, now)).toBe("added");
-        expect(yield* storage.addMember(listId, contactId, now)).toBe("already-member");
+        yield* storage.addMember(listId, contactId, now);
+        yield* storage.addMember(listId, contactId, now);
 
         const members = yield* storage.listMembers(listId, 100, undefined);
 
@@ -854,7 +854,7 @@ describe("the deployed table", () => {
         // refused attempt had left either behind.
         yield* storage.createList({ id: listId, name: "missing-list probe", createdAt: now });
 
-        expect(yield* storage.addMember(listId, contactId, now)).toBe("added");
+        yield* storage.addMember(listId, contactId, now);
 
         yield* storage.deleteList(listId);
         yield* storage.deleteContact(contactId);
@@ -1117,7 +1117,7 @@ describe("the deployed contact identity", () => {
         // membership slots hold.
         yield* storage.createContact({ id, email, createdAt: now });
 
-        expect(yield* storage.addMember(listId, id, now)).toBe("added");
+        yield* storage.addMember(listId, id, now);
 
         yield* storage.deleteList(listId);
         yield* storage.deleteContact(id);
@@ -1181,7 +1181,7 @@ describe("the deployed delete cascade", () => {
 
         yield* storage.createList({ id: listId, name: "page probe", createdAt: now });
 
-        expect(yield* storage.addMember(listId, rebuilt, now)).toBe("added");
+        yield* storage.addMember(listId, rebuilt, now);
 
         yield* storage.deleteList(listId);
 
@@ -1201,7 +1201,7 @@ describe("the deployed delete cascade", () => {
    * The move is made from inside the import's own commit, after its advisory read, rather than by
    * racing two clients — so this asserts that DynamoDB evaluates the condition, not the scheduler.
    */
-  it("refuses an import whose address changed hands after it read the holder", () =>
+  it("retries an import whose address changed hands after it read the holder", () =>
     live(
       Effect.gen(function* () {
         const settings = yield* configuration;
@@ -1227,30 +1227,27 @@ describe("the deployed delete cascade", () => {
 
         const interleaved = yield* liveStorage(settings.tableName, moveBeforeCommit);
 
-        const attempt = yield* Effect.result(
-          interleaved.importContacts(
-            listId,
-            [{ id: original, email: address, createdAt: now }],
-            yield* nowIso,
-          ),
+        const candidate = yield* newIdentifier;
+
+        // DynamoDB refused the stale holder; the retry read the address afresh, found it free and
+        // created a contact for it, which is what now holds.
+        const imported = yield* interleaved.importContacts(
+          listId,
+          [{ id: candidate, email: address, createdAt: now }],
+          yield* nowIso,
         );
 
-        // DynamoDB refused the stale holder: the import wrote nothing and answers a retryable 503.
-        const refusal = Result.isFailure(attempt) ? attempt.failure : undefined;
-
-        expect(refusal).toStrictEqual(
-          new Errors.StorageUnavailable({
-            operation: "importContacts",
-            failure: "ConditionalCheckFailed",
-          }),
-        );
+        expect(imported.contacts).toStrictEqual([
+          { email: address, contactId: candidate, member: true },
+        ]);
 
         const members = yield* storage.listMembers(listId, 25, undefined);
 
-        expect(members.items.map((contact) => contact.id)).not.toContain(original);
+        expect(members.items.map((contact) => contact.id)).toStrictEqual([candidate]);
 
         yield* storage.deleteList(listId);
         yield* storage.deleteContact(original);
+        yield* storage.deleteContact(candidate);
       }),
     ));
 });

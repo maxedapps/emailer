@@ -22,7 +22,7 @@ import { CampaignWake } from "./Dispatch.ts";
 import { Mailer } from "./Mailer.ts";
 import { SendGuard } from "./SendGuard.ts";
 import { AudienceStore } from "../storage/Audience.ts";
-import { CampaignStore } from "../storage/Campaigns.ts";
+import { CampaignStore, RunSuperseded, SettlementNotApplied } from "../storage/Campaigns.ts";
 import { unusedAudience, unusedCampaigns } from "../storage/Testing.ts";
 
 import type { AddressStatus, PauseReason, SkipReason } from "@emailer/api/Schemas";
@@ -156,30 +156,23 @@ const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> 
       getCampaignBody: () =>
         Effect.succeed(world.html === undefined ? { text } : { text, html: world.html }),
       beginRun: (_id, token) =>
-        Effect.sync(() => {
-          if (world.beginOutcome === "stale" || token !== world.runToken) {
-            return "stale" as const;
-          }
-
-          return {
-            outcome: "running" as const,
-            campaign: {
+        world.beginOutcome === "stale" || token !== world.runToken
+          ? Effect.fail(new RunSuperseded())
+          : Effect.succeed({
               listId,
               subject,
               cursor: world.cursor,
               filter: world.filter,
               run: world.run,
-            },
-          };
-        }),
+            }),
       claimRecipient: (_id, token, contactId, recipient, sendId) =>
-        Effect.sync(() => {
+        Effect.suspend(() => {
           if (token !== world.runToken) {
-            return "stale" as const;
+            return Effect.fail(new RunSuperseded());
           }
 
           if (world.rows.has(contactId)) {
-            return "already-claimed" as const;
+            return Effect.succeed("already-claimed" as const);
           }
 
           world.rows.set(contactId, {
@@ -190,16 +183,16 @@ const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> 
           });
           world.claims.push(contactId);
 
-          return "claimed" as const;
+          return Effect.succeed("claimed" as const);
         }),
       skipRecipient: (_id, token, contactId, recipient, reason) =>
-        Effect.sync(() => {
+        Effect.suspend(() => {
           if (token !== world.runToken) {
-            return "stale" as const;
+            return Effect.fail(new RunSuperseded());
           }
 
           if (world.rows.has(contactId)) {
-            return "already-claimed" as const;
+            return Effect.succeed("already-claimed" as const);
           }
 
           world.rows.set(contactId, {
@@ -211,14 +204,14 @@ const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> 
           world.skips.push({ contactId, reason });
           world.counters.skipped += 1;
 
-          return "skipped" as const;
+          return Effect.succeed("skipped" as const);
         }),
       settleRecipient: (_id, sendId, contactId, settlement) =>
-        Effect.sync(() => {
+        Effect.suspend(() => {
           const row = world.rows.get(contactId);
 
           if (row === undefined || row.sendId !== sendId || row.state !== "unconfirmed") {
-            return "not-current" as const;
+            return Effect.fail(new SettlementNotApplied());
           }
 
           const settled: RecipientRow = {
@@ -239,43 +232,43 @@ const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> 
           world.settlements.push({ contactId, settlement });
           world.counters[settlement.outcome] += 1;
 
-          return "settled" as const;
+          return Effect.void;
         }),
       checkpoint: (_id, token, sliceId, previous, next) =>
-        Effect.sync(() => {
+        Effect.suspend(() => {
           if (token !== world.runToken) {
-            return "condition-failed" as const;
+            return Effect.fail(new RunSuperseded());
           }
 
           world.checkpoints.push({ sliceId, previous, next });
 
           if (world.checkpointOutcome === "condition-failed") {
-            return "condition-failed" as const;
+            return Effect.fail(new RunSuperseded());
           }
 
           world.cursor = next;
 
-          return "updated" as const;
+          return Effect.void;
         }),
       completeRun: (_id, token) =>
-        Effect.sync(() => {
+        Effect.suspend(() => {
           if (token !== world.runToken) {
-            return "stale" as const;
+            return Effect.fail(new RunSuperseded());
           }
 
           world.completed += 1;
 
-          return "completed" as const;
+          return Effect.void;
         }),
       pauseRun: (_id, token, reason, cursor) =>
-        Effect.sync(() => {
+        Effect.suspend(() => {
           if (token !== world.runToken) {
-            return "stale" as const;
+            return Effect.fail(new RunSuperseded());
           }
 
           world.paused.push({ reason, cursor });
 
-          return "paused" as const;
+          return Effect.void;
         }),
     }),
   );
@@ -444,6 +437,42 @@ const runSliceNow = (fix: Fixture, extraDeadline = sliceTimeout) =>
     ).pipe(Effect.provide(fix.layer));
   });
 
+interface LogEntry {
+  readonly level: string;
+  readonly message: unknown;
+}
+
+/** A slice run with its log lines kept, and the lines a message names. */
+const runSliceLogged = (
+  fix: Fixture,
+  replaced: Layer.Layer<never> | Layer.Layer<Mailer> = Layer.empty,
+) =>
+  Effect.gen(function* () {
+    const entries: Array<LogEntry> = [];
+
+    const logger = Logger.layer([
+      Logger.make((options) => {
+        entries.push({ level: options.logLevel, message: options.message });
+      }),
+    ]);
+
+    const now = yield* Clock.currentTimeMillis;
+
+    const attempt = yield* Effect.result(
+      runSlice({ campaignId, runToken }, now + Duration.toMillis(sliceTimeout)),
+    ).pipe(Effect.provide(Layer.mergeAll(fix.layer, replaced, logger)));
+
+    const named = (name: string) =>
+      entries.filter((entry) => {
+        // SAFETY: Effect.logInfo(message, data) reaches a logger as [message, data].
+        const recorded = entry.message as ReadonlyArray<unknown> | string | undefined;
+
+        return Array.isArray(recorded) ? recorded[0] === name : recorded === name;
+      });
+
+    return { attempt, named };
+  });
+
 const successOf = <A, E>(attempt: Result.Result<A, E>): A => {
   if (Result.isFailure(attempt)) {
     throw new Error("Expected the slice to succeed");
@@ -568,47 +597,20 @@ describe("runSlice", () => {
   it.effect("submits nothing when the run token is stale", () =>
     Effect.gen(function* () {
       const fix = fixture({ beginOutcome: "stale" });
-      const entries: Array<{ readonly level: string; readonly message: unknown }> = [];
-      const now = yield* Clock.currentTimeMillis;
-
-      const attempt = yield* Effect.result(
-        runSlice({ campaignId, runToken }, now + Duration.toMillis(sliceTimeout)),
-      ).pipe(
-        Effect.provide(
-          Layer.mergeAll(
-            fix.layer,
-            Logger.layer([
-              Logger.make((options) => {
-                entries.push({ level: options.logLevel, message: options.message });
-              }),
-            ]),
-          ),
-        ),
-      );
+      const { attempt, named } = yield* runSliceLogged(fix);
 
       successOf(attempt);
-
       expect(fix.world.claims).toHaveLength(0);
       expect(fix.mailer.sent).toHaveLength(0);
       expect(fix.world.listCalls).toHaveLength(0);
       expect(fix.world.settlements).toHaveLength(0);
       expect(fix.world.completed).toBe(0);
       expect(fix.wake.messages).toHaveLength(0);
-
-      const stale = entries.filter((entry) => {
-        // SAFETY: Effect.logInfo(message, data) reaches a logger as [message, data].
-        const recorded = entry.message as ReadonlyArray<unknown> | string | undefined;
-
-        return Array.isArray(recorded)
-          ? recorded[0] === "stale wake discarded"
-          : recorded === "stale wake discarded";
-      });
-
-      expect(stale).toHaveLength(1);
-      expect(stale[0]?.level).toBe("Info");
-      expect(stale[0]?.message).toStrictEqual([
-        "stale wake discarded",
-        { campaignId, runToken, disposition: "stale" },
+      expect(named("stale wake discarded")).toStrictEqual([
+        {
+          level: "Info",
+          message: ["stale wake discarded", { campaignId, runToken, disposition: "stale" }],
+        },
       ]);
     }),
   );
@@ -680,7 +682,7 @@ describe("runSlice", () => {
     }),
   );
 
-  it.effect("enqueues nothing when a checkpoint is lost", () =>
+  it.effect("ends the slice as stale, enqueueing nothing, when its checkpoint is lost", () =>
     Effect.gen(function* () {
       const fix = fixture({
         members: [memberA],
@@ -688,12 +690,42 @@ describe("runSlice", () => {
         checkpointOutcome: "condition-failed",
       });
 
-      successOf(yield* runSliceNow(fix));
+      const { attempt, named } = yield* runSliceLogged(fix);
 
+      successOf(attempt);
       expect(fix.world.counters.accepted).toBe(1);
       expect(fix.world.checkpoints).toHaveLength(1);
       expect(fix.wake.messages).toHaveLength(0);
       expect(fix.world.completed).toBe(0);
+      expect(named("stale wake discarded")).toHaveLength(1);
+    }),
+  );
+
+  it.effect("logs a settlement another attempt already applied, and carries on", () =>
+    Effect.gen(function* () {
+      const fix = fixture({ members: [memberA, memberB] });
+
+      // Another attempt settles memberA's row while this one's submission is in flight.
+      const racing = Layer.succeed(Mailer)({
+        send: (recipient) =>
+          Effect.sync(() => {
+            const row = fix.world.rows.get(memberA.id);
+
+            if (recipient === memberA.email && row !== undefined) {
+              fix.world.rows.set(memberA.id, { ...row, sendId: "another-attempt" });
+            }
+
+            return { outcome: "accepted" as const, messageId: `message-${recipient}` };
+          }),
+      });
+
+      const { attempt, named } = yield* runSliceLogged(fix, racing);
+
+      successOf(attempt);
+      expect(named("settlement not applied")).toHaveLength(1);
+      expect(named("settlement not applied")[0]?.level).toBe("Warn");
+      expect(fix.world.settlements.map((settled) => settled.contactId)).toStrictEqual([memberB.id]);
+      expect(fix.world.completed).toBe(1);
     }),
   );
 

@@ -1,6 +1,16 @@
-import type * as dynamodb from "@distilled.cloud/aws/dynamodb";
+import * as dynamodb from "@distilled.cloud/aws/dynamodb";
 import type * as AWS from "alchemy/AWS";
-import { Data, Duration, Effect, Predicate, Random, Schedule, Schema } from "effect";
+import {
+  Data,
+  Duration,
+  Effect,
+  ErrorReporter,
+  Predicate,
+  Random,
+  Result,
+  Schedule,
+  Schema,
+} from "effect";
 
 import { StorageUnavailable } from "@emailer/api/Errors";
 
@@ -11,20 +21,39 @@ import type { TableOperations } from "./Items.ts";
 
 const conditionalCheckFailed = "ConditionalCheckFailed";
 
-const CancellationCodes = Schema.UndefinedOr(
-  Schema.Array(Schema.Struct({ Code: Schema.optional(Schema.String) })),
-);
-
-const decodeCancellationCodes = Schema.decodeUnknownEffect(CancellationCodes);
-
 /** Every failure of a table call: the store was unreachable, timed out, or refused the request. */
 const storageUnavailable = (operation: string) => unavailable(StorageUnavailable, operation);
 
-type TransactionOutcome =
-  | { readonly committed: true }
-  | { readonly committed: false; readonly conditionFailures: ReadonlySet<number> };
+/** The item a failed condition was checked against, when the request asked for it (`ALL_OLD`). */
+export type StoredItem = dynamodb.AttributeMap | undefined;
 
-const committed: TransactionOutcome = { committed: true };
+/** What a failed condition means: a typed failure, decided from the stored item if it came back. */
+type Refuse<E> = (current: StoredItem) => Effect.Effect<never, E>;
+
+/**
+ * The SDK types a failed condition's item and a cancellation's reasons as `any`, and exports the
+ * schemas that type them precisely.
+ */
+const fromSdk = <T>(schema: Schema.Schema<T>) =>
+  // SAFETY: the SDK's generated schemas are plain data schemas, which need no services to decode.
+  schema as Schema.Codec<T, unknown>;
+
+const decodeStoredItem = Schema.decodeUnknownEffect(
+  Schema.UndefinedOr(Schema.Record(Schema.String, fromSdk(dynamodb.AttributeValue))),
+);
+
+const decodeReasons = Schema.decodeUnknownEffect(
+  Schema.UndefinedOr(Schema.Array(fromSdk(dynamodb.CancellationReason))),
+);
+
+/** A condition failed that no caller gave a meaning to: it cannot happen, so it is a defect. */
+export class UnexpectedCondition extends Data.TaggedError("UnexpectedCondition")<{
+  readonly operation: string;
+}> {
+  override get [ErrorReporter.attributes]() {
+    return { operation: this.operation };
+  }
+}
 
 /**
  * A transaction cancelled because its items collided with another in-flight transaction applied
@@ -136,34 +165,35 @@ export const writePrimitives = (operations: Pick<TableOperations, "putItem">) =>
 
 export type WritePrimitives = ReturnType<typeof writePrimitives>;
 
-type UpdateIfResult =
-  | { readonly applied: true; readonly attributes: dynamodb.AttributeMap | undefined }
-  | { readonly applied: false };
-
 export const updatePrimitives = (operations: Pick<TableOperations, "updateItem">) => {
   /**
-   * A conditional single-item update whose failed condition is a documented outcome. `ReturnValues`
-   * is honoured so a caller can read the item that was written; any other error, including a
-   * timeout, is still unavailable.
+   * A conditional single-item update, answering the item as `ReturnValues` asks. A failed
+   * condition is `refused`, given the stored item if the request asked for it; any other error,
+   * including a timeout, is unavailable.
    *
    * The client retries transient answers, including a lost response, so the request may land
    * twice. `UpdateItem` has no idempotency token; what makes the repeat safe is the caller's
    * condition, which must hold both before and after the write for the actor that wrote it — a
    * run token, a slice identifier, the value being set — so a second landing applies the same
-   * values or reports `applied` just as the first did.
+   * values rather than being refused.
    */
-  const updateIf = (
-    operationId: string,
+  const updateIf = <E>(
+    operation: string,
     request: AWS.DynamoDB.UpdateItemRequest,
-  ): Effect.Effect<UpdateIfResult, StorageUnavailable> =>
-    operations.updateItem(request).pipe(
-      Effect.map((output): UpdateIfResult => ({ applied: true, attributes: output.Attributes })),
-      Effect.catchTag("ConditionalCheckFailedException", () =>
-        Effect.succeed<UpdateIfResult>({ applied: false }),
-      ),
-      Effect.timeout(operationTimeout),
-      Effect.mapError(storageUnavailable(operationId)),
-    );
+    refused: Refuse<E>,
+  ) =>
+    Effect.gen(function* () {
+      const outcome = yield* operations.updateItem(request).pipe(
+        Effect.map((output) => Result.succeed(output.Attributes)),
+        Effect.catchTag("ConditionalCheckFailedException", (failure) =>
+          decodeStoredItem(failure.Item).pipe(corrupt(operation), Effect.map(Result.fail)),
+        ),
+        Effect.timeout(operationTimeout),
+        Effect.mapError(storageUnavailable(operation)),
+      );
+
+      return Result.isSuccess(outcome) ? outcome.success : yield* refused(outcome.failure);
+    });
 
   return { updateIf } as const;
 };
@@ -344,11 +374,30 @@ const pagePrimitives = (primitives: QueryPrimitives & BatchPrimitives) => {
 
 export type PagePrimitives = ReturnType<typeof pagePrimitives>;
 
+type TransactItem = AWS.DynamoDB.TransactWriteItemsRequest["TransactItems"][number];
+
 /**
- * A transaction request as the store writes it: the idempotency token is the primitive's to add,
- * one per logical call, and never the caller's.
+ * One action of a transaction. `refused` names what its failed condition means; an action whose
+ * condition can only fail through a bug declares none.
  */
-export type TransactionRequest = Omit<AWS.DynamoDB.TransactWriteItemsRequest, "ClientRequestToken">;
+export type Action<E = never> = TransactItem & { readonly refused?: Refuse<E> };
+
+/** The failures a transaction's actions declare. */
+type Refusal<A> = A extends { readonly refused?: infer Refuses }
+  ? Refuses extends Refuse<infer E>
+    ? E
+    : never
+  : never;
+
+const withoutRefusal = <E>({ refused: _refused, ...item }: Action<E>): TransactItem => item;
+
+/** A cancellation that only condition failures caused, as opposed to a conflict or a throttle. */
+const onlyConditionsFailed = (
+  reasons: ReadonlyArray<dynamodb.CancellationReason> | undefined,
+): reasons is ReadonlyArray<dynamodb.CancellationReason> =>
+  reasons !== undefined &&
+  reasons.some((reason) => reason.Code === conditionalCheckFailed) &&
+  reasons.every((reason) => reason.Code === conditionalCheckFailed || reason.Code === "None");
 
 /** A fresh token per logical transaction; at most 36 characters, which a UUID exactly fills. */
 export type TransactionTokens = Effect.Effect<string>;
@@ -358,56 +407,62 @@ export const transactionPrimitives = (
   tokens: TransactionTokens,
 ) => {
   /**
-   * A transaction whose cancelled condition checks are a documented outcome.
+   * A transaction whose failed conditions fail it with what their actions declare. Of the actions
+   * whose condition failed, the first in declaration order that declares a refusal decides, so the
+   * order of the actions is the order of precedence.
    *
    * Every logical call carries its own `ClientRequestToken`. DynamoDB then treats a repeat of the
    * identical request within ten minutes as the same call and answers success without applying it
    * again, which is what makes the client's default transient retries safe here: a lost response
    * is resent, not misread as a condition failure. A cancellation whose reasons are only
    * `TransactionConflict` or `None` applied nothing and is retried as a **new** call with a new
-   * token, since nothing documents how a cancelled token replays. A mix with
-   * `ConditionalCheckFailed` is a business outcome, classified below; any other reason is
+   * token, since nothing documents how a cancelled token replays. Any other mix of reasons is
    * unavailable. The timeout wraps the whole sequence.
    */
-  const runTransaction = (
-    operationId: string,
-    request: TransactionRequest,
-  ): Effect.Effect<TransactionOutcome, StorageUnavailable> =>
-    tokens.pipe(
-      Effect.flatMap((token) =>
-        operations.transactWriteItems({ ...request, ClientRequestToken: token }).pipe(
-          Effect.as(committed),
-          Effect.catchTag("TransactionCanceledException", (failure) =>
-            decodeCancellationCodes(failure.CancellationReasons).pipe(
-              Effect.mapError(() => failure),
-              Effect.flatMap((reasons) => {
-                const conditionFailures = new Set<number>();
-                let hasOtherReason = false;
+  const transact = <const Actions extends ReadonlyArray<Action<unknown>>>(
+    operation: string,
+    actions: Actions,
+  ): Effect.Effect<void, Refusal<Actions[number]> | StorageUnavailable> =>
+    Effect.gen(function* () {
+      // SAFETY: each action's refusal fails with the error it declares, and `Refusal` is the union
+      // of those; the tuple's element type only loses which action declares which.
+      const declared = actions as ReadonlyArray<Action<Refusal<Actions[number]>>>;
 
-                (reasons ?? []).forEach((reason, index) => {
-                  if (reason.Code === conditionalCheckFailed) {
-                    conditionFailures.add(index);
-                  } else if (reason.Code !== undefined && reason.Code !== "None") {
-                    hasOtherReason = true;
-                  }
-                });
-
-                if (hasOtherReason || conditionFailures.size === 0) {
-                  return Effect.fail(failure);
-                }
-
-                return Effect.succeed<TransactionOutcome>({ committed: false, conditionFailures });
-              }),
-            ),
+      const cancelled = yield* tokens.pipe(
+        Effect.flatMap((token) =>
+          operations.transactWriteItems({
+            TransactItems: declared.map(withoutRefusal),
+            ClientRequestToken: token,
+          }),
+        ),
+        Effect.retry({ schedule: conflictRetry, while: isConflictCancellation }),
+        Effect.as(undefined),
+        Effect.catchTag("TransactionCanceledException", (failure) =>
+          decodeReasons(failure.CancellationReasons).pipe(
+            corrupt(operation),
+            Effect.filterOrFail(onlyConditionsFailed, () => failure),
           ),
         ),
-      ),
-      Effect.retry({ schedule: conflictRetry, while: isConflictCancellation }),
-      Effect.timeout(operationTimeout),
-      Effect.mapError(storageUnavailable(operationId)),
-    );
+        Effect.timeout(operationTimeout),
+        Effect.mapError(storageUnavailable(operation)),
+      );
 
-  return { runTransaction } as const;
+      if (cancelled === undefined) {
+        return;
+      }
+
+      for (const [index, reason] of cancelled.entries()) {
+        const refused = declared[index]?.refused;
+
+        if (reason.Code === conditionalCheckFailed && refused !== undefined) {
+          return yield* refused(reason.Item);
+        }
+      }
+
+      return yield* Effect.die(new UnexpectedCondition({ operation }));
+    });
+
+  return { transact } as const;
 };
 
 export type TransactionPrimitives = ReturnType<typeof transactionPrimitives>;

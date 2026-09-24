@@ -65,12 +65,18 @@ class ContactsGroup extends HttpApiGroup.make("contacts")
       params: { id: Schemas.EntityId },
       payload: Schemas.UpdateContactPayload,
       success: Schemas.Contact,
-      error: [...storage, Errors.ContactNotFound, Errors.EmailAlreadyUsed, Errors.AddressOptedOut],
+      error: [
+        ...storage,
+        Errors.ContactNotFound,
+        Errors.EmailAlreadyUsed,
+        Errors.AddressOptedOut,
+        Errors.ContactChanged,
+      ],
     }),
     HttpApiEndpoint.delete("remove", "/:id", {
       params: { id: Schemas.EntityId },
       success: HttpApiSchema.NoContent,
-      error: [...storage, Errors.ContactNotFound],
+      error: [...storage, Errors.ContactNotFound, Errors.ContactChanged],
     }),
   )
   .prefix("/contacts") {}
@@ -123,7 +129,7 @@ class ListsGroup extends HttpApiGroup.make("lists")
       params: { listId: Schemas.EntityId },
       payload: Schemas.ImportContactsPayload,
       success: Schemas.ImportContactsResult,
-      error: [...storage, Errors.ListNotFound],
+      error: [...storage, Errors.ListNotFound, Errors.ContactChanged],
     }),
   )
   .prefix("/lists") {}

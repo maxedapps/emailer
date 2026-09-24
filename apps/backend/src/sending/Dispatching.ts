@@ -57,177 +57,166 @@ const matchesFilter = (
   attributes: Schemas.ContactAttributes | undefined,
 ) => Object.entries(filter).every(([key, value]) => attributes?.[key] === value);
 
-export const runSlice = Effect.fn("Dispatching.runSlice")(function* (
-  message: DispatchMessage,
-  deadline: number,
-) {
-  const campaigns = yield* CampaignStore;
-  const audience = yield* AudienceStore;
-  const wake = yield* CampaignWake;
-  const guards = yield* SendGuard;
+/**
+ * One page of a campaign run. A write that finds the run is no longer the campaign's ends the slice
+ * as `RunSuperseded`: the wake-up that started it was stale, or went stale while it ran.
+ */
+export const runSlice = Effect.fn("Dispatching.runSlice")(
+  function* (message: DispatchMessage, deadline: number) {
+    const campaigns = yield* CampaignStore;
+    const audience = yield* AudienceStore;
+    const wake = yield* CampaignWake;
+    const guards = yield* SendGuard;
 
-  // Names this slice on the checkpoint it writes, so a retried checkpoint is recognised as its own.
-  const sliceId = yield* newIdentifier;
-  const begun = yield* campaigns.beginRun(message.campaignId, message.runToken, yield* nowIso);
+    // Names this slice on the checkpoint it writes, so a retried checkpoint is recognised as its own.
+    const sliceId = yield* newIdentifier;
 
-  if (begun === "stale") {
-    yield* Effect.logInfo("stale wake discarded", {
-      campaignId: message.campaignId,
-      runToken: message.runToken,
-      disposition: "stale",
-    });
+    const {
+      listId,
+      subject,
+      cursor: previous,
+      filter,
+      run,
+    } = yield* campaigns.beginRun(message.campaignId, message.runToken, yield* nowIso);
 
-    return;
-  }
+    const guard = yield* guards.current;
 
-  const { listId, subject, cursor: previous, filter } = begun.campaign;
-  const run = begun.campaign.run;
-  const guard = yield* guards.current;
+    if (guard.refusal !== undefined) {
+      yield* campaigns.pauseRun(message.campaignId, message.runToken, guard.refusal, previous);
 
-  if (guard.refusal !== undefined) {
-    yield* campaigns.pauseRun(message.campaignId, message.runToken, guard.refusal, previous);
-
-    return;
-  }
-
-  if (
-    (run.accepted >= breaker.bounce.minimumAccepted &&
-      run.bounced * 100 >= run.accepted * breaker.bounce.percent) ||
-    (run.accepted >= breaker.complaint.minimumAccepted &&
-      run.complained * 1000 >= run.accepted * breaker.complaint.perMille)
-  ) {
-    yield* campaigns.pauseRun(message.campaignId, message.runToken, "feedback", previous);
-
-    return;
-  }
-
-  // A list deleted mid-run leaves nobody to send to, so the run completes.
-  const page = yield* audience
-    .listMembers(listId, memberPageSize, previous)
-    .pipe(Effect.catchTag("ListNotFound", () => Effect.undefined));
-
-  if (page === undefined) {
-    yield* campaigns.completeRun(message.campaignId, message.runToken, yield* nowIso);
-
-    return;
-  }
-
-  const { text, html } = yield* campaigns.getCampaignBody(message.campaignId);
-  const content: MessageContent = { subject, text, html };
-  // ExclusiveStartKey of the last member this slice finished (skip, settle, or
-  // already-claimed). A budget overrun before sending N checkpoints here so
-  // the next page starts after N-1.
-  let lastProcessed: string | undefined;
-
-  const enqueueAfterCheckpoint = (next: string) =>
-    Effect.gen(function* () {
-      const outcome = yield* campaigns.checkpoint(
-        message.campaignId,
-        message.runToken,
-        sliceId,
-        previous,
-        next,
-      );
-
-      if (outcome === "updated") {
-        yield* wake.enqueue(message.campaignId, message.runToken);
-      }
-    });
-
-  for (const member of page.items) {
-    // A member the filter excludes is not a recipient, so it gets no row and no
-    // counter; re-paging re-evaluates the same pure function, so nothing needs
-    // recording; it sits before the status read so a miss costs no read.
-    if (filter !== undefined && !matchesFilter(filter, member.attributes)) {
-      lastProcessed = member.id;
-      continue;
+      return;
     }
 
-    const status = yield* audience.addressStatus(member.email);
-    const now = yield* nowIso;
+    if (
+      (run.accepted >= breaker.bounce.minimumAccepted &&
+        run.bounced * 100 >= run.accepted * breaker.bounce.percent) ||
+      (run.accepted >= breaker.complaint.minimumAccepted &&
+        run.complained * 1000 >= run.accepted * breaker.complaint.perMille)
+    ) {
+      yield* campaigns.pauseRun(message.campaignId, message.runToken, "feedback", previous);
 
-    if (status !== "mailable") {
-      const skipped = yield* campaigns.skipRecipient(
+      return;
+    }
+
+    // A list deleted mid-run leaves nobody to send to, so the run completes.
+    const page = yield* audience
+      .listMembers(listId, memberPageSize, previous)
+      .pipe(Effect.catchTag("ListNotFound", () => Effect.undefined));
+
+    if (page === undefined) {
+      yield* campaigns.completeRun(message.campaignId, message.runToken, yield* nowIso);
+
+      return;
+    }
+
+    const { text, html } = yield* campaigns.getCampaignBody(message.campaignId);
+    const content: MessageContent = { subject, text, html };
+    // ExclusiveStartKey of the last member this slice finished (skip, settle, or
+    // already-claimed). A budget overrun before sending N checkpoints here so
+    // the next page starts after N-1.
+    let lastProcessed: string | undefined;
+
+    const enqueueAfterCheckpoint = (next: string) =>
+      campaigns
+        .checkpoint(message.campaignId, message.runToken, sliceId, previous, next)
+        .pipe(Effect.andThen(wake.enqueue(message.campaignId, message.runToken)));
+
+    for (const member of page.items) {
+      // A member the filter excludes is not a recipient, so it gets no row and no
+      // counter; re-paging re-evaluates the same pure function, so nothing needs
+      // recording; it sits before the status read so a miss costs no read.
+      if (filter !== undefined && !matchesFilter(filter, member.attributes)) {
+        lastProcessed = member.id;
+        continue;
+      }
+
+      const status = yield* audience.addressStatus(member.email);
+      const now = yield* nowIso;
+
+      if (status !== "mailable") {
+        // Skipped now or settled by an earlier slice, either way this member is done.
+        yield* campaigns.skipRecipient(
+          message.campaignId,
+          message.runToken,
+          member.id,
+          member.email,
+          status,
+          now,
+        );
+
+        lastProcessed = member.id;
+        continue;
+      }
+
+      const delay = yield* guards.slot(guard.limit);
+      const remaining = yield* remainingUntil(deadline);
+
+      if (Duration.isGreaterThan(reservationFor(delay), remaining)) {
+        if (lastProcessed === undefined) {
+          return yield* new SliceOverrun();
+        }
+
+        yield* enqueueAfterCheckpoint(lastProcessed);
+
+        return;
+      }
+
+      // Minted before the claim: a claimed row is only ever settled by a submission, so a link that
+      // cannot be minted must stop the slice while the member is still unclaimed.
+      const unsubscribeUrl = yield* unsubscribeLink(member.email).pipe(Effect.orDie);
+
+      const sendId = yield* newIdentifier;
+
+      const claimed = yield* campaigns.claimRecipient(
         message.campaignId,
         message.runToken,
         member.id,
         member.email,
-        status,
+        sendId,
         now,
       );
 
-      if (skipped === "stale") {
+      if (claimed === "already-claimed") {
+        lastProcessed = member.id;
+        continue;
+      }
+
+      const submitted = yield* submitClaimed({
+        recipient: member.email,
+        content,
+        unsubscribeUrl,
+        campaignId: message.campaignId,
+        sendId,
+        contactId: member.id,
+        runToken: message.runToken,
+        limit: guard.limit,
+        firstDelay: delay,
+      });
+
+      if (submitted === "stop") {
         return;
       }
 
       lastProcessed = member.id;
-      continue;
     }
 
-    const delay = yield* guards.slot(guard.limit);
-    const remaining = yield* remainingUntil(deadline);
-
-    if (Duration.isGreaterThan(reservationFor(delay), remaining)) {
-      if (lastProcessed === undefined) {
-        return yield* new SliceOverrun();
-      }
-
-      yield* enqueueAfterCheckpoint(lastProcessed);
+    if (page.nextCursor === undefined) {
+      yield* campaigns.completeRun(message.campaignId, message.runToken, yield* nowIso);
 
       return;
     }
 
-    // Minted before the claim: a claimed row is only ever settled by a submission, so a link that
-    // cannot be minted must stop the slice while the member is still unclaimed.
-    const unsubscribeUrl = yield* unsubscribeLink(member.email).pipe(Effect.orDie);
-
-    const sendId = yield* newIdentifier;
-
-    const claimed = yield* campaigns.claimRecipient(
-      message.campaignId,
-      message.runToken,
-      member.id,
-      member.email,
-      sendId,
-      now,
-    );
-
-    if (claimed === "stale") {
-      return;
-    }
-
-    if (claimed === "already-claimed") {
-      lastProcessed = member.id;
-      continue;
-    }
-
-    const submitted = yield* submitClaimed({
-      recipient: member.email,
-      content,
-      unsubscribeUrl,
-      campaignId: message.campaignId,
-      sendId,
-      contactId: member.id,
-      runToken: message.runToken,
-      limit: guard.limit,
-      firstDelay: delay,
-    });
-
-    if (submitted === "stop") {
-      return;
-    }
-
-    lastProcessed = member.id;
-  }
-
-  if (page.nextCursor === undefined) {
-    yield* campaigns.completeRun(message.campaignId, message.runToken, yield* nowIso);
-
-    return;
-  }
-
-  yield* enqueueAfterCheckpoint(page.nextCursor);
-});
+    yield* enqueueAfterCheckpoint(page.nextCursor);
+  },
+  (slice, message) =>
+    Effect.catchTag(slice, "RunSuperseded", () =>
+      Effect.logInfo("stale wake discarded", {
+        campaignId: message.campaignId,
+        runToken: message.runToken,
+        disposition: "stale",
+      }),
+    ),
+);
 
 const submitClaimed = Effect.fn("Dispatching.submitClaimed")(function* (input: {
   readonly recipient: string;
@@ -264,7 +253,14 @@ const submitClaimed = Effect.fn("Dispatching.submitClaimed")(function* (input: {
       continue;
     }
 
-    yield* campaigns.settleRecipient(campaignId, sendId, contactId, settlement, finishedAt);
+    // Another attempt settled this row, or the campaign is gone: the send happened either way.
+    yield* campaigns
+      .settleRecipient(campaignId, sendId, contactId, settlement, finishedAt)
+      .pipe(
+        Effect.catchTag("SettlementNotApplied", () =>
+          Effect.logWarning("settlement not applied", { campaignId, sendId }),
+        ),
+      );
 
     if (
       settlement.outcome === "rejected" &&

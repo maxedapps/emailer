@@ -159,34 +159,34 @@ const record = (event: EmailEvent) =>
     }
 
     for (const recipient of classified.recipients) {
-      const outcome = yield* storage.recordFeedback(
-        {
-          campaignId,
-          kind: classified.kind,
-          feedbackId: classified.feedbackId,
-          recipient,
-          messageId,
-          outcome: classified.outcome,
-          receivedAt,
-          bounceType: classified.bounceType,
-          bounceSubType: classified.bounceSubType,
-          complaintFeedbackType: classified.complaintFeedbackType,
-          complaintSubType: classified.complaintSubType,
-        },
-        classified.write,
-      );
-
-      if (outcome === "unknown-campaign") {
-        yield* Effect.logWarning("feedback event for unknown campaign", {
-          campaignId,
-          kind: classified.kind,
-        });
-      } else if (outcome === "duplicate") {
-        yield* Effect.logDebug("duplicate feedback event", {
-          campaignId,
-          kind: classified.kind,
-        });
-      }
+      yield* storage
+        .recordFeedback(
+          {
+            campaignId,
+            kind: classified.kind,
+            feedbackId: classified.feedbackId,
+            recipient,
+            messageId,
+            outcome: classified.outcome,
+            receivedAt,
+            bounceType: classified.bounceType,
+            bounceSubType: classified.bounceSubType,
+            complaintFeedbackType: classified.complaintFeedbackType,
+            complaintSubType: classified.complaintSubType,
+          },
+          classified.write,
+        )
+        .pipe(
+          Effect.catchTags({
+            FeedbackAlreadyRecorded: () =>
+              Effect.logDebug("duplicate feedback event", { campaignId, kind: classified.kind }),
+            CampaignNotFound: () =>
+              Effect.logWarning("feedback event for unknown campaign", {
+                campaignId,
+                kind: classified.kind,
+              }),
+          }),
+        );
     }
 
     yield* Effect.logInfo("feedback recorded", {

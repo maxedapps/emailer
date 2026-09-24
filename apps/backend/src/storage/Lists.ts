@@ -61,20 +61,20 @@ export const listOperations = (
    * failed condition means the list is not there.
    */
   const renameList = Effect.fn("Storage.renameList")(function* (listId: string, name: string) {
-    const outcome = yield* updateIf("renameList", {
-      Key: listKey(listId),
-      UpdateExpression: "SET #name = :name",
-      ConditionExpression: "attribute_exists(pk)",
-      ExpressionAttributeNames: { "#name": "name" },
-      ExpressionAttributeValues: { ":name": str(name) },
-      ReturnValues: "ALL_NEW",
-    });
+    const renamed = yield* updateIf(
+      "renameList",
+      {
+        Key: listKey(listId),
+        UpdateExpression: "SET #name = :name",
+        ConditionExpression: "attribute_exists(pk)",
+        ExpressionAttributeNames: { "#name": "name" },
+        ExpressionAttributeValues: { ":name": str(name) },
+        ReturnValues: "ALL_NEW",
+      },
+      () => new ListNotFound(),
+    );
 
-    if (!outcome.applied) {
-      return yield* new ListNotFound();
-    }
-
-    return yield* readList("renameList", outcome.attributes);
+    return yield* readList("renameList", renamed);
   });
 
   return { createList, getList, listLists, renameList } as const;

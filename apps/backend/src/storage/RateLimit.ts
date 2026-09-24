@@ -1,6 +1,6 @@
 import type * as dynamodb from "@distilled.cloud/aws/dynamodb";
 import * as AWS from "alchemy/AWS";
-import { Clock, Duration, Effect, Layer, Schema } from "effect";
+import { Clock, Data, Duration, Effect, Layer, Schema } from "effect";
 import { RateLimiter } from "effect/unstable/persistence";
 
 import { itemReader, num, recordVersion, str } from "./Items.ts";
@@ -39,6 +39,9 @@ const storeFailure = (cause: StorageUnavailable) =>
     }),
   });
 
+/** The window was not in the state a claim expected: it expired, or another claim reset it. */
+class WindowMoved extends Data.TaggedError("WindowMoved") {}
+
 export const rateLimitOperations = (primitives: Pick<UpdatePrimitives, "updateIf">) => {
   const { updateIf } = primitives;
 
@@ -48,7 +51,7 @@ export const rateLimitOperations = (primitives: Pick<UpdatePrimitives, "updateIf
     );
 
   const claim = (request: AWS.DynamoDB.UpdateItemRequest) =>
-    updateIf("fixedWindow", request).pipe(Effect.mapError(storeFailure));
+    updateIf("fixedWindow", request, () => new WindowMoved());
 
   return RateLimiter.RateLimiterStore.of({
     fixedWindow: ({ key, tokens, refillRate }) =>
@@ -86,29 +89,25 @@ export const rateLimitOperations = (primitives: Pick<UpdatePrimitives, "updateIf
           ReturnValues: "ALL_NEW" as const,
         };
 
-        const first = yield* claim(common);
-
-        if (first.applied) {
-          return yield* fromAttributes(now, first.attributes);
-        }
-
-        const expired = yield* claim(reset);
-
-        if (expired.applied) {
-          return yield* fromAttributes(now, expired.attributes);
-        }
-
-        const retry = yield* claim(common);
-
-        if (retry.applied) {
-          return yield* fromAttributes(now, retry.attributes);
-        }
-
-        return yield* new RateLimiter.RateLimiterError({
-          reason: new RateLimiter.RateLimitStoreError({
-            message: "fixedWindow lost the race after reset",
+        // Claim in the live window; else reset an expired one; else another claim just reset it,
+        // so claim in that window.
+        const window = yield* claim(common).pipe(
+          Effect.catchTag("WindowMoved", () => claim(reset)),
+          Effect.catchTag("WindowMoved", () => claim(common)),
+          Effect.catchTags({
+            WindowMoved: () =>
+              Effect.fail(
+                new RateLimiter.RateLimiterError({
+                  reason: new RateLimiter.RateLimitStoreError({
+                    message: "fixedWindow lost the race after reset",
+                  }),
+                }),
+              ),
+            StorageUnavailable: (failure) => Effect.fail(storeFailure(failure)),
           }),
-        });
+        );
+
+        return yield* fromAttributes(now, window);
       }),
     tokenBucket: () => Effect.fail(unsupported("tokenBucket")),
     adaptiveConsume: () => Effect.fail(unsupported("adaptiveConsume")),

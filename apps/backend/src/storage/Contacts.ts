@@ -1,22 +1,22 @@
 import type * as dynamodb from "@distilled.cloud/aws/dynamodb";
 import {
   AddressOptedOut,
+  ContactChanged,
   ContactNotFound,
   EmailAlreadyUsed,
-  StorageUnavailable,
 } from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
-import { Effect, Schema } from "effect";
+import { Effect, Predicate, Schema } from "effect";
 
 import { unsubscribeKey } from "./Addresses.ts";
 import { itemReader, itemWriter, listingAttributes, str, tableLogicalId } from "./Items.ts";
 
 import type {
+  Action,
   PagePrimitives,
   ReadPrimitives,
   StoredPage,
   TransactionPrimitives,
-  TransactionRequest,
 } from "./Primitives.ts";
 
 const contactKind = "contact";
@@ -69,6 +69,14 @@ export const contactItem = (contact: Schemas.Contact): Effect.Effect<dynamodb.At
     ...attributes,
   }));
 
+/**
+ * A write that lost a race with another request on the same contact, retried from a fresh read:
+ * the race is over by then, and the retry answers what now holds. A contact that keeps changing
+ * answers `ContactChanged`.
+ */
+export const retryLostRace = <A, E, R>(write: Effect.Effect<A, E, R>) =>
+  Effect.retry(write, { times: 2, while: Predicate.isTagged("ContactChanged") });
+
 export const reservationItem = (email: string, contactId: string) =>
   Effect.map(writeReservation({ contactId }), (attributes) => ({
     ...reservationKey(email),
@@ -78,45 +86,30 @@ export const reservationItem = (email: string, contactId: string) =>
 export const contactOperations = (
   primitives: ReadPrimitives & PagePrimitives & TransactionPrimitives,
 ) => {
-  const { readEntityPage, readItem, runTransaction } = primitives;
+  const { readEntityPage, readItem, transact } = primitives;
 
   /**
-   * Slot 0 is the contact, slot 1 its address reservation. A slot-1 condition failure is the
-   * ordinary answer `EmailAlreadyUsed`; a slot-0 failure means the generated identifier already
-   * exists, which is an anomaly rather than an answer and stays a storage failure.
+   * The contact and its address reservation. The contact's condition could only fail if a freshly
+   * generated identifier already existed, so it declares no refusal: that would be a defect.
    */
   const createContact = Effect.fn("Storage.createContact")(function* (contact: Schemas.Contact) {
-    const outcome = yield* runTransaction("createContact", {
-      TransactItems: [
-        {
-          Put: {
-            Table: tableLogicalId,
-            Item: yield* contactItem(contact),
-            ConditionExpression: "attribute_not_exists(pk)",
-          },
+    yield* transact("createContact", [
+      {
+        Put: {
+          Table: tableLogicalId,
+          Item: yield* contactItem(contact),
+          ConditionExpression: "attribute_not_exists(pk)",
         },
-        {
-          Put: {
-            Table: tableLogicalId,
-            Item: yield* reservationItem(contact.email, contact.id),
-            ConditionExpression: "attribute_not_exists(pk)",
-          },
+      },
+      {
+        Put: {
+          Table: tableLogicalId,
+          Item: yield* reservationItem(contact.email, contact.id),
+          ConditionExpression: "attribute_not_exists(pk)",
         },
-      ],
-    });
-
-    if (outcome.committed) {
-      return;
-    }
-
-    if (outcome.conditionFailures.has(1)) {
-      return yield* new EmailAlreadyUsed({ email: contact.email });
-    }
-
-    return yield* new StorageUnavailable({
-      operation: "createContact",
-      failure: "ConditionalCheckFailed",
-    });
+        refused: () => new EmailAlreadyUsed({ email: contact.email }),
+      },
+    ]);
   });
 
   const getContact = Effect.fn("Storage.getContact")(function* (contactId: string) {
@@ -182,7 +175,7 @@ export const contactOperations = (
     // Old and new addresses sharing a mailbox key means one reservation item, which a transaction
     // may not both delete and put. Only the stored spelling changes, so there is no reservation to
     // move — and the contact stays on the same mailbox, so there is no opt-out to check.
-    const move: TransactionRequest["TransactItems"] =
+    const move: Array<Action<AddressOptedOut | EmailAlreadyUsed>> =
       Schemas.mailboxKey(email) === Schemas.mailboxKey(current.email)
         ? []
         : [
@@ -197,6 +190,7 @@ export const contactOperations = (
                 Key: unsubscribeKey(current.email),
                 ConditionExpression: "attribute_not_exists(pk)",
               },
+              refused: () => new AddressOptedOut({ email: current.email }),
             },
             {
               // Unconditional: the contact's write in slot 0 establishes that this request owns the
@@ -210,52 +204,38 @@ export const contactOperations = (
                 Item: yield* reservationItem(email, contactId),
                 ConditionExpression: "attribute_not_exists(pk)",
               },
+              refused: () => new EmailAlreadyUsed({ email }),
             },
           ];
 
-    const outcome = yield* runTransaction("updateContact", {
-      TransactItems: [
-        {
-          // Commits only against the contact as it was just read. A concurrent address change is
-          // then a lost race on the failure channel, never silently reverted — which would leave the
-          // other request's reservation pointing at a contact that no longer holds that address,
-          // unreachable through any endpoint. The condition also accepts the new spelling, which
-          // holds once this write has applied, so the same request landing twice is not a lost race.
-          Put: {
-            Table: tableLogicalId,
-            Item: yield* contactItem(next),
-            ConditionExpression:
-              "attribute_exists(pk) AND (#email = :currentEmail OR #email = :email)",
-            ExpressionAttributeNames: { "#email": "email" },
-            ExpressionAttributeValues: {
-              ":currentEmail": str(current.email),
-              ":email": str(email),
-            },
+    // The contact comes first, so a lost race decides over the address checks computed from it.
+    yield* transact("updateContact", [
+      {
+        // Commits only against the contact as it was just read. A concurrent address change is
+        // then a lost race on the failure channel, never silently reverted — which would leave the
+        // other request's reservation pointing at a contact that no longer holds that address,
+        // unreachable through any endpoint. The condition also accepts the new spelling, which
+        // holds once this write has applied, so the same request landing twice is not a lost race.
+        Put: {
+          Table: tableLogicalId,
+          Item: yield* contactItem(next),
+          ConditionExpression:
+            "attribute_exists(pk) AND (#email = :currentEmail OR #email = :email)",
+          ExpressionAttributeNames: { "#email": "email" },
+          ExpressionAttributeValues: {
+            ":currentEmail": str(current.email),
+            ":email": str(email),
           },
         },
-        ...move,
-      ],
-    });
+        refused: () => new ContactChanged(),
+      },
+      // An opt-out is answered before `EmailAlreadyUsed` when both fail: another address can be
+      // chosen, an opt-out cannot be worked around.
+      ...move,
+    ]);
 
-    if (outcome.committed) {
-      return next;
-    }
-
-    // Answered before `EmailAlreadyUsed` when both fail: another address can be chosen, an opt-out
-    // cannot be worked around.
-    if (outcome.conditionFailures.has(1)) {
-      return yield* new AddressOptedOut({ email: current.email });
-    }
-
-    if (outcome.conditionFailures.has(3)) {
-      return yield* new EmailAlreadyUsed({ email });
-    }
-
-    return yield* new StorageUnavailable({
-      operation: "updateContact",
-      failure: "ConditionalCheckFailed",
-    });
-  });
+    return next;
+  }, retryLostRace);
 
   return {
     createContact,

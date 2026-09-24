@@ -1,5 +1,4 @@
 import type * as dynamodb from "@distilled.cloud/aws/dynamodb";
-import { StorageUnavailable } from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
 import { Clock, Duration, Effect, Schema, Struct } from "effect";
 
@@ -235,23 +234,14 @@ export const addressReads = (primitives: BatchPrimitives) => {
 };
 
 export const addressWrites = (primitives: TransactionPrimitives) => {
-  const { runTransaction } = primitives;
+  const { transact } = primitives;
 
-  const unsuppress = Effect.fn("Storage.unsuppress")(function* (email: string) {
-    const outcome = yield* runTransaction("unsuppress", {
-      TransactItems: [
-        { Delete: { Table: tableLogicalId, Key: suppressionKey(email) } },
-        { Delete: { Table: tableLogicalId, Key: transientKey(email) } },
-      ],
-    });
-
-    if (!outcome.committed) {
-      return yield* new StorageUnavailable({
-        operation: "unsuppress",
-        failure: "ConditionalCheckFailed",
-      });
-    }
-  });
+  const unsuppress = Effect.fn("Storage.unsuppress")((email: string) =>
+    transact("unsuppress", [
+      { Delete: { Table: tableLogicalId, Key: suppressionKey(email) } },
+      { Delete: { Table: tableLogicalId, Key: transientKey(email) } },
+    ]),
+  );
 
   return { unsuppress } as const;
 };

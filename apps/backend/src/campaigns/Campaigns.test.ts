@@ -8,7 +8,7 @@ import { CampaignSchedule } from "./CampaignSchedule.ts";
 import * as Campaigns from "./Campaigns.ts";
 import { CampaignWake } from "../sending/Dispatch.ts";
 import { AudienceStore } from "../storage/Audience.ts";
-import { CampaignStore } from "../storage/Campaigns.ts";
+import { CampaignChanged, CampaignStore } from "../storage/Campaigns.ts";
 import { unusedAudience, unusedCampaigns } from "../storage/Testing.ts";
 
 import type { CampaignControl } from "../storage/Campaigns.ts";
@@ -52,6 +52,8 @@ interface World {
   readonly history: Map<string, RunHistory>;
   readonly control: Map<string, Array<CampaignControl>>;
   readonly order: Array<string>;
+  /** Every read of a campaign's control, in order. */
+  readonly controlReads: Array<string>;
   beforeWrite?: Effect.Effect<void>;
 }
 
@@ -63,6 +65,7 @@ const emptyWorld = (): World => ({
   history: new Map(),
   control: new Map(),
   order: [],
+  controlReads: [],
 });
 
 const draftCampaign: Schemas.Campaign = {
@@ -165,14 +168,33 @@ const rememberHistory = (world: World, campaign: Schemas.Campaign) => {
 const found = <A, E>(value: A | undefined, missing: E) =>
   value === undefined ? Effect.fail(missing) : Effect.succeed(value);
 
-const afterWrite = <A>(world: World, apply: () => A) =>
+const afterWrite = <E>(world: World, apply: () => Effect.Effect<void, E>) =>
   Effect.gen(function* () {
     if (world.beforeWrite !== undefined) {
       yield* world.beforeWrite;
     }
 
-    return apply();
+    return yield* apply();
   });
+
+/** A refused command's answer: the campaign as the world now holds it. */
+const changed = (world: World, id: string) => {
+  const campaign = world.campaigns.get(id);
+
+  return Effect.fail(
+    new CampaignChanged({
+      current: campaign === undefined ? undefined : controlOfCampaign(world, campaign),
+    }),
+  );
+};
+
+/** A refused draft write: the campaign is gone, or is no longer a draft. */
+const notADraft = (
+  campaign: Schemas.Campaign | undefined,
+): Effect.Effect<never, Errors.CampaignNotFound | Errors.CampaignStateConflict> =>
+  campaign === undefined
+    ? Effect.fail(new Errors.CampaignNotFound())
+    : Effect.fail(new Errors.CampaignStateConflict({ state: campaign.submission.state }));
 
 const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> =>
   Layer.mergeAll(
@@ -189,6 +211,8 @@ const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> 
       getCampaign: (id) => found(world.campaigns.get(id), new Errors.CampaignNotFound()),
       getCampaignControl: (id) =>
         Effect.gen(function* () {
+          world.controlReads.push(id);
+
           const scripted = world.control.get(id)?.shift();
 
           if (scripted !== undefined) {
@@ -209,7 +233,7 @@ const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> 
             campaign.submission.state !== expected.state ||
             !tokenMatches(world, id, expected.runToken)
           ) {
-            return "conflict" as const;
+            return changed(world, id);
           }
 
           world.order.push(`newRun:${target}`);
@@ -223,7 +247,7 @@ const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> 
           });
           world.runTokens.set(id, newToken);
 
-          return target;
+          return Effect.void;
         }),
       cancelCampaign: (id, source) =>
         afterWrite(world, () => {
@@ -232,40 +256,40 @@ const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> 
           world.order.push("cancelCampaign");
 
           if (campaign === undefined || !tokenMatches(world, id, source.runToken)) {
-            return "conflict" as const;
+            return changed(world, id);
           }
 
           if (source.state === "scheduled") {
             if (campaign.submission.state !== "scheduled") {
-              return "conflict" as const;
+              return changed(world, id);
             }
 
             world.campaigns.set(id, { ...campaign, submission: { state: "draft" } });
 
-            return "applied" as const;
+            return Effect.void;
           }
 
           if (campaign.submission.state !== "queued") {
-            return "conflict" as const;
+            return changed(world, id);
           }
 
           const started = startedAtOf(world, campaign) !== undefined;
 
           if (started !== source.started) {
-            return "conflict" as const;
+            return changed(world, id);
           }
 
           if (!started) {
             world.campaigns.set(id, { ...campaign, submission: { state: "draft" } });
 
-            return "applied" as const;
+            return Effect.void;
           }
 
           const history = world.history.get(id);
           const startedAt = startedAtOf(world, campaign);
 
           if (history === undefined || startedAt === undefined) {
-            return "conflict" as const;
+            return changed(world, id);
           }
 
           world.campaigns.set(id, {
@@ -280,29 +304,33 @@ const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> 
             },
           });
 
-          return "applied" as const;
+          return Effect.void;
         }),
       updateDraft: (campaign) =>
         afterWrite(world, () => {
-          if (world.campaigns.get(campaign.id)?.submission.state !== "draft") {
-            return "conflict" as const;
+          const current = world.campaigns.get(campaign.id);
+
+          if (current?.submission.state !== "draft") {
+            return notADraft(current);
           }
 
           world.order.push("updateDraft");
           world.campaigns.set(campaign.id, campaign);
 
-          return "updated" as const;
+          return Effect.void;
         }),
       deleteDraft: (id) =>
         afterWrite(world, () => {
-          if (world.campaigns.get(id)?.submission.state !== "draft") {
-            return "conflict" as const;
+          const current = world.campaigns.get(id);
+
+          if (current?.submission.state !== "draft") {
+            return notADraft(current);
           }
 
           world.order.push("deleteDraft");
           world.campaigns.delete(id);
 
-          return "deleted" as const;
+          return Effect.void;
         }),
     }),
   );
@@ -1148,6 +1176,8 @@ describe("cancel", () => {
       );
       expect(storedCampaign(fix)).toStrictEqual(replacement);
       expect(fix.world.runTokens.get(campaignId)).toBe(replacementToken);
+      // The refused write answered the campaign as it now is: no second read.
+      expect(fix.world.controlReads).toHaveLength(1);
     }),
   );
 

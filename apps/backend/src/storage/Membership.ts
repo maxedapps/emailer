@@ -1,6 +1,5 @@
 import type * as dynamodb from "@distilled.cloud/aws/dynamodb";
-import type * as AWS from "alchemy/AWS";
-import { ContactNotFound, ListNotFound, StorageUnavailable } from "@emailer/api/Errors";
+import { ContactChanged, ContactNotFound, ListNotFound } from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
 import { Effect, Schema } from "effect";
 
@@ -11,19 +10,13 @@ import {
   readContact,
   reservationItem,
   reservationKey,
+  retryLostRace,
 } from "./Contacts.ts";
-import {
-  itemReader,
-  itemWriter,
-  keyCodec,
-  num,
-  recordVersion,
-  str,
-  tableLogicalId,
-} from "./Items.ts";
+import { itemReader, keyCodec, num, recordVersion, str, tableLogicalId } from "./Items.ts";
 import { listKey } from "./Lists.ts";
 
 import type {
+  Action,
   BatchPrimitives,
   QueryPrimitives,
   ReadPrimitives,
@@ -48,8 +41,6 @@ const Member = Schema.Struct({
 });
 
 const readMember = itemReader(Member);
-
-const writeMember = itemWriter(Member);
 
 /** A reservation read back by batch, keyed by the mailbox its key names. */
 const readHeldReservation = itemReader(
@@ -83,7 +74,7 @@ const memberOfKey = (contactId: string, listId: string) => ({
 export const membershipOperations = (
   primitives: ReadPrimitives & QueryPrimitives & BatchPrimitives & TransactionPrimitives,
 ) => {
-  const { readItem, readItems, runQuery, runTransaction } = primitives;
+  const { readItem, readItems, runQuery, transact } = primitives;
 
   const removeMembership = (listId: string, contactId: string) => [
     { Delete: { Table: tableLogicalId, Key: memberKey(listId, contactId) } },
@@ -102,60 +93,51 @@ export const membershipOperations = (
       Key: listKey(listId),
       ConditionExpression: "attribute_exists(pk)",
     },
+    refused: () => new ListNotFound(),
+  });
+
+  const joinMember = (
+    key: dynamodb.AttributeMap,
+    listId: string,
+    contactId: string,
+    addedAt: string,
+  ) => ({
+    Update: {
+      Table: tableLogicalId,
+      Key: key,
+      UpdateExpression:
+        "SET v = :v, listId = :listId, contactId = :contactId, addedAt = if_not_exists(addedAt, :addedAt)",
+      ExpressionAttributeValues: {
+        ":v": num(recordVersion),
+        ":listId": str(listId),
+        ":contactId": str(contactId),
+        ":addedAt": str(addedAt),
+      },
+    },
   });
 
   /**
-   * Slot 0 checks the contact, slot 1 checks the list, slot 2 writes the forward member and slot 3
-   * its reverse. The outcome is read from which slots failed, so the order is part of the contract.
-   * Both member `Put`s are conditional on absence, which is what makes a repeat `already-member`.
+   * Both parents are checked and both directions joined, as an import joins them: joining again
+   * changes nothing, not even when the contact joined.
    */
   const addMember = Effect.fn("Storage.addMember")(function* (
     listId: string,
     contactId: string,
     addedAt: string,
   ) {
-    const member = yield* writeMember({ listId, contactId, addedAt });
-
-    const outcome = yield* runTransaction("addMember", {
-      TransactItems: [
-        {
-          ConditionCheck: {
-            Table: tableLogicalId,
-            Key: contactKey(contactId),
-            ConditionExpression: "attribute_exists(pk)",
-          },
+    yield* transact("addMember", [
+      {
+        ConditionCheck: {
+          Table: tableLogicalId,
+          Key: contactKey(contactId),
+          ConditionExpression: "attribute_exists(pk)",
         },
-        listExists(listId),
-        {
-          Put: {
-            Table: tableLogicalId,
-            Item: { ...memberKey(listId, contactId), ...member },
-            ConditionExpression: "attribute_not_exists(pk)",
-          },
-        },
-        {
-          Put: {
-            Table: tableLogicalId,
-            Item: { ...memberOfKey(contactId, listId), ...member },
-            ConditionExpression: "attribute_not_exists(pk)",
-          },
-        },
-      ],
-    });
-
-    if (outcome.committed) {
-      return "added" as const;
-    }
-
-    if (outcome.conditionFailures.has(0)) {
-      return yield* new ContactNotFound();
-    }
-
-    if (outcome.conditionFailures.has(1)) {
-      return yield* new ListNotFound();
-    }
-
-    return "already-member" as const;
+        refused: () => new ContactNotFound(),
+      },
+      listExists(listId),
+      joinMember(memberKey(listId, contactId), listId, contactId, addedAt),
+      joinMember(memberOfKey(contactId, listId), listId, contactId, addedAt),
+    ]);
   });
 
   /**
@@ -167,13 +149,7 @@ export const membershipOperations = (
     listId: string,
     contactId: string,
   ) {
-    const outcome = yield* runTransaction("removeMember", {
-      TransactItems: [...removeMembership(listId, contactId), listExists(listId)],
-    });
-
-    if (!outcome.committed) {
-      return yield* new ListNotFound();
-    }
+    yield* transact("removeMember", [...removeMembership(listId, contactId), listExists(listId)]);
   });
 
   /**
@@ -243,26 +219,6 @@ export const membershipOperations = (
     >;
   });
 
-  const joinMember = (
-    key: dynamodb.AttributeMap,
-    listId: string,
-    contactId: string,
-    addedAt: string,
-  ) => ({
-    Update: {
-      Table: tableLogicalId,
-      Key: key,
-      UpdateExpression:
-        "SET v = :v, listId = :listId, contactId = :contactId, addedAt = if_not_exists(addedAt, :addedAt)",
-      ExpressionAttributeValues: {
-        ":v": num(recordVersion),
-        ":listId": str(listId),
-        ":contactId": str(contactId),
-        ":addedAt": str(addedAt),
-      },
-    },
-  });
-
   /**
    * Deletes a contact, its memberships and its address reservation. `META` goes **last**, which is
    * what makes a repeated `DELETE` resume: while it is still there the contact is discoverable, and
@@ -305,16 +261,7 @@ export const membershipOperations = (
       for (const item of page.Items ?? []) {
         const { listId } = yield* readMember("deleteContact", item);
 
-        const removal = yield* runTransaction("deleteContact", {
-          TransactItems: removeMembership(listId, contactId),
-        });
-
-        if (!removal.committed) {
-          return yield* new StorageUnavailable({
-            operation: "deleteContact",
-            failure: "ConditionalCheckFailed",
-          });
-        }
+        yield* transact("deleteContact", removeMembership(listId, contactId));
       }
 
       startKey = page.LastEvaluatedKey;
@@ -322,30 +269,22 @@ export const membershipOperations = (
 
     // Conditioned on the address read at the start still being the contact's. Without it, an
     // address change landing between that read and here would strand the new reservation: nothing
-    // would point at it and no endpoint could clear it. A condition failure is a failure, not a
-    // quiet success — the client's repeated DELETE re-reads and completes.
-    const outcome = yield* runTransaction("deleteContact", {
-      TransactItems: [
-        {
-          Delete: {
-            Table: tableLogicalId,
-            Key: contactKey(contactId),
-            ConditionExpression: "attribute_exists(pk) AND #email = :email",
-            ExpressionAttributeNames: { "#email": "email" },
-            ExpressionAttributeValues: { ":email": str(contact.email) },
-          },
+    // would point at it and no endpoint could clear it. A lost race is retried from a fresh read,
+    // which resumes the cascade where it stopped.
+    yield* transact("deleteContact", [
+      {
+        Delete: {
+          Table: tableLogicalId,
+          Key: contactKey(contactId),
+          ConditionExpression: "attribute_exists(pk) AND #email = :email",
+          ExpressionAttributeNames: { "#email": "email" },
+          ExpressionAttributeValues: { ":email": str(contact.email) },
         },
-        { Delete: { Table: tableLogicalId, Key: reservationKey(contact.email) } },
-      ],
-    });
-
-    if (!outcome.committed) {
-      return yield* new StorageUnavailable({
-        operation: "deleteContact",
-        failure: "ConditionalCheckFailed",
-      });
-    }
-  });
+        refused: () => new ContactChanged(),
+      },
+      { Delete: { Table: tableLogicalId, Key: reservationKey(contact.email) } },
+    ]);
+  }, retryLostRace);
 
   /**
    * Deletes a list and every membership in it. Each page clears at most `cascadePageLimit`
@@ -379,7 +318,7 @@ export const membershipOperations = (
         startKey === undefined ? request : { ...request, ExclusiveStartKey: startKey },
       );
 
-      const removals: Array<AWS.DynamoDB.TransactWriteItemsRequest["TransactItems"][number]> = [];
+      const removals: Array<Action<never>> = [];
 
       for (const item of page.Items ?? []) {
         const { contactId: memberId } = yield* readMember("deleteList", item);
@@ -388,29 +327,13 @@ export const membershipOperations = (
       }
 
       if (removals.length > 0) {
-        const outcome = yield* runTransaction("deleteList", { TransactItems: removals });
-
-        if (!outcome.committed) {
-          return yield* new StorageUnavailable({
-            operation: "deleteList",
-            failure: "ConditionalCheckFailed",
-          });
-        }
+        yield* transact("deleteList", removals);
       }
 
       startKey = page.LastEvaluatedKey;
     } while (startKey !== undefined);
 
-    const outcome = yield* runTransaction("deleteList", {
-      TransactItems: [{ Delete: { Table: tableLogicalId, Key: listKey(listId) } }],
-    });
-
-    if (!outcome.committed) {
-      return yield* new StorageUnavailable({
-        operation: "deleteList",
-        failure: "ConditionalCheckFailed",
-      });
-    }
+    yield* transact("deleteList", [{ Delete: { Table: tableLogicalId, Key: listKey(listId) } }]);
   });
 
   /**
@@ -420,11 +343,11 @@ export const membershipOperations = (
    * so re-importing does not rewrite when somebody joined.
    *
    * The pre-read is advisory only — a strong read still does not make a later write atomic. The
-   * transaction's own conditions are the authority: slot 0 checks the list, so a missing list is
+   * transaction's own conditions are the authority: the list is checked, so a missing list is
    * `ListNotFound`; every existing contact carries a `ConditionCheck`, so an import racing that
    * contact's deletion fails rather than resurrecting a membership; and each new address is
-   * reserved conditionally, so losing a race to a concurrent creation fails too. Both races
-   * resolve on a repeat, whose pre-read then sees the new state.
+   * reserved conditionally, so losing a race to a concurrent creation fails too. Both races are
+   * retried from a fresh pre-read, which then sees the new state.
    */
   const importContacts = Effect.fn("Storage.importContacts")(function* (
     listId: string,
@@ -444,9 +367,8 @@ export const membershipOperations = (
       holders.set(entry.pk.slice("EMAIL#".length), entry.contactId);
     }
 
-    const actions: Array<AWS.DynamoDB.TransactWriteItemsRequest["TransactItems"][number]> = [
-      listExists(listId),
-    ];
+    // The list comes first: an import into a list that is gone answers that, whatever else raced.
+    const actions: Array<Action<ListNotFound | ContactChanged>> = [listExists(listId)];
 
     const imported: Array<Schemas.ImportContactsResult["contacts"][number]> = [];
 
@@ -463,12 +385,14 @@ export const membershipOperations = (
               ConditionExpression: "attribute_not_exists(pk)",
             },
           },
+          // A concurrent creation took the address since it was read.
           {
             Put: {
               Table: tableLogicalId,
               Item: yield* reservationItem(candidate.email, contactId),
               ConditionExpression: "attribute_not_exists(pk)",
             },
+            refused: () => new ContactChanged(),
           },
         );
       } else {
@@ -479,6 +403,7 @@ export const membershipOperations = (
               Key: contactKey(contactId),
               ConditionExpression: "attribute_exists(pk)",
             },
+            refused: () => new ContactChanged(),
           },
           // The holder was read before the transaction, so it is advice, not a fact. Between the
           // read and the commit the contact can be moved to another address, or deleted and the
@@ -492,6 +417,7 @@ export const membershipOperations = (
               ConditionExpression: "contactId = :holder",
               ExpressionAttributeValues: { ":holder": str(contactId) },
             },
+            refused: () => new ContactChanged(),
           },
         );
       }
@@ -504,23 +430,10 @@ export const membershipOperations = (
       imported.push({ email: candidate.email, contactId, member: true });
     }
 
-    const outcome = yield* runTransaction("importContacts", {
-      TransactItems: actions,
-    });
+    yield* transact("importContacts", actions);
 
-    if (outcome.committed) {
-      return { contacts: imported } satisfies Schemas.ImportContactsResult;
-    }
-
-    if (outcome.conditionFailures.has(0)) {
-      return yield* new ListNotFound();
-    }
-
-    return yield* new StorageUnavailable({
-      operation: "importContacts",
-      failure: "ConditionalCheckFailed",
-    });
-  });
+    return { contacts: imported } satisfies Schemas.ImportContactsResult;
+  }, retryLostRace);
 
   return {
     addMember,

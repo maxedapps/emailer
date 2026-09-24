@@ -1,14 +1,16 @@
 import { describe, expect, it } from "@effect/vitest";
-import { StorageUnavailable } from "@emailer/api/Errors";
+import { CampaignNotFound, StorageUnavailable } from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
 import type * as AWS from "alchemy/AWS";
 import { ConfigProvider, Effect, Layer, Logger, References, Result } from "effect";
 
 import { expectedConfigurationSet, handleMessage } from "./Feedback.ts";
-import { FeedbackStore } from "../storage/Feedback.ts";
+import { FeedbackAlreadyRecorded, FeedbackStore } from "../storage/Feedback.ts";
 
 import type { AddressSuppression } from "../storage/Addresses.ts";
-import type { FeedbackRow, FeedbackWrite, FeedbackWriteOutcome } from "../storage/Feedback.ts";
+import type { FeedbackRow, FeedbackWrite } from "../storage/Feedback.ts";
+
+type WriteOutcome = "committed" | "duplicate" | "unknown-campaign";
 
 const configurationSetName = "emailer-test-mail";
 
@@ -32,7 +34,7 @@ interface World {
   readonly suppressions: Map<string, AddressSuppression>;
   readonly writes: Array<RecordedWrite>;
   readonly historyKeys: Set<string>;
-  readonly writeOutcomes: Array<FeedbackWriteOutcome>;
+  readonly writeOutcomes: Array<WriteOutcome>;
   readonly repeated: Array<string>;
   readonly logs: Array<LogEntry>;
 }
@@ -40,19 +42,20 @@ interface World {
 const historyKey = (row: FeedbackRow) =>
   `${row.campaignId}#${row.kind}#${row.feedbackId}#${Schemas.mailboxKey(row.recipient)}`;
 
-const rememberWrite = (world: World, key: string): FeedbackWriteOutcome => {
-  if (world.historyKeys.has(key)) {
-    world.repeated.push(key);
-    world.writeOutcomes.push("duplicate");
+const rememberWrite = (world: World, key: string) =>
+  Effect.suspend(() => {
+    if (world.historyKeys.has(key)) {
+      world.repeated.push(key);
+      world.writeOutcomes.push("duplicate");
 
-    return "duplicate";
-  }
+      return Effect.fail(new FeedbackAlreadyRecorded());
+    }
 
-  world.historyKeys.add(key);
-  world.writeOutcomes.push("committed");
+    world.historyKeys.add(key);
+    world.writeOutcomes.push("committed");
 
-  return "committed";
-};
+    return Effect.void;
+  });
 
 const storageOperations = (world: World): FeedbackStore["Service"] => ({
   suppressAddress: (suppression) =>
@@ -68,7 +71,7 @@ const storageOperations = (world: World): FeedbackStore["Service"] => ({
       world.suppressions.set(key, suppression);
     }),
   recordFeedback: (row, write) =>
-    Effect.sync(() => {
+    Effect.suspend(() => {
       world.writes.push({ row, write });
 
       return rememberWrite(world, historyKey(row));
@@ -557,11 +560,11 @@ describe("write outcomes and summary", () => {
       const unknown = Layer.succeed(FeedbackStore)({
         ...storageOperations(world),
         recordFeedback: (row, write) =>
-          Effect.sync(() => {
+          Effect.suspend(() => {
             world.writes.push({ row, write });
             world.writeOutcomes.push("unknown-campaign");
 
-            return "unknown-campaign";
+            return Effect.fail(new CampaignNotFound());
           }),
       });
 

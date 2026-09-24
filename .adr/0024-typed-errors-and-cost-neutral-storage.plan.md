@@ -197,7 +197,12 @@ Status: Done except the prod decode scan, which waits for the user's go-ahead. A
 
 ### T5 — Typed conditional writes
 
-Status: Not started
+Status: Done. As built:
+
+- A refusal returns its error as an effect, so it can decode the item it was given. A tagged error is itself such an effect, so a simple refusal is still `() => new ListNotFound()`.
+- `ContactChanged` also covers `deleteContact`'s final condition and an import that raced a contact change: all three retry twice from a fresh read, then answer 409. `contacts.remove` and `lists.import` declare it too.
+- `addMember` joins both directions with the same idempotent update as an import, so adding a member twice is no longer a cancelled transaction. The billed write units are the same.
+- `transact` keeps one cast, on its actions array: it narrows the array to the union of the errors its actions declare.
 
 - **Primitives:**
   - `transact(operation, actions)` supports only Put, Update, Delete and ConditionCheck. Each action may declare `refused: (current) => E`.

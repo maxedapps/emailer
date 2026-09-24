@@ -71,6 +71,20 @@ export class AddressOptedOut extends Schema.TaggedError<AddressOptedOut>()(
   }
 }
 
+/**
+ * The contact changed while the request was writing it — another request moved or deleted it, or
+ * took the address it was moving to — and it kept changing on each retry.
+ */
+export class ContactChanged extends Schema.TaggedError<ContactChanged>()(
+  "ContactChanged",
+  {},
+  { httpApiStatus: 409 },
+) {
+  override get [ErrorReporter.ignore]() {
+    return true;
+  }
+}
+
 export class SendAtNotInFuture extends Schema.TaggedError<SendAtNotInFuture>()(
   "SendAtNotInFuture",
   { sendAt: Timestamp },

@@ -356,7 +356,7 @@ describe("lists", () => {
       const { call } = api({
         audience: {
           listMembers: recording(calls, { items: [contact], nextCursor: contactId }),
-          addMember: recording(calls, "added" as const),
+          addMember: recording(calls, undefined),
           removeMember: recording(calls, undefined),
           importContacts: recording(calls, imported),
         },
@@ -437,8 +437,8 @@ describe("campaigns", () => {
         campaigns: {
           getCampaign: () => Effect.succeed(campaign),
           getCampaignControl: () => Effect.succeed(draft),
-          updateDraft: recording(calls, "updated" as const),
-          deleteDraft: recording(calls, "deleted" as const),
+          updateDraft: recording(calls, undefined),
+          deleteDraft: recording(calls, undefined),
         },
       });
 
@@ -528,7 +528,7 @@ describe("campaigns", () => {
       const { call } = api({
         campaigns: {
           getCampaignControl: () => Effect.succeed(control),
-          newRun: recording(runs, "queued" as const),
+          newRun: recording(runs, undefined),
           getCampaign: () => Effect.succeed(queued),
         },
         wake: { enqueue: recording(wakes, undefined) },
@@ -556,7 +556,7 @@ describe("campaigns", () => {
       const { call } = api({
         campaigns: {
           getCampaignControl: () => Effect.succeed(draft),
-          newRun: recording(runs, "scheduled" as const),
+          newRun: recording(runs, undefined),
           getCampaign: () => Effect.succeed(campaign),
         },
         schedule: { create: recording(schedules, undefined) },
@@ -577,7 +577,7 @@ describe("campaigns", () => {
       const { call } = api({
         campaigns: {
           getCampaignControl: () => Effect.succeed({ state: "scheduled", runToken } as const),
-          cancelCampaign: recording(cancels, "applied" as const),
+          cancelCampaign: recording(cancels, undefined),
           getCampaign: () => Effect.succeed(campaign),
         },
       });
@@ -761,7 +761,7 @@ describe("failure reporting", () => {
       stubs: {
         campaigns: {
           getCampaignControl: () => Effect.succeed(draft),
-          newRun: () => Effect.succeed("queued" as const),
+          newRun: () => Effect.void,
         },
         wake: {
           enqueue: () =>
@@ -778,7 +778,7 @@ describe("failure reporting", () => {
       stubs: {
         campaigns: {
           getCampaignControl: () => Effect.succeed(draft),
-          newRun: () => Effect.succeed("scheduled" as const),
+          newRun: () => Effect.void,
         },
         schedule: {
           create: () =>

@@ -6,7 +6,7 @@
  */
 import * as dynamodb from "@distilled.cloud/aws/dynamodb";
 import type * as AWS from "alchemy/AWS";
-import { Cause, Effect, Exit, Result } from "effect";
+import { Cause, Effect, Exit, Predicate, Result } from "effect";
 
 import { allPrimitives } from "./Primitives.ts";
 
@@ -96,10 +96,15 @@ export const scriptedTable = (replies: ScriptedReplies): Table => {
   };
 };
 
-export const cancelled = (...codes: ReadonlyArray<string>): TransactionReply =>
+/** A cancelled transaction, one reason per action: a code, or a reason with the item it found. */
+export const cancelled = (
+  ...reasons: ReadonlyArray<string | dynamodb.CancellationReason>
+): TransactionReply =>
   Effect.fail(
     new dynamodb.TransactionCanceledException({
-      CancellationReasons: codes.map((Code) => ({ Code })),
+      CancellationReasons: reasons.map((reason) =>
+        Predicate.isString(reason) ? { Code: reason } : reason,
+      ),
     }),
   );
 

@@ -1,6 +1,7 @@
 import * as Schemas from "@emailer/api/Schemas";
 import * as AWS from "alchemy/AWS";
-import { Context, Crypto, Effect, Layer, Schema } from "effect";
+import { CampaignNotFound } from "@emailer/api/Errors";
+import { Context, Crypto, Data, Effect, Layer, Schema } from "effect";
 
 import { suppressionWrites, transientKey } from "./Addresses.ts";
 import {
@@ -63,7 +64,8 @@ export type FeedbackWrite =
   | { readonly effect: "transient" }
   | { readonly effect: "history" };
 
-export type FeedbackWriteOutcome = "committed" | "duplicate" | "unknown-campaign";
+/** The event's history row for this recipient is already there: SQS delivered it again. */
+export class FeedbackAlreadyRecorded extends Data.TaggedError("FeedbackAlreadyRecorded") {}
 
 const putHistory = (row: FeedbackRow) =>
   Effect.map(writeRow({ ...row, recipient: Schemas.mailboxKey(row.recipient) }), (attributes) => ({
@@ -75,6 +77,7 @@ const putHistory = (row: FeedbackRow) =>
       },
       ConditionExpression: "attribute_not_exists(pk)",
     },
+    refused: () => new FeedbackAlreadyRecorded(),
   }));
 
 const addCampaignCounter = (campaignId: string, counter: "bounced" | "complained") => ({
@@ -85,6 +88,7 @@ const addCampaignCounter = (campaignId: string, counter: "bounced" | "complained
     ConditionExpression: "attribute_exists(pk)",
     ExpressionAttributeValues: { ":one": num(1) },
   },
+  refused: () => new CampaignNotFound(),
 });
 
 const addTransientOccurrence = (row: FeedbackRow) => ({
@@ -110,42 +114,20 @@ const sideEffectOf = (row: FeedbackRow, write: FeedbackWrite) => {
   }
 };
 
-/**
- * The history row is item 0 and carries the only condition that means "already recorded"; the
- * campaign counter, when present, is item 1 and its condition means "no such campaign".
- */
-const writeOutcome = (outcome: {
-  readonly committed: boolean;
-  readonly conditionFailures?: ReadonlySet<number>;
-}): FeedbackWriteOutcome => {
-  if (outcome.committed) {
-    return "committed";
-  }
-
-  if (outcome.conditionFailures?.has(0) === true) {
-    return "duplicate";
-  }
-
-  return "unknown-campaign";
-};
-
 export const feedbackWrites = (primitives: TransactionPrimitives) => {
-  const { runTransaction } = primitives;
+  const { transact } = primitives;
 
   /**
    * One transaction per recipient: the history row, conditioned on not existing, plus whatever the
    * write adds. A redelivered event fails the row's condition and the whole transaction with it, so
-   * a counter is never added twice and a window entry is never re-added.
+   * a counter is never added twice and a window entry is never re-added. The row comes first, so a
+   * redelivery is `FeedbackAlreadyRecorded` even when the campaign has gone since.
    */
   const recordFeedback = Effect.fn("Storage.recordFeedback")(function* (
     row: FeedbackRow,
     write: FeedbackWrite,
   ) {
-    const outcome = yield* runTransaction("recordFeedback", {
-      TransactItems: [yield* putHistory(row), ...sideEffectOf(row, write)],
-    });
-
-    return writeOutcome(outcome);
+    yield* transact("recordFeedback", [yield* putHistory(row), ...sideEffectOf(row, write)]);
   });
 
   return { recordFeedback } as const;

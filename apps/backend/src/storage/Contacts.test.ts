@@ -5,6 +5,7 @@ import { describe, expect, it } from "@effect/vitest";
 import { CorruptItem } from "../Errors.ts";
 import { tableLogicalId } from "./Items.ts";
 import { contactOperations } from "./Contacts.ts";
+import { UnexpectedCondition } from "./Primitives.ts";
 import {
   cancelled,
   contactId,
@@ -141,13 +142,15 @@ describe("createContact", () => {
     }),
   );
 
-  it.effect("keeps a colliding identifier on the failure channel, where it is not an answer", () =>
+  it.effect("dies on a colliding identifier, which a fresh identifier cannot be", () =>
     Effect.gen(function* () {
       const { run } = create({
         transactWriteItems: [cancelled("ConditionalCheckFailed", "None")],
       });
 
-      expect(yield* Effect.flip(run)).toBeInstanceOf(Errors.StorageUnavailable);
+      expect(yield* defectOf(run)).toStrictEqual(
+        new UnexpectedCondition({ operation: "createContact" }),
+      );
     }),
   );
 
@@ -488,14 +491,34 @@ describe("updateContact", () => {
       }),
   );
 
-  it.effect("keeps an update that lost a race on the same mailbox on the failure channel", () =>
+  it.effect("retries an update that lost a race from a fresh read", () =>
     Effect.gen(function* () {
-      const { run } = update(
-        { ...found, transactWriteItems: [cancelled("ConditionalCheckFailed")] },
+      const { table, run } = update(
+        {
+          getItem: [Effect.succeed({ Item: contactItem }), Effect.succeed({ Item: contactItem })],
+          transactWriteItems: [cancelled("ConditionalCheckFailed")],
+        },
         { name: "Maxi" },
       );
 
-      expect(yield* Effect.flip(run)).toBeInstanceOf(Errors.StorageUnavailable);
+      expect((yield* run).name).toBe("Maxi");
+      expect(table.getItemRequests).toHaveLength(2);
+      expect(table.transactionRequests).toHaveLength(2);
+    }),
+  );
+
+  it.effect("answers ContactChanged when the contact keeps changing", () =>
+    Effect.gen(function* () {
+      const read = Effect.succeed({ Item: contactItem });
+      const lost = cancelled("ConditionalCheckFailed");
+
+      const { table, run } = update(
+        { getItem: [read, read, read], transactWriteItems: [lost, lost, lost] },
+        { name: "Maxi" },
+      );
+
+      expect(yield* Effect.flip(run)).toStrictEqual(new Errors.ContactChanged());
+      expect(table.transactionRequests).toHaveLength(3);
     }),
   );
 
@@ -547,17 +570,17 @@ describe("updateContact", () => {
     }),
   );
 
-  it.effect("keeps a contact changed underneath the read on the failure channel", () =>
+  it.effect("lets a lost race decide over the address checks computed from the stale read", () =>
     Effect.gen(function* () {
+      const read = Effect.succeed({ Item: contactItem });
+      const lost = cancelled("ConditionalCheckFailed", "ConditionalCheckFailed", "None", "None");
+
       const { run } = update(
-        {
-          ...found,
-          transactWriteItems: [cancelled("ConditionalCheckFailed", "None", "None", "None")],
-        },
+        { getItem: [read, read, read], transactWriteItems: [lost, lost, lost] },
         { email: "new@example.com" },
       );
 
-      expect(yield* Effect.flip(run)).toBeInstanceOf(Errors.StorageUnavailable);
+      expect(yield* Effect.flip(run)).toStrictEqual(new Errors.ContactChanged());
     }),
   );
 });
