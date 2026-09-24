@@ -1,6 +1,6 @@
 # Review fixes and simplification
 
-> **Status:** In progress (T13 delivery pending)
+> **Status:** Complete
 > **ADRs:** amends [0019](../0019-markdown-campaign-bodies.md) in place (text part); lifecycle notes and clerical fixes on [0003](../0003-feedback-events-through-eventbridge.md), [0012](../0012-reputation-guardrails.md), [0013](../0013-repeat-safe-writes.md), [0015](../0015-one-shot-scheduler-per-campaign.md), [0016](../0016-cancelling-pending-campaign-runs.md), [0018](../0018-optional-dns-management.md), [0020](../0020-drafts-previews-and-test-sends.md); constrained by [0008](../0008-storage-capabilities-and-error-boundaries.md), [0011](../0011-open-recipient-set-and-paced-dispatch.md), [0013](../0013-repeat-safe-writes.md), [0020](../0020-drafts-previews-and-test-sends.md)
 > **Updated:** 2026-09-24
 
@@ -361,11 +361,15 @@ All from this session, 2026-09-23, at HEAD `9ebb2fc`. The review lanes ran read-
   - Push `review-fixes` and open a PR against `main`, grepping the PR body too.
 - **Starts at:** project memory "Public repo leak check"
 - **Depends on:** T12
-- **Status:** Pending
+- **Status:** Verified
 - **Tests:** none; this is release hygiene.
 - **Verify:**
   - The file check prints nothing, and the patch and message check prints `0`.
   - The PR is open. The repository has no CI, so T11's local `pnpm check` and live gate are the gates.
+- **Evidence:** 2026-09-24:
+  - Against `origin/main` (`3ca4953`), the case-insensitive leak check found no files and 0 patch or message matches.
+  - The persona and infrastructure scan of the added lines found nothing, and the PR body has 0 matches.
+  - Pushed `review-fixes` and opened PR #4 against `main`.
 
 ## Final acceptance
 
@@ -385,7 +389,7 @@ All from this session, 2026-09-23, at HEAD `9ebb2fc`. The review lanes ran read-
 
 ## Handoff
 
-- **Next action:** T13, the leak and persona scans, then push and open the PR. After the user merges the PR: remove the worktree and delete the branch.
+- **Next action:** the user reviews and merges PR #4. After the merge, remove the worktree `~/worktrees/emailer/review-fixes` and delete the branch `review-fixes` locally and on `origin`. Prod deploy only on the user's go.
 - **Deviations** (none changes a decision; all are within the approved outcome):
   - Three lanes worked in parallel, so commits interleave rather than follow the task order. Each of the 13 commits passed `pnpm check` on its own.
   - The live gate used the dedicated stage `test-review` instead of `test`, so it could not collide with another worktree's stage.
