@@ -39,7 +39,7 @@ The clock has to survive Lambda invocations and must not fire on a torn-down sta
 - **At-least-once and late fires cost nothing new.** They are duplicate or stale wake-ups, which ADR-0011's conditions already absorb.
 - **Scheduler's 60-second precision** is not an end-to-end campaign start guarantee. What Scheduler does with an instant only seconds ahead or already past is not documented; the Confirmation records what the probe observed.
 - **A one-time schedule counts against the account quota until it runs**; `ActionAfterCompletion: DELETE` removes it after the fire, and nothing removes it earlier. After a cancel, a send now or a reschedule, the outdated schedule stays listed in the stage's schedule group until its original time, which can be months away, then fires once as stale and deletes itself. Each such fire costs one dispatcher invocation that sends nothing.
-- **Two conditions change and no expression does**: `beginRun` and `enqueueCampaign` admit `scheduled`; `resumeCampaign` does not. `META` gains no attribute.
+- **Two conditions admit `scheduled`**: `beginRun`, and the new-run write that send and schedule share, whose observed source may be `scheduled`. Only resume starts a run from `paused`. `META` gains no attribute.
 - **A schedule created by a runtime call belongs to no Alchemy resource.** The group is the only thing that ties it to the stage; declaring one is not optional.
 - **A fresh execution role takes up to about a minute to become assumable.** The role is deployed before the API function that binds it, and the first `schedule` call of a live run comes minutes later; if it ever answers 503 right after a first deploy, wait and repeat.
 - **Teardown inventory** gains the schedule group and the execution role.

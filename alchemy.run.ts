@@ -55,7 +55,7 @@ export default Stack(
     // inside the function's own props would run them at every cold start and resolve the function
     // from inside its own construction.
     yield* AWS.CloudWatch.Alarm("FeedbackFailuresVisible", {
-      AlarmDescription: "Feedback events Lambda could not process are waiting to be replayed.",
+      AlarmDescription: "Feedback events Lambda could not process are waiting to be redriven.",
       Namespace: "AWS/SQS",
       MetricName: "ApproximateNumberOfMessagesVisible",
       Dimensions: [{ Name: "QueueName", Value: failures.queueName }],
@@ -70,7 +70,7 @@ export default Stack(
     });
 
     yield* AWS.CloudWatch.Alarm("DispatchFailuresVisible", {
-      AlarmDescription: "Dispatch wake-ups Lambda could not process are waiting to be replayed.",
+      AlarmDescription: "Dispatch wake-ups Lambda could not process are waiting to be redriven.",
       Namespace: "AWS/SQS",
       MetricName: "ApproximateNumberOfMessagesVisible",
       Dimensions: [{ Name: "QueueName", Value: failedDispatches.queueName }],

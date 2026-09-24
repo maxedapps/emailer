@@ -26,14 +26,14 @@ export const feedbackFailures = AWS.SQS.Queue("FeedbackFailures", {
   sqsManagedSseEnabled: true,
 });
 
+/** Named, so the queue policy below can state the queue's ARN without waiting on the queue. */
+const feedbackEventsName = Effect.map(Stack, ({ stage }) => `emailer-${stage}-feedback-events`);
+
 /**
  * Standard queue of SES feedback events. Visibility is 3 minutes so a 30-second feedback
  * invocation is covered by AWS's 6×-timeout recommendation. Source retention is the SQS default of
  * four days, shorter than the dead-letter queue.
  */
-/** Named, so the queue policy below can state the queue's ARN without waiting on the queue. */
-const feedbackEventsName = Effect.map(Stack, ({ stage }) => `emailer-${stage}-feedback-events`);
-
 const feedbackEvents = AWS.SQS.Queue(
   "FeedbackEvents",
   Effect.gen(function* () {
