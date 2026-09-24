@@ -5,6 +5,7 @@
 - Accepted: 2026-09-23
 - Confirmed: 2026-09-23. On the ephemeral stage `test`, a draft created from the reference newsletter rendered to about 5 KB of HTML. Its preview showed every element styled, the image at full card width, and the footer below the card, at desktop and at 390px width. A `[Test]` copy delivered to the operator's test inbox kept every inline style, and its text part carried no Markdown syntax. The stage was destroyed.
 - Amended: [review-fixes](work/review-fixes.md) — the plain-text part keeps a heading's own case (and its link's URL), reduces raw HTML to its text, decodes the basic entities, renders task items as `[x]`/`[ ]`, and indents a list item's further lines and nested lists under its marker.
+- Amended: 2026-09-24, on the user's decision after reviewing PR #4. Raw HTML in the plain-text part reads as the HTML part shows it. A raw link keeps its URL as `label (url)`. `<br>`, block tags and table cells end a line; a `<br>` at the end of a source line ends only that line. `<style>`/`<script>` contents are dropped. Before, a raw link lost its URL and words on either side of those tags ran together.
 - Authority: On 2026-09-23 the user asked for Markdown authoring with email-conformant HTML output, and asked for MJML and other tools to be evaluated. After seeing the research, they followed the recommendation to use `marked` alone, in the CLI. See [the plan](work/drafting-and-preview.md).
 
 ## Context
@@ -25,7 +26,7 @@
   - **Layout:** the output goes into one fixed layout:
     - a fluid table with a 600px max width, plus an Outlook-only 600px wrapper;
     - `color-scheme: light`, `lang`, and the viewport and Apple reformatting metas.
-  - **Plain text:** a second instance renders the same tokens as text. Headings keep their text, links come out as `label (url)`, images as `[alt]`, tables as `a | b` and task items as `[x]`/`[ ]`. Raw HTML is reduced to its text.
+  - **Plain text:** a second instance renders the same tokens as text. Headings keep their text, links come out as `label (url)`, images as `[alt]`, tables as `a | b` and task items as `[x]`/`[ ]`. Raw HTML is reduced to the text the HTML part shows: raw links as `label (url)`, a line break wherever `<br>`, a block tag or a table cell ends one, and no `<style>`/`<script>` contents.
 - **The backend footer is a self-contained styled block.** It is still inserted before the last `</body>`, so it renders cleanly below the layout and below hand-written HTML.
 - **`--text`/`--html` remain for hand-written bodies,** and are mutually exclusive with `--markdown`.
 
