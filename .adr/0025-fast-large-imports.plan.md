@@ -90,6 +90,11 @@ Status: Not started
   - It uses Effect's `HttpClient.retryTransient`, which covers transport failures, timeouts, and 408, 429, 500, 502, 503 and 504.
   - The schedule is exponential from 500 ms, jittered, with at most 8 retries: about two minutes.
   - Declared business errors (400, 401, 404, 409) are never retried.
+- **Order:**
+  1. The deadline wraps each attempt, as `transformResponse(Effect.timeout(…))`.
+  2. `retryTransient` wraps that, so a timed-out attempt is retried.
+
+  The other way round, the deadline would cut the two-minute retry budget to 70 s without any error.
 
 **Verify:** covered by T4's CLI tests. The existing CLI suites pass unchanged.
 
@@ -151,9 +156,13 @@ Status: Not started
   - Deploy it from the worktree.
   - Repoint the seven stage-specific `.env.test` values, as the README's "Develop and test" lists them.
 - **Full suite:** `pnpm test:integration` passes.
+- **Pre-flight:**
+  - run the CLI as `node --env-file=.env.test apps/cli/src/main.ts`, never as `pnpm emailer`, which loads `.env`: in an operator checkout that is prod;
+  - before the first call, confirm `EMAILER_API_URL` equals this deploy's `apiUrl` output.
 - **Import:**
   - write a file of 10,000 labelled simulator addresses;
-  - import it into a fresh list with `pnpm emailer lists import`.
+  - import it into a fresh list;
+  - start at least a minute after the suite has finished, so its writes and conflicts stay out of the gate's metric window.
 - **Pass criteria:**
   - exit 0;
   - exactly 10,000 forward and 10,000 reverse memberships, counted in the table;
