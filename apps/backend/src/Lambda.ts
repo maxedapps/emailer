@@ -8,6 +8,9 @@ const logRetention = Duration.days(7);
  * What every function in the stack shares: a stage-scoped name, the runtime and architecture, and
  * its own log group with bounded retention, declared as `<id>Logs`. Each function keeps its
  * `main: import.meta.url`, because that is what points the bundler at its module.
+ *
+ * Each function passes `logGroupName` on as `EMAILER_LOG_GROUP`. Nothing reads that variable: it
+ * exists only so the function depends on its log group, which is then created before the function.
  */
 export const lambdaBasics = (id: string, name: string) =>
   Effect.gen(function* () {

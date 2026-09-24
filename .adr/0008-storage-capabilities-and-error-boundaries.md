@@ -3,13 +3,13 @@
 - Status: Accepted
 - Date: 2026-09-14
 - Accepted: 2026-09-14
-- Authority: The user requested a clean implementation plan and permits substantial refactoring and a full development reset. The user then requested implementation of [the plan](work/clean-codebase.md), which accepts this record.
+- Authority: The user requested a clean implementation plan and permits substantial refactoring and a full development reset. The user then requested implementation of the plan (`work/clean-codebase.md`, in git history), which accepts this record.
 - Supersedes: ADR-0005's exactly-one-Storage-tag choice; preserves ADR-0001's resource-owning capabilities and the single-table access paths.
 - Superseded in part: [ADR-0011](0011-open-recipient-set-and-paced-dispatch.md) for the `CampaignStore` binding table (claims/finalization without `UpdateItem`) and the API's use of the mailer.
 - Superseded in part: [ADR-0012](0012-reputation-guardrails.md) for the `FeedbackStore` and `AudienceStore` capability rows.
 - Amended: [ADR-0020](0020-drafts-previews-and-test-sends.md) — a sixth capability, `CampaignReader` (`GetItem` only), for the public preview function; the rate limiter's store is the fifth.
-- Amended: [campaign-listing](work/campaign-listing.md) — CampaignStore binds all six table operations
-- Amended: [codebase-cleanup](work/codebase-cleanup.md) — `Table.ts` also holds `allTableOperations`, the one six-operation binding that AudienceStore and CampaignStore, which both perform every operation, share; every narrower capability still binds its own
+- Amended: campaign-listing (`work/campaign-listing.md`, in git history) — CampaignStore binds all six table operations
+- Amended: codebase-cleanup (`work/codebase-cleanup.md`, in git history) — `Table.ts` also holds `allTableOperations`, the one six-operation binding that AudienceStore and CampaignStore, which both perform every operation, share; every narrower capability still binds its own
 - Amended: 2026-09-24, on the user's decision in the simplification plan (`work/simplify.md` T3) — storage fails with the contract's expected errors, `NotFound`, `EmailAlreadyUsed` and `AddressOptedOut`, where a read or a condition detects them, and the API calls the stores directly for plain reads and writes. `StorageFailure` stays internal.
 
 ## Context
@@ -52,7 +52,7 @@ Inspect generated and effective deployed IAM, including absence of DynamoDB get/
 
 ## References
 
-- [Implementation plan](work/clean-codebase.md), T2, T3, T6, and T9
+- Implementation plan (`work/clean-codebase.md`, in git history), T2, T3, T6, and T9
 - [ADR-0001](0001-resource-owning-effect-services.md)
 - [ADR-0005](0005-contact-identity-and-membership-access-paths.md)
 - [Alchemy Layers](https://alchemy.run/infrastructure-as-effects/layers/)

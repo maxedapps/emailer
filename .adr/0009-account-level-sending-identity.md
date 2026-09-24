@@ -3,7 +3,7 @@
 - Status: Accepted
 - Date: 2026-09-14
 - Accepted: 2026-09-14
-- Authority: The user chose `mail.example.com` as the sending domain, and `EmailerSending` at stage `shared` for the owning stack, on 2026-09-14, after the investigation recorded in [shared sender identity research](work/shared-sender-identity-research.md), and accepted the design for implementation pending the go/no-go gate in [the plan](work/sending-identity.md). The gate passed on 2026-09-14: two Emailer `test` deploy/send/destroy cycles delivered `dkim=pass header.d=mail.example.com` with unchanged `LastKeyGenerationTimestamp` and no `DeleteEmailIdentity`.
+- Authority: The user chose `mail.example.com` as the sending domain, and `EmailerSending` at stage `shared` for the owning stack, on 2026-09-14, after the investigation recorded in shared sender identity research (`work/shared-sender-identity-research.md`, in git history), and accepted the design for implementation pending the go/no-go gate in the plan (`work/sending-identity.md`, in git history). The gate passed on 2026-09-14: two Emailer `test` deploy/send/destroy cycles delivered `dkim=pass header.d=mail.example.com` with unchanged `LastKeyGenerationTimestamp` and no `DeleteEmailIdentity`.
 - Supersedes in part: [ADR-0002](0002-domain-sending-identity.md)'s per-stage identity lifecycle, its `example.com` domain choice, and its propagation-race explanation with the `INSYNC`/`dig` obligation built on it. Also two clauses of [ADR-0001](0001-resource-owning-effect-services.md): "Keep one root `alchemy.run.ts`", since the identity has its own stack; and the SES identity's placement inside `Mailer.ts`, which keeps its service, configuration set, send binding and implementation. ADR-0001's own allowance for "a small separate resource module … if a concrete shared ownership need arises" is the need met here.
 - Extended by: [ADR-0010](0010-aligned-mail-from-spf-and-dmarc.md) — MAIL FROM, SPF and DMARC records join the retained inventory.
 - Superseded in part: [ADR-0017](0017-adopted-root-domain-sending-identity.md) — the `mail.example.com` domain choice and "created once": the root-domain identity is adopted, not created.
@@ -60,8 +60,8 @@ The plan's gate deploys and destroys the Emailer `test` stage **twice** against 
 
 ## References
 
-- [Shared sender identity research](work/shared-sender-identity-research.md), F1–F16
-- [Sending identity plan](work/sending-identity.md)
+- Shared sender identity research (`work/shared-sender-identity-research.md`, in git history), F1–F16
+- Sending identity plan (`work/sending-identity.md`, in git history)
 - [ADR-0001: Resource-owning Effect services](0001-resource-owning-effect-services.md)
 - [ADR-0002: Domain sending identity with Easy DKIM](0002-domain-sending-identity.md)
 - [ADR-0004: Sender-owned one-click unsubscribe](0004-sender-owned-one-click-unsubscribe.md)

@@ -3,7 +3,7 @@
 - Status: Accepted
 - Date: 2026-09-23
 - Accepted: 2026-09-23
-- Authority: On 2026-09-23 a whole-codebase review found dead types, a dead schema, an empty workspace package with an installed SDK, a parameter kept alive with a `_` prefix, and two lint suppressions that no longer suppressed anything. The user asked how that could survive linting, and chose to add knip. See [the plan](work/codebase-cleanup.md).
+- Authority: On 2026-09-23 a whole-codebase review found dead types, a dead schema, an empty workspace package with an installed SDK, a parameter kept alive with a `_` prefix, and two lint suppressions that no longer suppressed anything. The user asked how that could survive linting, and chose to add knip. See the plan (`work/codebase-cleanup.md`, in git history).
 
 ## Context
 
@@ -45,4 +45,4 @@
 ## References
 
 - [knip documentation](https://knip.dev/)
-- [Codebase cleanup plan](work/codebase-cleanup.md)
+- Codebase cleanup plan (`work/codebase-cleanup.md`, in git history)

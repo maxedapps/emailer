@@ -9,15 +9,15 @@
   - One `[Test]` copy reached the operator's test inbox with `dkim=pass` for the sending domain, both unsubscribe headers in the signed `h=` list, and `dmarc=pass`.
   - The preview answered with all four headers, and a link clicked inside its frame opened a new tab.
   - The prod plan shows three creates (Preview, PreviewLogs, PreviewSecret) and nothing replaced or deleted.
-- Deployed to prod: 2026-09-23, from `60061cd` together with the codebase cleanup. Prod held only a test list, so the user chose to destroy the stage and deploy it fresh instead of upgrading it in place; the in-place plan above was not applied. The identity stack was not touched. Details are in [the cleanup's handoff](work/codebase-cleanup.md#handoff).
-- Amended: [codebase-cleanup](work/codebase-cleanup.md) — each sender mints the recipient's unsubscribe link before it changes any state, the dispatcher before its claim, and hands it to the mailer, which composes and submits. A link that cannot be minted then stops a slice with no claimed row left unsettled. The one composer is unchanged; the preview still passes its placeholder.
+- Deployed to prod: 2026-09-23, from `60061cd` together with the codebase cleanup. Prod held only a test list, so the user chose to destroy the stage and deploy it fresh instead of upgrading it in place; the in-place plan above was not applied. The identity stack was not touched. Details are in the cleanup's handoff (`work/codebase-cleanup.md`, in git history).
+- Amended: codebase-cleanup (`work/codebase-cleanup.md`, in git history) — each sender mints the recipient's unsubscribe link before it changes any state, the dispatcher before its claim, and hands it to the mailer, which composes and submits. A link that cannot be minted then stops a slice with no claimed row left unsettled. The one composer is unchanged; the preview still passes its placeholder.
 - Authority: On 2026-09-23 the user asked for more ways to draft and preview campaigns: a preview that works on a headless machine through a short-lived public URL, and a test command that sends to several addresses or to one list, with a recipient-count warning. They followed every recommendation that the research produced:
   - editable and deletable drafts;
   - a confirmation prompt with `--yes`;
   - synchronous capped test sends that share the account-wide guards;
   - a preview link with an optional `--open`.
 
-  They then chose, over a route on the API function, a dedicated preview function, because of ADR-0004 and ADR-0008. They also chose concern folders for the backend. See [the plan](work/drafting-and-preview.md).
+  They then chose, over a route on the API function, a dedicated preview function, because of ADR-0004 and ADR-0008. They also chose concern folders for the backend. See the plan (`work/drafting-and-preview.md`, in git history).
 - Supersedes in part:
   - [ADR-0011](0011-open-recipient-set-and-paced-dispatch.md): "The API never submits to SES again and no longer constructs the mailer". The API now sends test messages, and its role regains `ses:SendEmail`.
   - [ADR-0014](0014-campaign-body-item-and-summaries.md): "No campaign delete exists". Drafts can be deleted, both items together.
@@ -97,7 +97,7 @@ Three existing rules constrain the design:
 
 ## References
 
-- [Plan](work/drafting-and-preview.md)
+- Plan (`work/drafting-and-preview.md`, in git history)
 - [ADR-0004](0004-sender-owned-one-click-unsubscribe.md), [ADR-0007](0007-immutable-recipient-unsubscribe-links.md), [ADR-0008](0008-storage-capabilities-and-error-boundaries.md), [ADR-0011](0011-open-recipient-set-and-paced-dispatch.md), [ADR-0012](0012-reputation-guardrails.md), [ADR-0014](0014-campaign-body-item-and-summaries.md), [ADR-0019](0019-markdown-campaign-bodies.md)
 - [Alchemy Layers](https://alchemy.run/infrastructure-as-effects/layers/), [Alchemy file layout](https://alchemy.run/project-structure/file-layout/)
 - [S3 presigned URLs](https://docs.aws.amazon.com/AmazonS3/latest/userguide/using-presigned-url.html), [S3 lifecycle expiration](https://docs.aws.amazon.com/AmazonS3/latest/userguide/lifecycle-expire-general-considerations.html)

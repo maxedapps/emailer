@@ -4,7 +4,7 @@
 - Date: 2026-09-16
 - Accepted: 2026-09-16
 - Confirmed: 2026-09-16. Live gate on ephemeral stage `test-f` passed all 22 integration cases; the stage was destroyed.
-- Authority: The user asked on 2026-09-16 for the cleanest fix after a live run showed one DynamoDB server error stalling a campaign for the dispatch queue's 30-minute lease, and allowed big refactors to get there. Acceptance follows the live gate in [the plan](work/repeat-safe-writes.md).
+- Authority: The user asked on 2026-09-16 for the cleanest fix after a live run showed one DynamoDB server error stalling a campaign for the dispatch queue's 30-minute lease, and allowed big refactors to get there. Acceptance follows the live gate in the plan (`work/repeat-safe-writes.md`, in git history).
 - Supersedes in part: [ADR-0011](0011-open-recipient-set-and-paced-dispatch.md)'s "Conditional writes are single-attempt" and its claim that a retried conditional write is misread as a lost race; [ADR-0012](0012-reputation-guardrails.md)'s "Transaction conflicts are retried, lost responses are not", including its client-level opt-out.
 - Superseded in part: [ADR-0016](0016-cancelling-pending-campaign-runs.md), for campaign lifecycle commands: enqueue and resume no longer accept a campaign already queued, because each command is a single-item transaction with its own request token that requires the state it observed.
 
@@ -45,7 +45,7 @@ The transport tests prove that a server error is retried with the identical requ
 
 ## References
 
-- [Repeat-safe writes plan](work/repeat-safe-writes.md)
+- Repeat-safe writes plan (`work/repeat-safe-writes.md`, in git history)
 - [ADR-0011](0011-open-recipient-set-and-paced-dispatch.md), [ADR-0012](0012-reputation-guardrails.md)
 - [Amazon DynamoDB: TransactWriteItems, ClientRequestToken](https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_TransactWriteItems.html)
 - [Amazon DynamoDB: Transactions, idempotency and conflict handling](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/transaction-apis.html)

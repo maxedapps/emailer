@@ -3,7 +3,7 @@
 - Status: Accepted
 - Date: 2026-09-16
 - Confirmed: 2026-09-16. Live gate on ephemeral stage `test-list` passed all 23 integration cases, including the listing case that finds a created campaign without its `text` and reads the `text` back through `get`; a direct read of the campaign partition showed the `BODY` item carrying the text and the `META` item carrying state and index attributes without it. The stage was destroyed.
-- Authority: The user decided on 2026-09-16, after the review of PR #7, that a campaign listing must not carry the body, and asked for the cleanest fix with big refactors allowed. The user then asked for the implementation of [the plan](work/campaign-body-item.md). Confirmation follows the plan's live gate.
+- Authority: The user decided on 2026-09-16, after the review of PR #7, that a campaign listing must not carry the body, and asked for the cleanest fix with big refactors allowed. The user then asked for the implementation of the plan (`work/campaign-body-item.md`, in git history). Confirmation follows the plan's live gate.
 - Supersedes in part: [ADR-0011](0011-open-recipient-set-and-paced-dispatch.md)'s campaign record, which held subject, text, state and counters in one item.
 - Superseded in part: [ADR-0020](0020-drafts-previews-and-test-sends.md) for "No campaign delete exists": a draft can be deleted, `META` and `BODY` in one transaction.
 
@@ -46,7 +46,7 @@ Confirmed on 2026-09-16 against ephemeral stage `test-list`, then destroyed: all
 
 ## References
 
-- [Plan](work/campaign-body-item.md)
-- [Campaign listing plan](work/campaign-listing.md), whose PR review raised the listing size
+- Plan (`work/campaign-body-item.md`, in git history)
+- Campaign listing plan (`work/campaign-listing.md`, in git history), whose PR review raised the listing size
 - [DynamoDB read and write operations](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/read-write-operations.html)
 - [Lambda quotas](https://docs.aws.amazon.com/lambda/latest/dg/gettingstarted-limits.html)

@@ -1,6 +1,6 @@
 # Plan: Typed errors, one item codec and cost-neutral storage
 
-- Status: Draft
+- Status: In progress
 - Decision: [ADR-0024](0024-typed-errors-and-cost-neutral-storage.md)
 
 ## Goal
@@ -42,9 +42,9 @@
 
 ### T1 — Repository hygiene
 
-Status: Not started
+Status: Done
 
-- **`CLAUDE.md`** becomes a symlink to `AGENTS.md`. The two files are identical today.
+- **`CLAUDE.md`** is a symlink to `AGENTS.md`. It already was one, so nothing changed.
 - **`.adr/work/`** is deleted: 83 finished plans and reviews, in git history.
   - The 74 links into it from 22 ADRs become plain text that names the plan, for example: "the cleanup plan (`work/codebase-cleanup.md`, in git history)".
   - No repository URLs are added.
@@ -387,4 +387,4 @@ Status: Not started
 
 ## Open questions
 
-None. The decisions are recorded in ADR-0024; it and this plan await the user's approval.
+None. The user approved ADR-0024 and this plan on 2026-09-24.

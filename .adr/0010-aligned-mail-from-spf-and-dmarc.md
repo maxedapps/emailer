@@ -3,7 +3,7 @@
 - Status: Accepted
 - Date: 2026-09-15
 - Accepted: 2026-09-15
-- Authority: The user asked for SPF and DMARC on `mail.example.com` on 2026-09-15 and chose the operator mailbox `dmarc@reports.example.net` as the DMARC report destination. Accepted by the user on 2026-09-15 after independent review of [the plan](work/deliverability.md); the plan's live gate confirms the implementation.
+- Authority: The user asked for SPF and DMARC on `mail.example.com` on 2026-09-15 and chose the operator mailbox `dmarc@reports.example.net` as the DMARC report destination. Accepted by the user on 2026-09-15 after independent review of the plan (`work/deliverability.md`, in git history); the plan's live gate confirms the implementation.
 - Discharges: the SPF, DMARC and custom MAIL FROM obligations left open by [ADR-0002](0002-domain-sending-identity.md) (Consequences) and carried forward by [ADR-0009](0009-account-level-sending-identity.md)'s Consequences.
 - Superseded in part: [ADR-0017](0017-adopted-root-domain-sending-identity.md) — the record inventory: DMARC moves to the organizational domain and the cross-domain report authorization record is gone.
 - Superseded in part: [ADR-0018](0018-optional-dns-management.md) — records by hand, never declared, and alternative 6: with `EMAILER_DNS` the identity stack declares them; the values are unchanged.
@@ -51,7 +51,7 @@ The T3 live gate passed on 2026-09-15: `spf=pass` at `bounce.mail.example.com`, 
 
 ## References
 
-- [Deliverability plan](work/deliverability.md)
+- Deliverability plan (`work/deliverability.md`, in git history)
 - [ADR-0002: Domain sending identity with Easy DKIM](0002-domain-sending-identity.md)
 - [ADR-0009: Account-level sending identity](0009-account-level-sending-identity.md)
 - [Amazon SES: Using a custom MAIL FROM domain](https://docs.aws.amazon.com/ses/latest/dg/mail-from.html)

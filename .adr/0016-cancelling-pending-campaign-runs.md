@@ -3,7 +3,7 @@
 - Status: Accepted
 - Date: 2026-09-17
 - Accepted: 2026-09-17
-- Confirmed: 2026-09-24. `CampaignCancellation.integration.test.ts` passed in two full live runs, both on ephemeral stages that were destroyed afterwards: ADR-0020's run on `test` (5 files, 40 cases) and the [review-fixes](work/review-fixes.md) live gate on `test-review` (5 files, 41 cases).
+- Confirmed: 2026-09-24. `CampaignCancellation.integration.test.ts` passed in two full live runs, both on ephemeral stages that were destroyed afterwards: ADR-0020's run on `test` (5 files, 40 cases) and the review-fixes (`work/review-fixes.md`, in git history) live gate on `test-review` (5 files, 41 cases).
 - Authority: The user requested queued-campaign cancellation, explicitly allowed substantial refactoring, requested a detailed implementation plan, and on 2026-09-17 authorized implementation with `/implement-plan .adr/work/queued-campaign-cancellation.md`.
 - Supersedes in part: [ADR-0015](0015-one-shot-scheduler-per-campaign.md), for cancellation transitions, removing run tokens, campaign-named schedules and delete-before-create replacement; [ADR-0013](0013-repeat-safe-writes.md), for the single-item update mechanism used by campaign lifecycle commands.
 - Superseded in part: [ADR-0020](0020-drafts-previews-and-test-sends.md), for the cancel-only conflict: every wrong-state operation now answers one `CampaignStateConflict`.
@@ -43,7 +43,7 @@ Deployment is planned against a fresh ephemeral stage. Existing records remain r
 
 ## Confirmation
 
-The [implementation plan](work/queued-campaign-cancellation.md) requires deterministic command/worker interleavings, transport replay checks, real DynamoDB condition tests, generation-specific Scheduler adapter tests, API/CLI conflict tests, and an ephemeral live queue-cancellation acceptance run with observed stale-message consumption and zero recipient rows.
+The implementation plan (`work/queued-campaign-cancellation.md`, in git history) requires deterministic command/worker interleavings, transport replay checks, real DynamoDB condition tests, generation-specific Scheduler adapter tests, API/CLI conflict tests, and an ephemeral live queue-cancellation acceptance run with observed stale-message consumption and zero recipient rows.
 
 ## References
 

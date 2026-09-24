@@ -1,8 +1,8 @@
 # ADR-0024: Typed errors, one item codec and cost-neutral storage
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-09-24
-- Authority: On 2026-09-24 a whole-codebase review found one error type standing for every failure. The user asked for granular, type-safe error handling that embraces Effect and Alchemy, for a lean codebase, and for no change that raises running cost. They accepted the review's recommendations, including dropping delivery-delay events and keeping the feedback queue.
+- Authority: On 2026-09-24 a whole-codebase review found one error type standing for every failure. The user asked for granular, type-safe error handling that embraces Effect and Alchemy, for a lean codebase, and for no change that raises running cost. They accepted the review's recommendations, including dropping delivery-delay events and keeping the feedback queue. They approved this record and its plan on 2026-09-24.
 - Supersedes in part, once implemented:
   - [ADR-0004](0004-sender-owned-one-click-unsubscribe.md): unsubscribe as "a separate item type from suppression". The two become separate fields of one address item. Unsubscribe is still not a suppression reason, `unsuppress` never clears it, and both stay keyed by lowercased address.
   - [ADR-0006](0006-consent-survives-a-contacts-address-change.md): the opt-out check targets the address item, not `UNSUBSCRIBE#`.

@@ -5,17 +5,17 @@
 - Accepted: 2026-09-12
 - Superseded in part: [ADR-0008](0008-storage-capabilities-and-error-boundaries.md) replaces the exactly-one-`Storage`-tag choice with four capability services. The single table, its access paths, the `EMAIL#` reservation, the conditional transactions and the accepted cascade race all remain in effect.
 - Superseded in part: [ADR-0011](0011-open-recipient-set-and-paced-dispatch.md) for the two-member audience probe (`readAudience` as a probe for the single-recipient send invariant).
-- Amended: [campaign-listing](work/campaign-listing.md) — campaign META items join the listing index
+- Amended: campaign-listing (`work/campaign-listing.md`, in git history) — campaign META items join the listing index
 - Superseded in part: [ADR-0023](0023-lists-carry-no-membership-version.md) removes `membershipVersion`. Membership writes check that the list exists instead of bumping it, the contact cascade needs no bump-free fallback, the list cascade deletes `META` on its own after the last page, and imports carry no bump. Every other clause here about the version is historical.
-- Authority: The user asked for a contact-management slice to be built in parallel with consent/unsubscribe, and explicitly selected bounded custom attributes and list deletion as additional scope. The user accepted this record on 2026-09-12, after the [slice](work/contact-list.md) was implemented and its decisive checks were confirmed against a live `test` stage.
+- Authority: The user asked for a contact-management slice to be built in parallel with consent/unsubscribe, and explicitly selected bounded custom attributes and list deletion as additional scope. The user accepted this record on 2026-09-12, after the slice (`work/contact-list.md`, in git history) was implemented and its decisive checks were confirmed against a live `test` stage.
 - Amended: 2026-09-24, on the user's decision in the simplification plan (`work/simplify.md` T3) — a reservation conflict fails with `EmailAlreadyUsed` straight from storage, no longer a success-channel outcome that the domain maps.
 - Documentation corrected: 2026-09-15. The GSI migration and partition-splitting statements below are corrected against AWS documentation and the pinned provider. The selected projection and accepted cascade concurrency tradeoff are unchanged.
 
 ## Context
 
-After the [first slice](work/first-campaign-slice.md) and the [feedback and suppression slice](work/feedback-and-suppression.md), contacts exist only as create-and-get-by-UUID. `readAudience` caps at two members because it is a probe for the single-recipient send invariant, not an audience read. There is no way to enumerate a list, find a contact by address, change one, remove one, or add more than one at a time, and nothing prevents two contacts sharing one email address.
+After the first slice (`work/first-campaign-slice.md`, in git history) and the feedback and suppression slice (`work/feedback-and-suppression.md`, in git history), contacts exist only as create-and-get-by-UUID. `readAudience` caps at two members because it is a probe for the single-recipient send invariant, not an audience read. There is no way to enumerate a list, find a contact by address, change one, remove one, or add more than one at a time, and nothing prevents two contacts sharing one email address.
 
-That last gap is not cosmetic. Suppression is keyed by address (`SUPPRESSION#<address>`), and the parallel consent slice keys unsubscribe the same way. A contact model permitting duplicate addresses cannot be reconciled with consent that is address-scoped. The [contact management slice](work/contact-list.md) closes these gaps, deliberately confined to the audience data model: the send path is unchanged, and mailability remains invisible on a contact.
+That last gap is not cosmetic. Suppression is keyed by address (`SUPPRESSION#<address>`), and the parallel consent slice keys unsubscribe the same way. A contact model permitting duplicate addresses cannot be reconciled with consent that is address-scoped. The contact management slice (`work/contact-list.md`, in git history) closes these gaps, deliberately confined to the audience data model: the send path is unchanged, and mailability remains invisible on a contact.
 
 Three constraints shaped every decision below.
 
@@ -89,13 +89,13 @@ The storage stub evaluates no conditions, has no index and **models no transacti
 
 The send path was not re-verified: this stage's SES identity is not DNS-verified, so every send is rejected before SES accepts anything. That is the condition [ADR-0002](0002-domain-sending-identity.md) describes, and it is independent of this record — the send path's source is unchanged by this slice.
 
-Details and evidence live in the [slice plan](work/contact-list.md) under T11.
+Details and evidence live in the slice plan (`work/contact-list.md`, in git history) under T11.
 
 ## References
 
 - [ADR-0001: Resource-owning Effect services](0001-resource-owning-effect-services.md)
 - [ADR-0003: Feedback events through EventBridge](0003-feedback-events-through-eventbridge.md)
-- [Contact management slice](work/contact-list.md)
+- Contact management slice (`work/contact-list.md`, in git history)
 - [DynamoDB read consistency](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.ReadConsistency.html)
 - [DynamoDB transactions](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/transaction-apis.html)
 - [DynamoDB query pagination](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Query.Pagination.html)
