@@ -156,7 +156,7 @@ Status: Done. As built:
 
 ### T4 — Item codec and the campaign record by state
 
-Status: Done except the prod decode scan, which waits for the user's go-ahead. As built:
+Status: Done. The prod decode scan ran on 2026-09-24 with the user's go-ahead: all 12 items the code reads decoded with the new records, none corrupt (2 contacts, 2 reservations, 1 list, 4 membership rows, 1 campaign, 1 body, 1 rate-limit window). The one other item, an old `UNSUBSCRIBE#` row, decoded under the migration's `--verify`, which reported it not yet merged, as expected before T11. As built:
 
 - `itemReader(record)` and `itemWriter(record)` take the contract schema as it is. The codec checks the version when it reads and stamps it when it writes, so no record declares `v`.
 - There is no `values()`. The codec is effectful, because the lint rules forbid synchronous schema calls, and building every expression through it would make every request builder effectful. Expression values keep `str`, `num`, `strMap` and `strSet`.
