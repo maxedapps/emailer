@@ -1,7 +1,7 @@
 import { Duration, Effect, Layer, Result } from "effect";
 import { TestClock } from "effect/testing";
 import { RateLimiter } from "effect/unstable/persistence";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "@effect/vitest";
 
 import { num, str } from "./Items.ts";
 import { rateLimitOperations } from "./RateLimit.ts";
@@ -21,8 +21,6 @@ const refillRate = Duration.millis(1000);
 
 const extend = 1000;
 
-const reservedCount = /(?<![:#])\bcount\b/;
-
 const windowAttributes = (count: number, expiresAt: number) =>
   Effect.succeed({
     Attributes: {
@@ -38,13 +36,6 @@ const withStore = (replies: ScriptedReplies) => {
 
   return { table, store: storeFor(table) };
 };
-
-const onTestClock = <A, E, R>(operation: Effect.Effect<A, E, R>) =>
-  Effect.gen(function* () {
-    yield* TestClock.setTime(now);
-
-    return yield* operation;
-  }).pipe(Effect.provide(TestClock.layer()));
 
 const limiterError = <A>(attempt: Result.Result<A, RateLimiter.RateLimiterError>) => {
   if (Result.isSuccess(attempt)) {
@@ -71,107 +62,100 @@ const commonPath = {
 } as const;
 
 describe("fixedWindow", () => {
-  it("issues the common-path UpdateItem and returns [tokens, extend] for a fresh item", () =>
-    Effect.runPromise(
-      onTestClock(
-        Effect.gen(function* () {
-          const { table, store } = withStore({
-            updateItem: [windowAttributes(tokens, now + extend)],
-          });
+  it.effect("issues the common-path UpdateItem and returns [tokens, extend] for a fresh item", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(now);
 
-          expect(
-            yield* store.fixedWindow({ key, tokens, refillRate, limit: undefined }),
-          ).toStrictEqual([tokens, extend]);
-          expect(table.updateItemRequests).toHaveLength(1);
-          expect(table.updateItemRequests[0]).toStrictEqual(commonPath);
-          expect(table.updateItemRequests[0]?.UpdateExpression).not.toMatch(reservedCount);
-          expect(table.updateItemRequests[0]?.ConditionExpression).not.toMatch(reservedCount);
-        }),
-      ),
-    ));
+      const { table, store } = withStore({
+        updateItem: [windowAttributes(tokens, now + extend)],
+      });
 
-  it("resets an expired item conditioned on #expiresAt <= :now", () =>
-    Effect.runPromise(
-      onTestClock(
-        Effect.gen(function* () {
-          const { table, store } = withStore({
-            updateItem: [conditionFailed, windowAttributes(tokens, now + extend)],
-          });
+      expect(yield* store.fixedWindow({ key, tokens, refillRate, limit: undefined })).toStrictEqual(
+        [tokens, extend],
+      );
+      expect(table.updateItemRequests).toHaveLength(1);
+      expect(table.updateItemRequests[0]).toStrictEqual(commonPath);
+    }),
+  );
 
-          expect(
-            yield* store.fixedWindow({ key, tokens, refillRate, limit: undefined }),
-          ).toStrictEqual([tokens, extend]);
-          expect(table.updateItemRequests).toHaveLength(2);
-          expect(table.updateItemRequests[0]?.ConditionExpression).toBe(
-            "attribute_not_exists(pk) OR #expiresAt > :now",
-          );
-          expect(table.updateItemRequests[1]).toStrictEqual({
-            Key: { pk: str(`RATELIMIT#${key}`), sk: str("RATELIMIT") },
-            UpdateExpression: "SET #count = :tokens, #expiresAt = :nowPlusExtend",
-            ConditionExpression: "attribute_exists(pk) AND #expiresAt <= :now",
-            ExpressionAttributeNames: { "#count": "count", "#expiresAt": "expiresAt" },
-            ExpressionAttributeValues: {
-              ":tokens": num(tokens),
-              ":now": num(now),
-              ":nowPlusExtend": num(now + extend),
-            },
-            ReturnValues: "UPDATED_NEW",
-          });
-          expect(table.updateItemRequests[1]?.UpdateExpression).not.toMatch(reservedCount);
-          expect(table.updateItemRequests[1]?.ConditionExpression).not.toMatch(reservedCount);
-        }),
-      ),
-    ));
+  it.effect("resets an expired item conditioned on #expiresAt <= :now", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(now);
 
-  it("retries the common path once after a lost reset and then fails", () =>
-    Effect.runPromise(
-      onTestClock(
-        Effect.gen(function* () {
-          const { table, store } = withStore({
-            updateItem: [conditionFailed, conditionFailed, conditionFailed],
-          });
+      const { table, store } = withStore({
+        updateItem: [conditionFailed, windowAttributes(tokens, now + extend)],
+      });
 
-          const attempt = yield* Effect.result(
-            store.fixedWindow({ key, tokens, refillRate, limit: undefined }),
-          );
+      expect(yield* store.fixedWindow({ key, tokens, refillRate, limit: undefined })).toStrictEqual(
+        [tokens, extend],
+      );
+      expect(table.updateItemRequests).toHaveLength(2);
+      expect(table.updateItemRequests[0]?.ConditionExpression).toBe(
+        "attribute_not_exists(pk) OR #expiresAt > :now",
+      );
+      expect(table.updateItemRequests[1]).toStrictEqual({
+        Key: { pk: str(`RATELIMIT#${key}`), sk: str("RATELIMIT") },
+        UpdateExpression: "SET #count = :tokens, #expiresAt = :nowPlusExtend",
+        ConditionExpression: "attribute_exists(pk) AND #expiresAt <= :now",
+        ExpressionAttributeNames: { "#count": "count", "#expiresAt": "expiresAt" },
+        ExpressionAttributeValues: {
+          ":tokens": num(tokens),
+          ":now": num(now),
+          ":nowPlusExtend": num(now + extend),
+        },
+        ReturnValues: "UPDATED_NEW",
+      });
+    }),
+  );
 
-          expect(limiterError(attempt)._tag).toBe("RateLimitStoreError");
-          expect(table.updateItemRequests).toHaveLength(3);
-          expect(table.updateItemRequests[0]?.ConditionExpression).toBe(
-            "attribute_not_exists(pk) OR #expiresAt > :now",
-          );
-          expect(table.updateItemRequests[1]?.ConditionExpression).toBe(
-            "attribute_exists(pk) AND #expiresAt <= :now",
-          );
-          expect(table.updateItemRequests[2]?.ConditionExpression).toBe(
-            "attribute_not_exists(pk) OR #expiresAt > :now",
-          );
-        }),
-      ),
-    ));
+  it.effect("retries the common path once after a lost reset and then fails", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(now);
 
-  it("maps a storage failure to RateLimiterError", () =>
-    Effect.runPromise(
-      onTestClock(
-        Effect.gen(function* () {
-          const { store } = withStore({ updateItem: [Effect.fail(serverError)] });
+      const { table, store } = withStore({
+        updateItem: [conditionFailed, conditionFailed, conditionFailed],
+      });
 
-          const attempt = yield* Effect.result(
-            store.fixedWindow({ key, tokens, refillRate, limit: undefined }),
-          );
+      const attempt = yield* Effect.result(
+        store.fixedWindow({ key, tokens, refillRate, limit: undefined }),
+      );
 
-          const reason = limiterError(attempt);
+      expect(limiterError(attempt)._tag).toBe("RateLimitStoreError");
+      expect(table.updateItemRequests).toHaveLength(3);
+      expect(table.updateItemRequests[0]?.ConditionExpression).toBe(
+        "attribute_not_exists(pk) OR #expiresAt > :now",
+      );
+      expect(table.updateItemRequests[1]?.ConditionExpression).toBe(
+        "attribute_exists(pk) AND #expiresAt <= :now",
+      );
+      expect(table.updateItemRequests[2]?.ConditionExpression).toBe(
+        "attribute_not_exists(pk) OR #expiresAt > :now",
+      );
+    }),
+  );
 
-          expect(reason._tag).toBe("RateLimitStoreError");
-          expect(reason.message).toBe("Failed to execute fixedWindow rate limiting command");
-        }),
-      ),
-    ));
+  it.effect("maps a storage failure to RateLimiterError", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(now);
+
+      const { store } = withStore({ updateItem: [Effect.fail(serverError)] });
+
+      const attempt = yield* Effect.result(
+        store.fixedWindow({ key, tokens, refillRate, limit: undefined }),
+      );
+
+      const reason = limiterError(attempt);
+
+      expect(reason._tag).toBe("RateLimitStoreError");
+      expect(reason.message).toBe("Failed to execute fixedWindow rate limiting command");
+    }),
+  );
 });
 
 describe("unsupported algorithms", () => {
-  it("fails tokenBucket, adaptiveConsume and adaptiveFeedback with RateLimitStoreError", () =>
-    Effect.runPromise(
+  it.effect(
+    "fails tokenBucket, adaptiveConsume and adaptiveFeedback with RateLimitStoreError",
+    () =>
       Effect.gen(function* () {
         const { store } = withStore({});
 
@@ -217,11 +201,11 @@ describe("unsupported algorithms", () => {
         expect(adaptiveFeedback._tag).toBe("RateLimitStoreError");
         expect(adaptiveFeedback.message).toBe("adaptiveFeedback is not supported");
       }),
-    ));
+  );
 });
 
 describe("RateLimiter.consume", () => {
-  it("returns the delay implied by the store count in delay mode", () => {
+  it.effect("returns the delay implied by the store count in delay mode", () => {
     const count = 3;
     const refillMs = 500;
 
@@ -229,27 +213,23 @@ describe("RateLimiter.consume", () => {
       updateItem: [windowAttributes(count, now + count * refillMs)],
     });
 
-    return Effect.runPromise(
-      onTestClock(
-        Effect.gen(function* () {
-          const limiter = yield* RateLimiter.RateLimiter;
+    return Effect.gen(function* () {
+      yield* TestClock.setTime(now);
 
-          const result = yield* limiter.consume({
-            key,
-            window: "1 second",
-            limit: 2,
-            onExceeded: "delay",
-            algorithm: "fixed-window",
-          });
+      const limiter = yield* RateLimiter.RateLimiter;
 
-          expect(Duration.toMillis(result.delay)).toBe(1000);
-        }).pipe(
-          Effect.provide(
-            RateLimiter.layer.pipe(
-              Layer.provide(Layer.succeed(RateLimiter.RateLimiterStore, store)),
-            ),
-          ),
-        ),
+      const result = yield* limiter.consume({
+        key,
+        window: "1 second",
+        limit: 2,
+        onExceeded: "delay",
+        algorithm: "fixed-window",
+      });
+
+      expect(Duration.toMillis(result.delay)).toBe(1000);
+    }).pipe(
+      Effect.provide(
+        RateLimiter.layer.pipe(Layer.provide(Layer.succeed(RateLimiter.RateLimiterStore, store))),
       ),
     );
   });

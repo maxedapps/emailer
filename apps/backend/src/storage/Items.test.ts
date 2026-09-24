@@ -1,6 +1,6 @@
 import * as Schemas from "@emailer/api/Schemas";
 import { Effect, Result, Schema } from "effect";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "@effect/vitest";
 
 import { contactItem, decodeContactItem } from "./Contacts.ts";
 import {
@@ -100,24 +100,24 @@ describe("wire codecs", () => {
 });
 
 describe("stored contact items", () => {
-  it("round trips a contact through the writer and the reader", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const stored = yield* decodeContactItem(contactItem(contact));
+  it.effect("round trips a contact through the writer and the reader", () =>
+    Effect.gen(function* () {
+      const stored = yield* decodeContactItem(contactItem(contact));
 
-        expect(stored).toMatchObject({
-          v: recordVersion,
-          id: contactId,
-          email: "sam@example.com",
-          name: "Sam",
-          attributes: { tier: "gold" },
-          createdAt,
-        });
-      }),
-    ));
+      expect(stored).toMatchObject({
+        v: recordVersion,
+        id: contactId,
+        email: "sam@example.com",
+        name: "Sam",
+        attributes: { tier: "gold" },
+        createdAt,
+      });
+    }),
+  );
 
-  it("omits an optional field the writer never wrote rather than reading it as undefined", () =>
-    Effect.runPromise(
+  it.effect(
+    "omits an optional field the writer never wrote rather than reading it as undefined",
+    () =>
       Effect.gen(function* () {
         const item = contactItem({ id: contactId, email: "sam@example.com", createdAt });
 
@@ -126,40 +126,36 @@ describe("stored contact items", () => {
         expect("name" in stored).toBe(false);
         expect("attributes" in stored).toBe(false);
       }),
-    ));
+  );
 
-  it("ignores the key and index attributes that travel on the same item", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const item = contactItem(contact);
+  it.effect("ignores the key and index attributes that travel on the same item", () =>
+    Effect.gen(function* () {
+      const item = contactItem(contact);
 
-        expect(item["pk"]).toBeDefined();
-        expect(item["gsi1pk"]).toBeDefined();
-        expect((yield* decodeContactItem(item)).id).toBe(contactId);
-      }),
-    ));
+      expect(item["pk"]).toBeDefined();
+      expect(item["gsi1pk"]).toBeDefined();
+      expect((yield* decodeContactItem(item)).id).toBe(contactId);
+    }),
+  );
 
-  it.each([
+  it.effect.each([
     ["a malformed optional value", { name: { N: "7" } }],
     ["a malformed required value", { email: { N: "7" } }],
     ["an address that is not one", { email: { S: "not-an-address" } }],
     ["a version this code cannot read", { v: { N: "99" } }],
-  ])("refuses an item carrying %s", (_label, overrides) =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const item = { ...contactItem(contact), ...overrides };
+  ] as const)("refuses an item carrying %s", ([_label, overrides]) =>
+    Effect.gen(function* () {
+      const item = { ...contactItem(contact), ...overrides };
 
-        expect(Result.isFailure(yield* Effect.result(decodeContactItem(item)))).toBe(true);
-      }),
-    ),
+      expect(Result.isFailure(yield* Effect.result(decodeContactItem(item)))).toBe(true);
+    }),
   );
 
-  it("refuses an item missing a required attribute", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { createdAt: _absent, ...item } = contactItem(contact);
+  it.effect("refuses an item missing a required attribute", () =>
+    Effect.gen(function* () {
+      const { createdAt: _absent, ...item } = contactItem(contact);
 
-        expect(Result.isFailure(yield* Effect.result(decodeContactItem(item)))).toBe(true);
-      }),
-    ));
+      expect(Result.isFailure(yield* Effect.result(decodeContactItem(item)))).toBe(true);
+    }),
+  );
 });
