@@ -7,7 +7,10 @@ import PreviewPage from "./apps/backend/src/campaigns/PreviewPage.ts";
 import { PreviewFunction } from "./apps/backend/src/campaigns/Previews.ts";
 import { dispatchFailures } from "./apps/backend/src/sending/Dispatch.ts";
 import DispatcherFunction from "./apps/backend/src/sending/Dispatcher.ts";
-import FeedbackFunction, { feedbackFailures } from "./apps/backend/src/feedback/Feedback.ts";
+import FeedbackFunction, {
+  feedbackFailures,
+  feedbackRouting,
+} from "./apps/backend/src/feedback/Feedback.ts";
 import { feedbackPublishing } from "./apps/backend/src/sending/Mailer.ts";
 import { alertsTopic, reputationAlarms } from "./apps/backend/src/sending/Reputation.ts";
 import { UnsubscribeFunction } from "./apps/backend/src/consent/Unsubscribe.ts";
@@ -27,12 +30,13 @@ export default Stack(
 
     const preview = yield* PreviewFunction;
 
-    const feedback = yield* FeedbackFunction;
+    yield* FeedbackFunction;
     yield* DispatcherFunction;
     const failures = yield* feedbackFailures;
     const failedDispatches = yield* dispatchFailures;
 
     yield* feedbackPublishing;
+    yield* feedbackRouting;
 
     const topic = yield* alertsTopic;
     yield* reputationAlarms;
@@ -50,31 +54,12 @@ export default Stack(
     // Deploy-time only, from attributes the composition has already resolved. Building these
     // inside the function's own props would run them at every cold start and resolve the function
     // from inside its own construction.
-    //
-    // Two separate questions, so two alarms. A visible message says the consumer accepted an event
-    // and could not process it — there is something to replay. A destination-delivery failure says
-    // Lambda could not even record that, which is the case where the event is actually lost.
     yield* AWS.CloudWatch.Alarm("FeedbackFailuresVisible", {
       AlarmDescription: "Feedback events Lambda could not process are waiting to be replayed.",
       Namespace: "AWS/SQS",
       MetricName: "ApproximateNumberOfMessagesVisible",
       Dimensions: [{ Name: "QueueName", Value: failures.queueName }],
       Statistic: "Maximum",
-      Period: 60,
-      EvaluationPeriods: 1,
-      Threshold: 1,
-      ComparisonOperator: "GreaterThanOrEqualToThreshold",
-      TreatMissingData: "notBreaching",
-      AlarmActions: [topic.topicArn],
-      OKActions: [topic.topicArn],
-    });
-
-    yield* AWS.CloudWatch.Alarm("FeedbackDestinationDeliveryFailures", {
-      AlarmDescription: "Lambda could not deliver a failed feedback event to its failure queue.",
-      Namespace: "AWS/Lambda",
-      MetricName: "DestinationDeliveryFailures",
-      Dimensions: [{ Name: "FunctionName", Value: feedback.functionName }],
-      Statistic: "Sum",
       Period: 60,
       EvaluationPeriods: 1,
       Threshold: 1,
@@ -103,8 +88,6 @@ export default Stack(
       apiUrl: api.functionUrl,
       unsubscribeUrl: unsubscribe.functionUrl,
       previewUrl: preview.functionUrl,
-      feedbackFunctionArn: feedback.functionArn,
-      feedbackFailureQueueUrl: failures.queueUrl,
       alertsTopicArn: topic.topicArn,
     };
   }).pipe(
