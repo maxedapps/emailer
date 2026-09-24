@@ -115,14 +115,9 @@ export interface CampaignControl {
   readonly pausedReason: Schemas.PauseReason | undefined;
 }
 
-export type ExpectedIdleSource = {
-  readonly state: "draft" | "scheduled";
+export type RunSource = {
+  readonly state: "draft" | "scheduled" | "paused";
   readonly runToken: string | undefined;
-};
-
-export type ExpectedPausedSource = {
-  readonly state: "paused";
-  readonly runToken: string;
 };
 
 export type CancelSource =
@@ -373,70 +368,41 @@ export const campaignOperations = (
       ],
     });
 
-  const enqueueCampaign = Effect.fn("Storage.enqueueCampaign")(function* (
+  /**
+   * Starts a new run, and only from the state and token the caller observed: the campaign becomes
+   * `queued` or `scheduled` under a fresh run token, with the run baselines taken from the counters
+   * as they stand. `queuedAt` is when it was queued or, for a schedule, when the wake-up is due.
+   * Only a paused source carries a pause reason, and it goes. Send, schedule and resume keep their
+   * own operation ids, so a failure names the command that hit it.
+   */
+  const newRun = Effect.fn("Storage.newRun")(function* (
     id: string,
-    expected: ExpectedIdleSource,
+    expected: RunSource,
     newToken: string,
-    now: string,
+    target: "queued" | "scheduled",
+    queuedAt: string,
   ) {
-    const outcome = yield* commitLifecycle("enqueueCampaign", id, {
+    const operationId =
+      target === "scheduled"
+        ? "scheduleCampaign"
+        : expected.state === "paused"
+          ? "resumeCampaign"
+          : "enqueueCampaign";
+
+    const outcome = yield* commitLifecycle(operationId, id, {
       UpdateExpression:
-        "SET #state = :queued, queuedAt = :now, runToken = :run, runAccepted = accepted, runBounced = bounced, runComplained = complained",
+        "SET #state = :target, queuedAt = :queuedAt, runToken = :run, runAccepted = accepted, runBounced = bounced, runComplained = complained REMOVE pausedReason",
       ConditionExpression: `#state = :expectedState AND ${observedTokenCondition(expected.runToken)}`,
       ExpressionAttributeValues: {
-        ":queued": str("queued"),
-        ":now": str(now),
+        ":target": str(target),
+        ":queuedAt": str(queuedAt),
         ":run": str(newToken),
         ":expectedState": str(expected.state),
         ...observedTokenValues(expected.runToken),
       },
     });
 
-    return outcome.committed ? ("queued" as const) : ("conflict" as const);
-  });
-
-  const scheduleCampaign = Effect.fn("Storage.scheduleCampaign")(function* (
-    id: string,
-    expected: ExpectedIdleSource,
-    newToken: string,
-    sendAt: string,
-  ) {
-    const outcome = yield* commitLifecycle("scheduleCampaign", id, {
-      UpdateExpression:
-        "SET #state = :scheduled, queuedAt = :sendAt, runToken = :run, runAccepted = accepted, runBounced = bounced, runComplained = complained",
-      ConditionExpression: `#state = :expectedState AND ${observedTokenCondition(expected.runToken)}`,
-      ExpressionAttributeValues: {
-        ":scheduled": str("scheduled"),
-        ":sendAt": str(sendAt),
-        ":run": str(newToken),
-        ":expectedState": str(expected.state),
-        ...observedTokenValues(expected.runToken),
-      },
-    });
-
-    return outcome.committed ? ("scheduled" as const) : ("conflict" as const);
-  });
-
-  const resumeCampaign = Effect.fn("Storage.resumeCampaign")(function* (
-    id: string,
-    expected: ExpectedPausedSource,
-    newToken: string,
-    now: string,
-  ) {
-    const outcome = yield* commitLifecycle("resumeCampaign", id, {
-      UpdateExpression:
-        "SET #state = :queued, runToken = :run, queuedAt = :now, runAccepted = accepted, runBounced = bounced, runComplained = complained REMOVE pausedReason",
-      ConditionExpression: "#state = :paused AND runToken = :expected",
-      ExpressionAttributeValues: {
-        ":queued": str("queued"),
-        ":run": str(newToken),
-        ":now": str(now),
-        ":paused": str(expected.state),
-        ":expected": str(expected.runToken),
-      },
-    });
-
-    return outcome.committed ? ("queued" as const) : ("conflict" as const);
+    return outcome.committed ? target : ("conflict" as const);
   });
 
   const cancelCampaign = Effect.fn("Storage.cancelCampaign")(function* (
@@ -807,9 +773,7 @@ export const campaignOperations = (
     getCampaign,
     listCampaigns,
     getCampaignControl,
-    enqueueCampaign,
-    scheduleCampaign,
-    resumeCampaign,
+    newRun,
     cancelCampaign,
     beginRun,
     claimRecipient,

@@ -444,9 +444,10 @@ const inMemory = (wakeFails = false, status: AddressStatus = "mailable"): Store 
           pausedReason: submission.state === "paused" ? submission.reason : undefined,
         });
       }),
-    enqueueCampaign: (id, expected, newToken, now) =>
+    // Every run this suite starts is a send; scheduling and resuming belong to Campaigns.test.ts.
+    newRun: (id, expected, newToken, _target, now) =>
       Effect.sync(() => {
-        writes.push("enqueueCampaign");
+        writes.push("newRun");
 
         const campaign = campaigns.get(id);
 

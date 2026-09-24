@@ -35,7 +35,7 @@ const decodeStoredList = Schema.decodeUnknownEffect(StoredList);
 export const listOperations = (
   primitives: ReadPrimitives & WritePrimitives & UpdatePrimitives & PagePrimitives,
 ) => {
-  const { readEntityPage, readItem, recordOnce, updateRecord } = primitives;
+  const { readEntityPage, readItem, recordOnce, updateIf } = primitives;
 
   // A fresh identifier as the key: an item already there is this request landing again.
   const createList = Effect.fn("Storage.createList")((list: Schemas.ContactList) =>
@@ -82,24 +82,28 @@ export const listOperations = (
 
   /**
    * A rename touches `name` and nothing else. `gsi1sk` is built from `createdAt` and `id`, both
-   * immutable, so the list keeps its place in created order and no index entry has to move.
+   * immutable, so the list keeps its place in created order and no index entry has to move. A
+   * failed condition means the list is not there.
    */
   const renameList = Effect.fn("Storage.renameList")(function* (listId: string, name: string) {
-    const found = yield* getList(listId);
-
-    if (Option.isNone(found)) {
-      return Option.none<Schemas.ContactList>();
-    }
-
-    yield* updateRecord("renameList", {
+    const outcome = yield* updateIf("renameList", {
       Key: listKey(listId),
       UpdateExpression: "SET #name = :name",
       ConditionExpression: "attribute_exists(pk)",
       ExpressionAttributeNames: { "#name": "name" },
       ExpressionAttributeValues: { ":name": str(name) },
+      ReturnValues: "ALL_NEW",
     });
 
-    return Option.some<Schemas.ContactList>({ ...found.value, name });
+    if (!outcome.applied) {
+      return Option.none<Schemas.ContactList>();
+    }
+
+    const stored = yield* decodeStoredList(outcome.attributes).pipe(
+      Effect.mapError(corrupt("renameList")),
+    );
+
+    return Option.some<Schemas.ContactList>(Struct.omit(stored, ["v"]));
   });
 
   return { createList, getList, listLists, renameList } as const;

@@ -133,21 +133,6 @@ type UpdateIfResult =
 
 export const updatePrimitives = (operations: Pick<TableOperations, "updateItem">) => {
   /**
-   * A conditional single-item update. A failed condition is **not** swallowed: the caller has
-   * already established that the item exists, so a condition failure means it was concurrently
-   * removed or moved. That is a lost race, which resolves by re-reading and repeating the request,
-   * not a business outcome — and never a silent success.
-   */
-  const updateRecord = (operationId: string, request: AWS.DynamoDB.UpdateItemRequest) =>
-    operations
-      .updateItem(request)
-      .pipe(
-        Effect.timeout(operationTimeout),
-        Effect.mapError(unavailable(operationId)),
-        Effect.asVoid,
-      );
-
-  /**
    * A conditional single-item update whose failed condition is a documented outcome. `ReturnValues`
    * is honoured so a caller can read the item that was written; any other error, including a
    * timeout, is still unavailable.
@@ -171,7 +156,7 @@ export const updatePrimitives = (operations: Pick<TableOperations, "updateItem">
       Effect.mapError(unavailable(operationId)),
     );
 
-  return { updateRecord, updateIf } as const;
+  return { updateIf } as const;
 };
 
 export type UpdatePrimitives = ReturnType<typeof updatePrimitives>;

@@ -826,31 +826,33 @@ describe("listCampaigns", () => {
 
 const lifecycleUpdate = (table: Table) => table.transactionRequests[0]?.TransactItems[0]?.Update;
 
-const expectedIdle = (state: "draft" | "scheduled", token?: string) => ({
+const observed = (state: "draft" | "scheduled" | "paused", token?: string) => ({
   state,
   runToken: token,
 });
 
-describe("enqueueCampaign", () => {
-  it("queues a tokenless draft under a new run token", () =>
+describe("newRun", () => {
+  const nextToken = "0195f0a0-1111-4222-8333-44444444e5d3";
+
+  it("queues a tokenless draft under a new run token and the run baselines", () =>
     Effect.runPromise(
       Effect.gen(function* () {
         const { table, storage } = withStorage({});
 
-        expect(
-          yield* storage.enqueueCampaign(campaignId, expectedIdle("draft"), runToken, now),
-        ).toBe("queued");
+        expect(yield* storage.newRun(campaignId, observed("draft"), runToken, "queued", now)).toBe(
+          "queued",
+        );
         expect(table.transactionRequests[0]?.ClientRequestToken).toBe("token-1");
         expect(lifecycleUpdate(table)).toStrictEqual({
           Table: tableLogicalId,
           Key: { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } },
           UpdateExpression:
-            "SET #state = :queued, queuedAt = :now, runToken = :run, runAccepted = accepted, runBounced = bounced, runComplained = complained",
+            "SET #state = :target, queuedAt = :queuedAt, runToken = :run, runAccepted = accepted, runBounced = bounced, runComplained = complained REMOVE pausedReason",
           ConditionExpression: "#state = :expectedState AND attribute_not_exists(runToken)",
           ExpressionAttributeNames: { "#state": "state" },
           ExpressionAttributeValues: {
-            ":queued": { S: "queued" },
-            ":now": { S: now },
+            ":target": { S: "queued" },
+            ":queuedAt": { S: now },
             ":run": { S: runToken },
             ":expectedState": { S: "draft" },
           },
@@ -860,116 +862,77 @@ describe("enqueueCampaign", () => {
       }),
     ));
 
-  it("queues a draft that still holds a retired run token by matching that token", () =>
+  it("schedules a tokenless draft with sendAt as queuedAt, a new token and the run baselines", () =>
     Effect.runPromise(
       Effect.gen(function* () {
         const { table, storage } = withStorage({});
 
         expect(
-          yield* storage.enqueueCampaign(
-            campaignId,
-            expectedIdle("draft", runToken),
-            "0195f0a0-1111-4222-8333-44444444e5d3",
-            now,
-          ),
+          yield* storage.newRun(campaignId, observed("draft"), runToken, "scheduled", queuedAt),
+        ).toBe("scheduled");
+        expect(lifecycleUpdate(table)).toStrictEqual({
+          Table: tableLogicalId,
+          Key: { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } },
+          UpdateExpression:
+            "SET #state = :target, queuedAt = :queuedAt, runToken = :run, runAccepted = accepted, runBounced = bounced, runComplained = complained REMOVE pausedReason",
+          ConditionExpression: "#state = :expectedState AND attribute_not_exists(runToken)",
+          ExpressionAttributeNames: { "#state": "state" },
+          ExpressionAttributeValues: {
+            ":target": { S: "scheduled" },
+            ":queuedAt": { S: queuedAt },
+            ":run": { S: runToken },
+            ":expectedState": { S: "draft" },
+          },
+        });
+        expectAliasedReservedNames(table);
+      }),
+    ));
+
+  it("re-queues a paused campaign under its observed token and clears the pause reason", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const { table, storage } = withStorage({});
+
+        expect(
+          yield* storage.newRun(campaignId, observed("paused", runToken), nextToken, "queued", now),
+        ).toBe("queued");
+        expect(lifecycleUpdate(table)).toStrictEqual({
+          Table: tableLogicalId,
+          Key: { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } },
+          UpdateExpression:
+            "SET #state = :target, queuedAt = :queuedAt, runToken = :run, runAccepted = accepted, runBounced = bounced, runComplained = complained REMOVE pausedReason",
+          ConditionExpression: "#state = :expectedState AND runToken = :expected",
+          ExpressionAttributeNames: { "#state": "state" },
+          ExpressionAttributeValues: {
+            ":target": { S: "queued" },
+            ":queuedAt": { S: now },
+            ":run": { S: nextToken },
+            ":expectedState": { S: "paused" },
+            ":expected": { S: runToken },
+          },
+        });
+        expectAliasedReservedNames(table);
+      }),
+    ));
+
+  it("starts a run from a draft that still holds a retired token by matching that token", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const { table, storage } = withStorage({});
+
+        expect(
+          yield* storage.newRun(campaignId, observed("draft", runToken), nextToken, "queued", now),
         ).toBe("queued");
         expect(lifecycleUpdate(table)?.ConditionExpression).toBe(
           "#state = :expectedState AND runToken = :expected",
         );
-        expect(lifecycleUpdate(table)?.ExpressionAttributeValues).toMatchObject({
+        expect(lifecycleUpdate(table)?.ExpressionAttributeValues).toStrictEqual({
+          ":target": { S: "queued" },
+          ":queuedAt": { S: now },
+          ":run": { S: nextToken },
           ":expectedState": { S: "draft" },
           ":expected": { S: runToken },
-          ":run": { S: "0195f0a0-1111-4222-8333-44444444e5d3" },
         });
-        expect(lifecycleUpdate(table)?.ConditionExpression).not.toContain("attribute_not_exists");
-        expect(lifecycleUpdate(table)?.ConditionExpression).not.toContain(" IN ");
-        expectAliasedReservedNames(table);
-      }),
-    ));
-
-  it("queues a scheduled campaign only under its observed token", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({});
-
-        expect(
-          yield* storage.enqueueCampaign(
-            campaignId,
-            expectedIdle("scheduled", runToken),
-            "0195f0a0-1111-4222-8333-44444444e5d3",
-            now,
-          ),
-        ).toBe("queued");
-        expect(lifecycleUpdate(table)?.ConditionExpression).toBe(
-          "#state = :expectedState AND runToken = :expected",
-        );
-        expect(lifecycleUpdate(table)?.ExpressionAttributeValues).toMatchObject({
-          ":expectedState": { S: "scheduled" },
-          ":expected": { S: runToken },
-        });
-        expect(lifecycleUpdate(table)?.ConditionExpression).not.toContain("attribute_not_exists");
-        expect(lifecycleUpdate(table)?.ConditionExpression).not.toContain(" IN ");
-        expectAliasedReservedNames(table);
-      }),
-    ));
-
-  it("reports conflict when the expected source no longer holds", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({
-          transactWriteItems: [cancelled("ConditionalCheckFailed")],
-        });
-
-        expect(
-          yield* storage.enqueueCampaign(campaignId, expectedIdle("draft"), runToken, now),
-        ).toBe("conflict");
-        expectAliasedReservedNames(table);
-      }),
-    ));
-
-  it("keeps a server error unavailable", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({
-          transactWriteItems: [Effect.fail(serverError)],
-        });
-
-        const attempt = yield* Effect.result(
-          storage.enqueueCampaign(campaignId, expectedIdle("draft"), runToken, now),
-        );
-
-        expect(failureOf(attempt).reason).toBe("unavailable");
-        expect(failureOf(attempt).operationId).toBe("enqueueCampaign");
-        expectAliasedReservedNames(table);
-      }),
-    ));
-});
-
-describe("scheduleCampaign", () => {
-  it("schedules a tokenless draft with sendAt, a new token and the run baselines", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({});
-
-        expect(
-          yield* storage.scheduleCampaign(campaignId, expectedIdle("draft"), runToken, queuedAt),
-        ).toBe("scheduled");
-        expect(table.transactionRequests[0]?.ClientRequestToken).toBe("token-1");
-        expect(lifecycleUpdate(table)).toStrictEqual({
-          Table: tableLogicalId,
-          Key: { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } },
-          UpdateExpression:
-            "SET #state = :scheduled, queuedAt = :sendAt, runToken = :run, runAccepted = accepted, runBounced = bounced, runComplained = complained",
-          ConditionExpression: "#state = :expectedState AND attribute_not_exists(runToken)",
-          ExpressionAttributeNames: { "#state": "state" },
-          ExpressionAttributeValues: {
-            ":scheduled": { S: "scheduled" },
-            ":sendAt": { S: queuedAt },
-            ":run": { S: runToken },
-            ":expectedState": { S: "draft" },
-          },
-        });
-        expect(table.updateItemRequests).toHaveLength(0);
         expectAliasedReservedNames(table);
       }),
     ));
@@ -980,59 +943,65 @@ describe("scheduleCampaign", () => {
         const { table, storage } = withStorage({});
 
         expect(
-          yield* storage.scheduleCampaign(
+          yield* storage.newRun(
             campaignId,
-            expectedIdle("scheduled", runToken),
-            "0195f0a0-1111-4222-8333-44444444e5d3",
+            observed("scheduled", runToken),
+            nextToken,
+            "scheduled",
             queuedAt,
           ),
         ).toBe("scheduled");
         expect(lifecycleUpdate(table)?.ConditionExpression).toBe(
           "#state = :expectedState AND runToken = :expected",
         );
-        expect(lifecycleUpdate(table)?.ExpressionAttributeValues).toMatchObject({
+        expect(lifecycleUpdate(table)?.ExpressionAttributeValues).toStrictEqual({
+          ":target": { S: "scheduled" },
+          ":queuedAt": { S: queuedAt },
+          ":run": { S: nextToken },
           ":expectedState": { S: "scheduled" },
           ":expected": { S: runToken },
         });
-        expect(lifecycleUpdate(table)?.ConditionExpression).not.toContain(" IN ");
         expectAliasedReservedNames(table);
       }),
     ));
 
-  it("matches a draft's retained token rather than token absence", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({});
-
-        expect(
-          yield* storage.scheduleCampaign(
-            campaignId,
-            expectedIdle("draft", runToken),
-            "0195f0a0-1111-4222-8333-44444444e5d3",
-            queuedAt,
-          ),
-        ).toBe("scheduled");
-        expect(lifecycleUpdate(table)?.ConditionExpression).toBe(
-          "#state = :expectedState AND runToken = :expected",
-        );
-        expect(lifecycleUpdate(table)?.ConditionExpression).not.toContain("attribute_not_exists");
-        expectAliasedReservedNames(table);
-      }),
-    ));
-
-  it("reports conflict when the expected source no longer holds", () =>
+  it("reports conflict when the observed source no longer holds", () =>
     Effect.runPromise(
       Effect.gen(function* () {
         const { table, storage } = withStorage({
           transactWriteItems: [cancelled("ConditionalCheckFailed")],
         });
 
-        expect(
-          yield* storage.scheduleCampaign(campaignId, expectedIdle("draft"), runToken, queuedAt),
-        ).toBe("conflict");
+        expect(yield* storage.newRun(campaignId, observed("draft"), runToken, "queued", now)).toBe(
+          "conflict",
+        );
         expectAliasedReservedNames(table);
       }),
     ));
+
+  it.each([
+    ["draft", "queued", "enqueueCampaign"],
+    ["draft", "scheduled", "scheduleCampaign"],
+    ["paused", "queued", "resumeCampaign"],
+  ] as const)(
+    "keeps a server error from %s to %s unavailable under %s",
+    (source, target, operationId) =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const { table, storage } = withStorage({
+            transactWriteItems: [Effect.fail(serverError)],
+          });
+
+          const attempt = yield* Effect.result(
+            storage.newRun(campaignId, observed(source, runToken), nextToken, target, now),
+          );
+
+          expect(failureOf(attempt).reason).toBe("unavailable");
+          expect(failureOf(attempt).operationId).toBe(operationId);
+          expectAliasedReservedNames(table);
+        }),
+      ),
+  );
 });
 
 describe("cancelCampaign", () => {
@@ -1139,58 +1108,6 @@ describe("cancelCampaign", () => {
         expect(yield* storage.cancelCampaign(campaignId, { state: "scheduled", runToken })).toBe(
           "conflict",
         );
-        expectAliasedReservedNames(table);
-      }),
-    ));
-});
-
-describe("resumeCampaign", () => {
-  it("re-enqueues a paused campaign under a new token and clears the pause reason", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({});
-        const nextToken = "0195f0a0-1111-4222-8333-44444444e5d3";
-
-        expect(
-          yield* storage.resumeCampaign(campaignId, { state: "paused", runToken }, nextToken, now),
-        ).toBe("queued");
-        expect(table.transactionRequests[0]?.ClientRequestToken).toBe("token-1");
-        expect(lifecycleUpdate(table)).toStrictEqual({
-          Table: tableLogicalId,
-          Key: { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } },
-          UpdateExpression:
-            "SET #state = :queued, runToken = :run, queuedAt = :now, runAccepted = accepted, runBounced = bounced, runComplained = complained REMOVE pausedReason",
-          ConditionExpression: "#state = :paused AND runToken = :expected",
-          ExpressionAttributeNames: { "#state": "state" },
-          ExpressionAttributeValues: {
-            ":queued": { S: "queued" },
-            ":run": { S: nextToken },
-            ":now": { S: now },
-            ":paused": { S: "paused" },
-            ":expected": { S: runToken },
-          },
-        });
-        expect(lifecycleUpdate(table)?.ConditionExpression).not.toContain(" OR ");
-        expect(table.updateItemRequests).toHaveLength(0);
-        expectAliasedReservedNames(table);
-      }),
-    ));
-
-  it("reports conflict when the expected paused token no longer holds", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({
-          transactWriteItems: [cancelled("ConditionalCheckFailed")],
-        });
-
-        expect(
-          yield* storage.resumeCampaign(
-            campaignId,
-            { state: "paused", runToken },
-            "0195f0a0-1111-4222-8333-44444444e5d3",
-            now,
-          ),
-        ).toBe("conflict");
         expectAliasedReservedNames(table);
       }),
     ));

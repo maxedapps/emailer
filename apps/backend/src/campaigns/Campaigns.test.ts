@@ -180,7 +180,7 @@ const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> 
 
           return Option.some(controlOfCampaign(world, campaign));
         }),
-      enqueueCampaign: (id, expected, newToken, now) =>
+      newRun: (id, expected, newToken, target, at) =>
         afterWrite(world, () => {
           const campaign = world.campaigns.get(id);
 
@@ -192,57 +192,18 @@ const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> 
             return "conflict" as const;
           }
 
-          world.order.push("enqueueCampaign");
-          world.campaigns.set(id, {
-            ...campaign,
-            submission: { state: "queued", queuedAt: now },
-          });
-          world.runTokens.set(id, newToken);
-
-          return "queued" as const;
-        }),
-      scheduleCampaign: (id, expected, newToken, sendAt) =>
-        afterWrite(world, () => {
-          const campaign = world.campaigns.get(id);
-
-          if (
-            campaign === undefined ||
-            campaign.submission.state !== expected.state ||
-            !tokenMatches(world, id, expected.runToken)
-          ) {
-            return "conflict" as const;
-          }
-
-          world.order.push("scheduleCampaign");
-          world.campaigns.set(id, {
-            ...campaign,
-            submission: { state: "scheduled", sendAt },
-          });
-          world.runTokens.set(id, newToken);
-
-          return "scheduled" as const;
-        }),
-      resumeCampaign: (id, expected, newToken, now) =>
-        afterWrite(world, () => {
-          const campaign = world.campaigns.get(id);
-
-          if (
-            campaign === undefined ||
-            campaign.submission.state !== expected.state ||
-            !tokenMatches(world, id, expected.runToken)
-          ) {
-            return "conflict" as const;
-          }
-
-          world.order.push("resumeCampaign");
+          world.order.push(`newRun:${target}`);
           rememberHistory(world, campaign);
           world.campaigns.set(id, {
             ...campaign,
-            submission: { state: "queued", queuedAt: now },
+            submission:
+              target === "queued"
+                ? { state: "queued", queuedAt: at }
+                : { state: "scheduled", sendAt: at },
           });
           world.runTokens.set(id, newToken);
 
-          return "queued" as const;
+          return target;
         }),
       cancelCampaign: (id, source) =>
         afterWrite(world, () => {
@@ -592,7 +553,7 @@ describe("send", () => {
         expect(fix.wake.messages).toHaveLength(1);
         expect(fix.wake.messages[0]?.runToken).not.toBe(existingRunToken);
         expect(fix.schedules.removed).toStrictEqual([existingRunToken]);
-        expect(fix.world.order).toStrictEqual(["enqueueCampaign", "enqueue", "remove"]);
+        expect(fix.world.order).toStrictEqual(["newRun:queued", "enqueue", "remove"]);
       }),
     ));
 
@@ -664,7 +625,7 @@ describe("send", () => {
         expect(fix.world.runTokens.get(campaignId)).toBe(fix.wake.messages[0]?.runToken);
         expect(fix.schedules.removed).toStrictEqual([existingRunToken]);
         expect(storedCampaign(fix).submission.state).toBe("queued");
-        expect(fix.world.order).toStrictEqual(["enqueueCampaign", "enqueue", "remove"]);
+        expect(fix.world.order).toStrictEqual(["newRun:queued", "enqueue", "remove"]);
       }),
     ));
 
@@ -690,7 +651,7 @@ describe("send", () => {
         expect(fix.wake.messages[0]?.runToken).not.toBe(existingRunToken);
         expect(fix.schedules.removed).toHaveLength(0);
         expect(storedCampaign(fix).submission.state).toBe("queued");
-        expect(fix.world.order).toStrictEqual(["enqueueCampaign", "enqueue"]);
+        expect(fix.world.order).toStrictEqual(["newRun:queued", "enqueue"]);
       }),
     ));
 
@@ -1073,7 +1034,7 @@ describe("schedule", () => {
           state: "scheduled",
           sendAt: futureSendAt,
         });
-        expect(fix.world.order).toStrictEqual(["scheduleCampaign", "create"]);
+        expect(fix.world.order).toStrictEqual(["newRun:scheduled", "create"]);
       }),
     ));
 
@@ -1094,7 +1055,7 @@ describe("schedule", () => {
         expect(fix.world.runTokens.get(campaignId)).toBe(createdToken);
         expect(fix.schedules.removed).toStrictEqual([existingRunToken]);
         expect(fix.schedules.removed).not.toContain(createdToken);
-        expect(fix.world.order).toStrictEqual(["scheduleCampaign", "create", "remove"]);
+        expect(fix.world.order).toStrictEqual(["newRun:scheduled", "create", "remove"]);
       }),
     ));
 
@@ -1127,7 +1088,7 @@ describe("schedule", () => {
         expect(Result.isSuccess(attempt)).toBe(true);
         expect(fix.schedules.removed).toStrictEqual([existingRunToken]);
         expect(fix.schedules.removed).not.toContain(newToken);
-        expect(fix.world.order).toStrictEqual(["scheduleCampaign", "create", "remove"]);
+        expect(fix.world.order).toStrictEqual(["newRun:scheduled", "create", "remove"]);
       }),
     ));
 
@@ -1158,7 +1119,7 @@ describe("schedule", () => {
         expect(fix.schedules.removed).toContain(createdToken);
         expect(fix.schedules.removed).toContain(existingRunToken);
         expect(fix.schedules.removed).not.toContain(replacementToken);
-        expect(fix.world.order).toStrictEqual(["scheduleCampaign", "create", "remove", "remove"]);
+        expect(fix.world.order).toStrictEqual(["newRun:scheduled", "create", "remove", "remove"]);
       }),
     ));
 
@@ -1222,7 +1183,7 @@ describe("schedule", () => {
           state: "scheduled",
           sendAt: futureSendAt,
         });
-        expect(fix.world.order).toStrictEqual(["scheduleCampaign"]);
+        expect(fix.world.order).toStrictEqual(["newRun:scheduled"]);
       }),
     ));
 

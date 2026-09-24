@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { str } from "./Items.ts";
 import { listOperations } from "./Lists.ts";
-import { createdAt, listId, scriptedTable, primitivesFor } from "./Testing.ts";
+import { conditionFailed, createdAt, listId, scriptedTable, primitivesFor } from "./Testing.ts";
 
 import type { Table } from "./Testing.ts";
 
@@ -91,11 +91,11 @@ describe("listLists", () => {
 });
 
 describe("renameList", () => {
-  it("touches the name and nothing else, on a list that still exists", () =>
+  it("touches the name and nothing else, and answers the list the write returned", () =>
     Effect.runPromise(
       Effect.gen(function* () {
         const { table, operations } = withTable({
-          getItem: [Effect.succeed({ Item: listItem(listId, "Subscribers", createdAt) })],
+          updateItem: [Effect.succeed({ Attributes: listItem(listId, "Members", createdAt) })],
         });
 
         expect(
@@ -104,23 +104,26 @@ describe("renameList", () => {
 
         // Asserted whole: an added `gsi1sk` clause would keep the index out of step with the item,
         // and a dropped condition would let a rename resurrect a list deleted underneath it.
-        expect(table.updateItemRequests[0]).toStrictEqual({
-          Key: { pk: str(`LIST#${listId}`), sk: str("META") },
-          UpdateExpression: "SET #name = :name",
-          ConditionExpression: "attribute_exists(pk)",
-          ExpressionAttributeNames: { "#name": "name" },
-          ExpressionAttributeValues: { ":name": str("Members") },
-        });
+        expect(table.updateItemRequests).toStrictEqual([
+          {
+            Key: { pk: str(`LIST#${listId}`), sk: str("META") },
+            UpdateExpression: "SET #name = :name",
+            ConditionExpression: "attribute_exists(pk)",
+            ExpressionAttributeNames: { "#name": "name" },
+            ExpressionAttributeValues: { ":name": str("Members") },
+            ReturnValues: "ALL_NEW",
+          },
+        ]);
+        expect(table.getItemRequests).toStrictEqual([]);
       }),
     ));
 
-  it("reports a missing list rather than writing", () =>
+  it("reports a missing list when the write's condition fails", () =>
     Effect.runPromise(
       Effect.gen(function* () {
-        const { table, operations } = withTable({});
+        const { operations } = withTable({ updateItem: [conditionFailed] });
 
         expect(Option.isNone(yield* operations.renameList(listId, "Members"))).toBe(true);
-        expect(table.updateItemRequests).toStrictEqual([]);
       }),
     ));
 });

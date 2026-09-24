@@ -195,10 +195,11 @@ export const send = Effect.fn("Campaigns.send")(function* (campaignId: string) {
       const runToken = yield* newIdentifier;
       const now = yield* nowIso;
 
-      const outcome = yield* campaigns.enqueueCampaign(
+      const outcome = yield* campaigns.newRun(
         campaignId,
         { state: control.state, runToken: predecessor },
         runToken,
+        "queued",
         now,
       );
 
@@ -233,10 +234,11 @@ export const resume = Effect.fn("Campaigns.resume")(function* (campaignId: strin
       const runToken = yield* newIdentifier;
       const now = yield* nowIso;
 
-      const outcome = yield* campaigns.resumeCampaign(
+      const outcome = yield* campaigns.newRun(
         campaignId,
         { state: "paused", runToken: observed },
         runToken,
+        "queued",
         now,
       );
 
@@ -277,10 +279,11 @@ export const schedule = Effect.fn("Campaigns.schedule")(function* (
       const predecessor = control.runToken;
       const runToken = yield* newIdentifier;
 
-      const outcome = yield* campaigns.scheduleCampaign(
+      const outcome = yield* campaigns.newRun(
         campaignId,
         { state: control.state, runToken: predecessor },
         runToken,
+        "scheduled",
         sendAt,
       );
 

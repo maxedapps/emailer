@@ -1,11 +1,10 @@
-import { Effect, Option } from "effect";
+import { Effect, Option, Struct } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { tableLogicalId } from "./Items.ts";
 import { contactOperations } from "./Contacts.ts";
 import {
   cancelled,
-  conditionFailed,
   contactId,
   createdAt,
   failureOf,
@@ -331,6 +330,8 @@ describe("getContactByEmail", () => {
 describe("updateContact", () => {
   const found: ScriptedReplies = { getItem: [Effect.succeed({ Item: contactItem })] };
 
+  const withAttributes = { ...contactItem, attributes: { M: { plan: { S: "pro" } } } };
+
   const update = (
     replies: ScriptedReplies,
     payload: Parameters<ReturnType<typeof contactOperations>["updateContact"]>[1],
@@ -343,32 +344,50 @@ describe("updateContact", () => {
     };
   };
 
+  const contactPut = (table: Table) => table.transactionRequests[0]?.TransactItems[0]?.Put;
+
   it("reports a contact that is not there rather than writing anything", () =>
     Effect.runPromise(
       Effect.gen(function* () {
         const { table, run } = update({}, { name: "Maxi" });
 
         expect(yield* run).toStrictEqual({ outcome: "contact-missing" });
-        expect(table.updateItemRequests).toStrictEqual([]);
         expect(table.transactionRequests).toStrictEqual([]);
+      }),
+    ));
+
+  it("writes the whole item back with the attributes created order is built from unchanged", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const { table, run } = update(found, { email: "new@example.com", name: "Maxi" });
+
+        yield* run;
+
+        // Asserted whole: `gsi1sk`, `id` and `createdAt` carry the values just read, so the contact
+        // keeps its place in created order.
+        expect(contactPut(table)?.Item).toStrictEqual({
+          ...contactItem,
+          email: { S: "new@example.com" },
+          name: { S: "Maxi" },
+        });
       }),
     ));
 
   it("replaces the whole attribute map rather than merging into it", () =>
     Effect.runPromise(
       Effect.gen(function* () {
-        const { table, run } = update(found, { attributes: { city: "Berlin" } });
+        const { table, run } = update(
+          { getItem: [Effect.succeed({ Item: withAttributes })] },
+          { attributes: { city: "Berlin" } },
+        );
 
         expect(yield* run).toStrictEqual({
           outcome: "updated",
           contact: { id: contactId, email, name: "Sam", attributes: { city: "Berlin" }, createdAt },
         });
-
-        const request = table.updateItemRequests[0];
-
-        expect(request?.UpdateExpression).toBe("SET #attributes = :attributes");
-        expect(request?.ExpressionAttributeValues?.[":attributes"]).toStrictEqual({
-          M: { city: { S: "Berlin" } },
+        expect(contactPut(table)?.Item).toStrictEqual({
+          ...contactItem,
+          attributes: { M: { city: { S: "Berlin" } } },
         });
       }),
     ));
@@ -376,67 +395,51 @@ describe("updateContact", () => {
   it("clears a field on an explicit null and leaves an absent one alone", () =>
     Effect.runPromise(
       Effect.gen(function* () {
-        const { table, run } = update(found, { name: null });
+        const { table, run } = update(
+          { getItem: [Effect.succeed({ Item: withAttributes })] },
+          { name: null },
+        );
 
         expect(yield* run).toStrictEqual({
           outcome: "updated",
-          contact: { id: contactId, email, createdAt },
+          contact: { id: contactId, email, attributes: { plan: "pro" }, createdAt },
         });
-        expect(table.updateItemRequests[0]?.UpdateExpression).toBe("REMOVE #name");
+        expect(contactPut(table)?.Item).toStrictEqual(Struct.omit(withAttributes, ["name"]));
       }),
     ));
 
-  it("conditions every update on the address just read, so a clear-only one still binds a value", () =>
+  it("writes the contact alone when only the spelling of the address changes", () =>
     Effect.runPromise(
       Effect.gen(function* () {
-        const { table, run } = update(found, { name: null, attributes: null });
+        const { table, run } = update(found, { email: "SAM@example.com" });
 
-        yield* run;
+        expect(yield* run).toStrictEqual({
+          outcome: "updated",
+          contact: { id: contactId, email: "SAM@example.com", name: "Sam", createdAt },
+        });
 
-        expect(table.updateItemRequests).toStrictEqual([
+        // One reservation item holds both spellings, so there is nothing to move and no opt-out to
+        // check. The condition also holds once the write has applied, so a repeat is no lost race.
+        expect(table.transactionRequests).toStrictEqual([
           {
-            Key: { pk: { S: `CONTACT#${contactId}` }, sk: { S: "META" } },
-            UpdateExpression: "REMOVE #name, #attributes",
-            ConditionExpression: "attribute_exists(pk) AND #email = :currentEmail",
-            ExpressionAttributeNames: {
-              "#name": "name",
-              "#attributes": "attributes",
-              "#email": "email",
-            },
-            ExpressionAttributeValues: { ":currentEmail": { S: email } },
+            ClientRequestToken: "token-1",
+            TransactItems: [
+              {
+                Put: {
+                  Table: tableLogicalId,
+                  Item: { ...contactItem, email: { S: "SAM@example.com" } },
+                  ConditionExpression:
+                    "attribute_exists(pk) AND (#email = :currentEmail OR #email = :email)",
+                  ExpressionAttributeNames: { "#email": "email" },
+                  ExpressionAttributeValues: {
+                    ":currentEmail": { S: email },
+                    ":email": { S: "SAM@example.com" },
+                  },
+                },
+              },
+            ],
           },
         ]);
-      }),
-    ));
-
-  it("still binds values when a change sets something alongside a clear", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, run } = update(found, { name: null, attributes: { plan: "pro" } });
-
-        yield* run;
-
-        const request = table.updateItemRequests[0];
-
-        expect(request?.UpdateExpression).toBe("SET #attributes = :attributes REMOVE #name");
-        expect(request?.ExpressionAttributeValues).toStrictEqual({
-          ":attributes": { M: { plan: { S: "pro" } } },
-          ":currentEmail": { S: email },
-        });
-      }),
-    ));
-
-  it("writes nothing at all when the payload asks for no change", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, run } = update(found, {});
-
-        expect(yield* run).toStrictEqual({
-          outcome: "updated",
-          contact: { id: contactId, email, name: "Sam", createdAt },
-        });
-        expect(table.updateItemRequests).toStrictEqual([]);
-        expect(table.transactionRequests).toStrictEqual([]);
       }),
     ));
 
@@ -455,24 +458,23 @@ describe("updateContact", () => {
             ClientRequestToken: "token-1",
             TransactItems: [
               {
-                ConditionCheck: {
+                Put: {
                   Table: tableLogicalId,
-                  Key: { pk: { S: `UNSUBSCRIBE#${email}` }, sk: { S: "UNSUBSCRIBE" } },
-                  ConditionExpression: "attribute_not_exists(pk)",
-                },
-              },
-              {
-                Update: {
-                  Table: tableLogicalId,
-                  Key: { pk: { S: `CONTACT#${contactId}` }, sk: { S: "META" } },
-                  UpdateExpression: "SET #email = :email",
+                  Item: { ...contactItem, email: { S: "new@example.com" } },
                   ConditionExpression:
                     "attribute_exists(pk) AND (#email = :currentEmail OR #email = :email)",
                   ExpressionAttributeNames: { "#email": "email" },
                   ExpressionAttributeValues: {
-                    ":email": { S: "new@example.com" },
                     ":currentEmail": { S: email },
+                    ":email": { S: "new@example.com" },
                   },
+                },
+              },
+              {
+                ConditionCheck: {
+                  Table: tableLogicalId,
+                  Key: { pk: { S: `UNSUBSCRIBE#${email}` }, sk: { S: "UNSUBSCRIBE" } },
+                  ConditionExpression: "attribute_not_exists(pk)",
                 },
               },
               {
@@ -499,43 +501,13 @@ describe("updateContact", () => {
       }),
     ));
 
-  it("never rewrites the attributes created order is built from", () =>
+  it("keeps an update that lost a race on the same mailbox on the failure channel", () =>
     Effect.runPromise(
       Effect.gen(function* () {
-        const { table, run } = update(found, { email: "new@example.com", name: "Maxi" });
-
-        yield* run;
-
-        const expression = table.transactionRequests[0]?.TransactItems[1]?.Update?.UpdateExpression;
-
-        expect(expression).toBe("SET #email = :email, #name = :name");
-        expect(expression).not.toContain("gsi1sk");
-        expect(expression).not.toContain("createdAt");
-      }),
-    ));
-
-  it("takes the plain path when only the spelling of the address changes", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { table, run } = update(found, { email: "SAM@example.com" });
-
-        expect(yield* run).toStrictEqual({
-          outcome: "updated",
-          contact: { id: contactId, email: "SAM@example.com", name: "Sam", createdAt },
-        });
-        expect(table.transactionRequests).toStrictEqual([]);
-        expect(table.updateItemRequests[0]?.UpdateExpression).toBe("SET #email = :email");
-        // Also true once the write has applied, so a lost response and a retry is not a lost race.
-        expect(table.updateItemRequests[0]?.ConditionExpression).toBe(
-          "attribute_exists(pk) AND (#email = :currentEmail OR #email = :email)",
+        const { run } = update(
+          { ...found, transactWriteItems: [cancelled("ConditionalCheckFailed")] },
+          { name: "Maxi" },
         );
-      }),
-    ));
-
-  it("keeps an update that lost a race on the plain path on the failure channel", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { run } = update({ ...found, updateItem: [conditionFailed] }, { name: "Maxi" });
 
         expect(failureOf(yield* Effect.result(run)).reason).toBe("unavailable");
       }),
@@ -562,7 +534,7 @@ describe("updateContact", () => {
         const { run } = update(
           {
             ...found,
-            transactWriteItems: [cancelled("ConditionalCheckFailed", "None", "None", "None")],
+            transactWriteItems: [cancelled("None", "ConditionalCheckFailed", "None", "None")],
           },
           { email: "new@example.com" },
         );
@@ -578,7 +550,7 @@ describe("updateContact", () => {
           {
             ...found,
             transactWriteItems: [
-              cancelled("ConditionalCheckFailed", "None", "None", "ConditionalCheckFailed"),
+              cancelled("None", "ConditionalCheckFailed", "None", "ConditionalCheckFailed"),
             ],
           },
           { email: "new@example.com" },
@@ -594,7 +566,7 @@ describe("updateContact", () => {
         const { run } = update(
           {
             ...found,
-            transactWriteItems: [cancelled("None", "ConditionalCheckFailed", "None", "None")],
+            transactWriteItems: [cancelled("ConditionalCheckFailed", "None", "None", "None")],
           },
           { email: "new@example.com" },
         );

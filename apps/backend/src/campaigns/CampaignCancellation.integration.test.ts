@@ -101,10 +101,11 @@ const enqueueDraft = (storage: LiveStorage, campaignId: string) =>
     const token = yield* newIdentifier;
 
     expect(
-      yield* storage.enqueueCampaign(
+      yield* storage.newRun(
         campaignId,
         { state: "draft", runToken: undefined },
         token,
+        "queued",
         yield* nowIso,
       ),
     ).toBe("queued");
@@ -259,10 +260,11 @@ describe("queued campaign cancellation", () => {
           const resumeToken = yield* newIdentifier;
 
           expect(
-            yield* storage.resumeCampaign(
+            yield* storage.newRun(
               campaign.id,
               { state: "paused", runToken: seedToken },
               resumeToken,
+              "queued",
               yield* nowIso,
             ),
           ).toBe("queued");
@@ -331,10 +333,11 @@ describe("queued campaign cancellation", () => {
         );
 
         expect(
-          yield* storage.scheduleCampaign(
+          yield* storage.newRun(
             campaign.id,
             { state: "draft", runToken: undefined },
             token,
+            "scheduled",
             sendAt,
           ),
         ).toBe("scheduled");
@@ -343,18 +346,20 @@ describe("queued campaign cancellation", () => {
         ).toBe("applied");
 
         expect(
-          yield* storage.enqueueCampaign(
+          yield* storage.newRun(
             campaign.id,
             { state: "draft", runToken: undefined },
             yield* newIdentifier,
+            "queued",
             yield* nowIso,
           ),
         ).toBe("conflict");
         expect(
-          yield* storage.scheduleCampaign(
+          yield* storage.newRun(
             campaign.id,
             { state: "draft", runToken: undefined },
             yield* newIdentifier,
+            "scheduled",
             sendAt,
           ),
         ).toBe("conflict");
@@ -383,10 +388,11 @@ describe("queued campaign cancellation", () => {
         const token = yield* newIdentifier;
 
         expect(
-          yield* capturing.enqueueCampaign(
+          yield* capturing.newRun(
             campaign.id,
             { state: "draft", runToken: undefined },
             token,
+            "queued",
             yield* nowIso,
           ),
         ).toBe("queued");
@@ -436,10 +442,11 @@ describe("queued campaign cancellation", () => {
         const replacement = yield* newIdentifier;
 
         expect(
-          yield* ordinary.enqueueCampaign(
+          yield* ordinary.newRun(
             campaign.id,
             { state: "draft", runToken: cancelledToken },
             replacement,
+            "queued",
             yield* nowIso,
           ),
         ).toBe("queued");
@@ -514,10 +521,11 @@ describe("queued campaign cancellation", () => {
         const resumeToken = yield* newIdentifier;
 
         expect(
-          yield* capturing.resumeCampaign(
+          yield* capturing.newRun(
             campaign.id,
             { state: "paused", runToken: seedToken },
             resumeToken,
+            "queued",
             yield* nowIso,
           ),
         ).toBe("queued");
