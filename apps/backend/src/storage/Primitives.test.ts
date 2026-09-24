@@ -289,7 +289,7 @@ describe("readEntityPage", () => {
   it("derives the next cursor from the continuation key, never from the page's length", () =>
     Effect.runPromise(
       Effect.gen(function* () {
-        // The wiki's named trap: a page can come back empty and still have more to give.
+        // DynamoDB can return an empty page that still has more to give.
         const { primitives } = withTable({
           query: [
             Effect.succeed({

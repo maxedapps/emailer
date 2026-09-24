@@ -42,5 +42,5 @@ The first slice remains contact → list membership → campaign → immediate p
 - [Alchemy file layout](https://alchemy.run/project-structure/file-layout/)
 - [Alchemy phases](https://alchemy.run/infrastructure-as-effects/phases/)
 - [Official AWS storage example](https://github.com/alchemy-run/alchemy/blob/main/examples/aws-lambda/src/JobStorage.ts)
-- [Repository wiki: runtime, bindings and Layers](../wiki/alchemy/runtime-and-bindings.md)
+- [Alchemy runtime](https://alchemy.run/infrastructure-as-effects/runtime/) and [bindings](https://alchemy.run/infrastructure-as-effects/binding/)
 - [ADR-0002: Domain sending identity with Easy DKIM](0002-domain-sending-identity.md), which records the sending identity deviation found while implementing this slice

@@ -12,7 +12,7 @@
 
 A campaign can only be sent now: `POST /campaigns/:id/send` writes `queued` under a fresh run token and sends one wake-up to the dispatch queue. Operators want to queue a draft for a future instant. The dispatcher, the wake-up message and every run-level condition already exist and are proven; what is missing is a clock that sends the same wake-up later, a state that records the intent, and a way to withdraw it.
 
-The clock has to survive Lambda invocations and must not fire on a torn-down stage. Scheduler delivery is at-least-once, a database write and a Scheduler request are not one transaction, and a deleted schedule cannot recall a message already in the queue (`wiki/aws/scheduler.md`).
+The clock has to survive Lambda invocations and must not fire on a torn-down stage. Scheduler delivery is at-least-once, a database write and a Scheduler request are not one transaction, and a deleted schedule cannot recall a message already in the queue ([EventBridge Scheduler](https://docs.aws.amazon.com/scheduler/latest/UserGuide/what-is-scheduler.html)).
 
 ## Decision
 
@@ -65,4 +65,3 @@ A cancelled campaign returned to `draft`, its schedule disappeared from the grou
 - [EventBridge Scheduler: CreateSchedule](https://docs.aws.amazon.com/scheduler/latest/APIReference/API_CreateSchedule.html) (`ClientToken`, `ActionAfterCompletion`)
 - [EventBridge Scheduler: DeleteScheduleGroup](https://docs.aws.amazon.com/scheduler/latest/APIReference/API_DeleteScheduleGroup.html) (deletes the group's schedules)
 - Alchemy 2.0.0-beta.77 `src/AWS/Scheduler/{CreateSchedule,DeleteSchedule,BindingHttp,ScheduleGroup}.ts`
-- [wiki/aws/scheduler.md](../wiki/aws/scheduler.md)

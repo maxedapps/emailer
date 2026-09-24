@@ -33,8 +33,8 @@ import {
 
 type AwsProviders = Layer.Success<ReturnType<typeof AWS.providers>>;
 
-// `AWS.providers()` is typed with `any` requirements (wiki: version-specific traps); naming what it
-// actually requires here keeps that `any` out of every layer built from it.
+// `AWS.providers()` is typed with `any` requirements in Alchemy beta.79; naming what it actually
+// requires here keeps that `any` out of every layer built from it.
 // oxlint-disable-next-line typescript/no-unsafe-assignment
 const awsProviders: Layer.Layer<AwsProviders, never, StackServices> = AWS.providers();
 

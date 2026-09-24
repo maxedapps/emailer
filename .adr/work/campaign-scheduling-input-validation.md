@@ -49,6 +49,6 @@ PR #10 was merged with `--no-ff` as `4e37835` and pushed to `origin/main`; GitHu
 
 ## Sources
 
-- [Schema and configuration wiki](../../wiki/effect/schema-and-config.md), [CLI wiki](../../wiki/effect/http-cli-and-runtime.md), [Scheduler wiki](../../wiki/aws/scheduler.md).
+- Schema and configuration wiki, CLI wiki, Scheduler wiki.
 - Installed Effect `4.0.0-rc.112`, `src/internal/dateTime.ts` and `src/Schema.ts`: string parsing can normalize calendar overflow; `DateTime.make` returns an `Option`, and `DateTime.formatIso` yields the canonical UTC representation.
 - [ECMAScript date-time string format](https://tc39.es/ecma262/multipage/numbers-and-dates.html#sec-date-time-string-format).

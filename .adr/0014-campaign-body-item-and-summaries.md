@@ -27,7 +27,7 @@ The listing index projects keys only and every listing hydrates from the base ta
 3. **One tokened transaction for both items.** Atomic, with the contact create as precedent, but it doubles the create's write cost (about 132 units against 66 for a 64 KiB text) and overrides ADR-0013's rule for fresh keys to close a crash window whose worst outcome, body first, is an unreachable item. Rejected.
 4. **Summaries from `send` and `resume` too.** The cost this decision removes is per settlement; a send runs once per campaign and echoing the body costs one bounded read. Not worth a contract change and a third read operation. Rejected.
 5. **One batch read for `get`.** The batch primitive returns items unordered and the page primitive tells items apart by partition key, which the two items share. Two consistent reads keep the distinction in code. Rejected.
-6. **Bodies in object storage.** The wiki's guidance for large documents, but a body is at most a few hundred kilobytes and object storage would add a bucket, a grant and a consistency question for no present need. Rejected.
+6. **Bodies in object storage.** AWS's guidance for [large items](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/bp-use-s3-too.html), but a body is at most a few hundred kilobytes and object storage would add a bucket, a grant and a consistency question for no present need. Rejected.
 
 ## Consequences
 

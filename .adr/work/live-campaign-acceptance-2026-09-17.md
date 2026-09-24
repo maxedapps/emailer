@@ -6,7 +6,7 @@ Status: Passed. The ephemeral deployment was destroyed and independent AWS inven
 
 The user authorized deploying, driving, monitoring and removing an ephemeral AWS test stage, with campaign mail restricted to SES mailbox-simulator recipients and email alert subscriptions disabled. The target is `Emailer/test`, AWS account `123456789012`, Region `us-east-1`, application commit `62d5888ebd5ceb424014a8947e38b6ca4c210a29`.
 
-This validates the merged scheduling, segmentation and HTML implementation. It follows the [next-lanes roadmap](campaigns-next-lanes.md) and the existing [deployment runbook](../../README.md#deploying-an-ephemeral-test-stage). Application source and dependencies are unchanged. The merged commit already passed 665 unit tests and the repository checks; this run focuses on the deployed system.
+This validates the merged scheduling, segmentation and HTML implementation. It follows the [next-lanes roadmap](campaigns-next-lanes.md) and the existing [deployment runbook](../../README.md#develop-and-test). Application source and dependencies are unchanged. The merged commit already passed 665 unit tests and the repository checks; this run focuses on the deployed system.
 
 ## Deployment
 

@@ -56,5 +56,5 @@ Inspect generated and effective deployed IAM, including absence of DynamoDB get/
 - [ADR-0005](0005-contact-identity-and-membership-access-paths.md)
 - [Alchemy Layers](https://alchemy.run/infrastructure-as-effects/layers/)
 - [Alchemy runtime and bindings](https://alchemy.run/infrastructure-as-effects/runtime/)
-- [Repository runtime guidance](../wiki/alchemy/runtime-and-bindings.md)
+- [Alchemy bindings](https://alchemy.run/infrastructure-as-effects/binding/)
 - Installed `alchemy/src/AWS/DynamoDB/TransactWriteItemsHttp.ts` and `BindingHttp.ts`: permissions register before runtime callables are returned.
