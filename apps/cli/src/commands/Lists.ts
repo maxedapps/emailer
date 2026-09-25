@@ -190,7 +190,7 @@ const listsImport = Command.make(
     ).pipe(
       Effect.tapError(() =>
         Console.error(
-          `Stopped after ${count(confirmed)} of ${count(total)} contacts were imported; running the same file again is safe`,
+          `Stopped with ${count(confirmed)} of ${count(total)} contacts confirmed; running the same file again is safe`,
         ),
       ),
     );

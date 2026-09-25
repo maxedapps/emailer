@@ -142,7 +142,7 @@ describe("list management from the command line", () => {
       expect(service.importCalls).toHaveLength(1);
       expect(result.stderr).toContain("ListNotFound");
       expect(result.stderr).toContain(
-        "Stopped after 0 of 1 contacts were imported; running the same file again is safe",
+        "Stopped with 0 of 1 contacts confirmed; running the same file again is safe",
       );
     }).pipe(Effect.provide(NodeServices.layer)),
   );
