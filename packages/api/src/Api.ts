@@ -1,4 +1,4 @@
-import { Schema } from "effect";
+import { Context, Schema } from "effect";
 import {
   HttpApi,
   HttpApiEndpoint,
@@ -12,14 +12,35 @@ import {
 import * as Errors from "./Errors.ts";
 import * as Schemas from "./Schemas.ts";
 
-export class Authorization extends HttpApiMiddleware.Service<Authorization>()(
-  "emailer/Api/Authorization",
+/** The operator's token, which every administrative endpoint requires. */
+export class AdminAuthorization extends HttpApiMiddleware.Service<AdminAuthorization>()(
+  "emailer/Api/AdminAuthorization",
   {
     requiredForClient: true,
     security: { bearer: HttpApiSecurity.bearer },
     error: Errors.Unauthorized,
   },
 ) {}
+
+/** The scoped key a sign-up request came with: the lists it may add to, and its confirm page. */
+export class Integration extends Context.Service<
+  Integration,
+  {
+    readonly keyId: string;
+    readonly lists: ReadonlyArray<string>;
+    readonly confirmUrl: string;
+  }
+>()("emailer/Api/Integration") {}
+
+/** A scoped key, which only the sign-up endpoints accept. Checking it reads storage. */
+export class SubscriptionAuthorization extends HttpApiMiddleware.Service<
+  SubscriptionAuthorization,
+  { provides: Integration; requires: never }
+>()("emailer/Api/SubscriptionAuthorization", {
+  requiredForClient: true,
+  security: { bearer: HttpApiSecurity.bearer },
+  error: [Errors.Unauthorized, Errors.StorageUnavailable],
+}) {}
 
 const listingQuery = {
   cursor: Schema.optional(Schemas.EntityCursor),
@@ -231,9 +252,35 @@ class AddressesGroup extends HttpApiGroup.make("addresses")
   )
   .prefix("/addresses") {}
 
+/** Scoped keys are created and revoked by the operator; a key never manages keys. */
+class KeysGroup extends HttpApiGroup.make("keys")
+  .add(
+    HttpApiEndpoint.post("create", "/", {
+      payload: Schemas.CreateApiKeyPayload,
+      success: Schemas.CreatedApiKey.pipe(HttpApiSchema.status(201)),
+      error: storage,
+    }),
+    // Keys are few, and all of them sit in one partition, so the listing is not paged.
+    HttpApiEndpoint.get("list", "/", {
+      success: Schema.Array(Schemas.ApiKey),
+      error: storage,
+    }),
+    HttpApiEndpoint.delete("revoke", "/:id", {
+      params: { id: Schemas.EntityId },
+      success: HttpApiSchema.NoContent,
+      error: [...storage, Errors.ApiKeyNotFound],
+    }),
+  )
+  .prefix("/keys") {}
+
+/**
+ * `middleware` applies to the groups added before it and to none added after, so the order is the
+ * access rule: everything above takes the admin token only.
+ */
 export class EmailerApi extends HttpApi.make("emailer")
   .add(ContactsGroup)
   .add(ListsGroup)
   .add(CampaignsGroup)
   .add(AddressesGroup)
-  .middleware(Authorization) {}
+  .add(KeysGroup)
+  .middleware(AdminAuthorization) {}

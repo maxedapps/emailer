@@ -28,7 +28,7 @@ describe("the emailer executable", { timeout: 60_000 }, () => {
       });
 
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("Manage contacts, lists, campaigns and addresses");
+      expect(result.stdout).toContain("Manage contacts, lists, campaigns, addresses and keys");
     }),
   );
 

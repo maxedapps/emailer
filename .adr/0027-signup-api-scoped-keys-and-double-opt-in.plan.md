@@ -113,7 +113,12 @@ Status: Done
 
 ### T4 — Scoped API keys
 
-Status: To do
+Status: Done
+
+Deviations:
+
+- `Forbidden` lands in T6, its first user, because knip rejects an unused export.
+- Key creation (`createKey`) sits in `api/Auth.ts`, beside the `emk.<id>.<secret>` format it issues and parses.
 
 - **Contract (`packages/api/src`):**
   - `Api.ts`:

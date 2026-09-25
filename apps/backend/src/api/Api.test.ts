@@ -1,6 +1,7 @@
 import * as sesv2 from "@distilled.cloud/aws/sesv2";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
+import { EmailerApi } from "@emailer/api/Api";
 import { makeEmailerClient } from "@emailer/api/Client";
 import type { EmailerClient } from "@emailer/api/Client";
 import * as Errors from "@emailer/api/Errors";
@@ -18,7 +19,10 @@ import {
   Redacted,
   Schema,
 } from "effect";
+// oxlint-disable-next-line effecttsgo/node-builtin-import
+import { createHash } from "node:crypto";
 import { FetchHttpClient, HttpEffect } from "effect/unstable/http";
+import { HttpApi } from "effect/unstable/httpapi";
 
 import { makeApiHandler } from "./Api.ts";
 import { AccountSuppression } from "../audience/Addresses.ts";
@@ -28,10 +32,12 @@ import { reportingLayer } from "../Reporting.ts";
 import { CampaignWake } from "../sending/Dispatch.ts";
 import { Mailer } from "../sending/Mailer.ts";
 import { SendGuard } from "../sending/SendGuard.ts";
+import { ApiKeyStore } from "../storage/ApiKeys.ts";
 import { AudienceStore } from "../storage/Audience.ts";
 import { CampaignStore } from "../storage/Campaigns.ts";
 import { unusedAudience, unusedCampaigns } from "../storage/Testing.ts";
 
+import type { ApiKeyOperations, StoredApiKey } from "../storage/ApiKeys.ts";
 import type { AudienceOperations } from "../storage/Audience.ts";
 import type { CampaignControl, CampaignStoreOperations } from "../storage/Campaigns.ts";
 
@@ -76,6 +82,29 @@ const campaign: Schemas.Campaign = {
 
 const draft: CampaignControl = { state: "draft" };
 
+const keyId = "0195f0a0-1111-4222-8333-44444444ce01";
+
+const keySecret = "Aa1Bb2Cc3Dd4Ee5Ff6Gg7Hh8Ii9Jj0Kk-Ll_MmNnOoP";
+
+/** A valid scoped key for `storedKey`, which the sign-up endpoints accept. */
+const scopedKey = `emk.${keyId}.${keySecret}`;
+
+const confirmUrl = "https://www.example.com/newsletter/confirm";
+
+const apiKey: Schemas.ApiKey = {
+  id: keyId,
+  name: "Website",
+  lists: [listId],
+  confirmUrl,
+  createdAt,
+};
+
+// Computed independently: `printf '%s' "$keySecret" | sha256sum`.
+const storedKey = {
+  ...apiKey,
+  secretHash: "8ff2188e7463211f1a0af5b018552b52a593961c9d2787014067565a31862a83",
+};
+
 const record = {
   email,
   status: "mailable" as const,
@@ -105,6 +134,7 @@ interface Stubs {
   readonly schedule?: CampaignSchedule["Service"];
   readonly mailer?: Mailer["Service"];
   readonly guard?: SendGuard["Service"];
+  readonly keys?: Partial<ApiKeyOperations>;
 }
 
 /** Every service the API uses, as the deployed function composes them, from the stubs. */
@@ -112,6 +142,13 @@ const servicesFor = (stubs: Stubs) =>
   Layer.mergeAll(
     Layer.succeed(AudienceStore)({ ...unusedAudience, ...stubs.audience }),
     Layer.succeed(CampaignStore)({ ...unusedCampaigns, ...stubs.campaigns }),
+    Layer.succeed(ApiKeyStore)({
+      createKey: notExercised("ApiKeyStore.createKey"),
+      getKey: () => Effect.succeed(storedKey),
+      listKeys: notExercised("ApiKeyStore.listKeys"),
+      revokeKey: notExercised("ApiKeyStore.revokeKey"),
+      ...stubs.keys,
+    }),
     Layer.succeed(AccountSuppression)({
       getSuppressedDestination: notExercised("AccountSuppression.getSuppressedDestination"),
       deleteSuppressedDestination: notExercised("AccountSuppression.deleteSuppressedDestination"),
@@ -616,6 +653,76 @@ describe("addresses", () => {
   );
 });
 
+describe("keys", () => {
+  it.effect("creates a key, shows it once, and stores only its secret's hash", () =>
+    Effect.gen(function* () {
+      const stored: Array<StoredApiKey> = [];
+
+      const { call } = yield* api({
+        keys: {
+          createKey: (key) =>
+            Effect.sync(() => {
+              stored.push(key);
+            }),
+        },
+      });
+
+      const created = yield* call((client) =>
+        client.keys.create({ payload: { name: " Website ", lists: [listId], confirmUrl } }),
+      );
+
+      const [prefix, id, secret = ""] = created.key.split(".");
+      const { key: _key, ...listed } = created;
+
+      expect(listed).toMatchObject({ name: "Website", lists: [listId], confirmUrl });
+      expect([prefix, id]).toStrictEqual(["emk", created.id]);
+      expect(secret).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(stored).toStrictEqual([
+        { ...listed, secretHash: createHash("sha256").update(secret).digest("hex") },
+      ]);
+    }),
+  );
+
+  it.effect("answers 201 for a created key and 400 for a confirm page that is not https", () =>
+    Effect.gen(function* () {
+      const { respond } = yield* api({ keys: { createKey: () => Effect.void } });
+
+      const payload = (url: string) =>
+        JSON.stringify({ name: "Website", lists: [listId], confirmUrl: url });
+
+      expect((yield* respond(send("POST", "/keys", payload(confirmUrl)))).status).toBe(201);
+      expect(
+        (yield* respond(send("POST", "/keys", payload("http://www.example.com/confirm")))).status,
+      ).toBe(400);
+      expect((yield* respond(send("POST", "/keys", payload("/confirm")))).status).toBe(400);
+    }),
+  );
+
+  it.effect("lists the keys and revokes one, answering 404 for a key that is not there", () =>
+    Effect.gen(function* () {
+      const calls: Array<ReadonlyArray<unknown>> = [];
+
+      const { call, respond } = yield* api({
+        keys: {
+          listKeys: recording(calls, [apiKey]),
+          revokeKey: (id) =>
+            id === keyId
+              ? recording(calls, undefined)(id)
+              : Effect.fail(new Errors.ApiKeyNotFound()),
+        },
+      });
+
+      const revoke = (id: string) =>
+        respond(new Request(`${baseUrl}/keys/${id}`, { method: "DELETE", headers: authorized() }));
+
+      expect(yield* call((client) => client.keys.list())).toStrictEqual([apiKey]);
+      expect((yield* revoke(keyId)).status).toBe(204);
+      expect((yield* revoke(contactId)).status).toBe(404);
+      expect(calls).toStrictEqual([[], [keyId]]);
+    }),
+  );
+});
+
 describe("public errors", () => {
   const conflict = { state: "sending", runToken, startedAt: createdAt } as const;
 
@@ -877,6 +984,38 @@ describe("authorization", () => {
 
       expect((yield* respond(send("POST", "/contacts", "{not json", {}))).status).toBe(401);
       expect(lines).toStrictEqual([]);
+    }),
+  );
+
+  // `middleware` covers only the groups added before it, so this is what pins the contract's order.
+  it.effect("refuses a valid scoped key on every administrative endpoint", () =>
+    Effect.gen(function* () {
+      const { respond } = yield* api();
+      const endpoints: Array<{ readonly method: string; readonly path: string }> = [];
+
+      HttpApi.reflect(EmailerApi, {
+        onGroup: () => undefined,
+        onEndpoint: ({ group, endpoint }) => {
+          if (group.identifier !== "subscriptions") {
+            endpoints.push({ method: endpoint.method, path: endpoint.path });
+          }
+        },
+      });
+
+      const answered = yield* Effect.forEach(endpoints, ({ method, path }) =>
+        Effect.map(
+          respond(
+            new Request(`${baseUrl}${path.replaceAll(/:\w+/g, listId)}`, {
+              method,
+              headers: { authorization: `Bearer ${scopedKey}` },
+            }),
+          ),
+          (response) => `${method} ${path} ${response.status}`,
+        ),
+      );
+
+      expect(endpoints.length).toBeGreaterThan(30);
+      expect(answered).toStrictEqual(endpoints.map(({ method, path }) => `${method} ${path} 401`));
     }),
   );
 

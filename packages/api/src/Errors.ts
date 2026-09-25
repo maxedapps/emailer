@@ -20,6 +20,16 @@ export class Unauthorized extends Schema.TaggedError<Unauthorized>()(
   }
 }
 
+export class ApiKeyNotFound extends Schema.TaggedError<ApiKeyNotFound>()(
+  "ApiKeyNotFound",
+  {},
+  { httpApiStatus: 404 },
+) {
+  override get [ErrorReporter.ignore]() {
+    return true;
+  }
+}
+
 export class ContactNotFound extends Schema.TaggedError<ContactNotFound>()(
   "ContactNotFound",
   {},

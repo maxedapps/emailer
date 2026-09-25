@@ -513,6 +513,43 @@ export const TestSendResult = Schema.Struct({ recipients: Schema.Array(TestSendO
 
 export type TestSendResult = typeof TestSendResult.Type;
 
+const maxConfirmUrlLength = 2000;
+
+/**
+ * The page on the integrating site that confirms a sign-up. Absolute and `https:`, since the link
+ * carries the confirmation's secret.
+ */
+export const ConfirmUrl = Schema.String.check(
+  Schema.isMaxLength(maxConfirmUrlLength),
+  Schema.makeFilter((value: string) =>
+    URL.parse(value)?.protocol === "https:" ? undefined : "Expected an absolute https: URL",
+  ),
+);
+
+/** A scoped API key as listed: what it may do, never its secret. */
+export const ApiKey = Schema.Struct({
+  id: EntityId,
+  name: EntityName,
+  lists: Schema.NonEmptyArray(EntityId),
+  confirmUrl: ConfirmUrl,
+  createdAt: Timestamp,
+});
+
+export type ApiKey = typeof ApiKey.Type;
+
+export const CreateApiKeyPayload = Schema.Struct({
+  name: EntityName,
+  lists: Schema.NonEmptyArray(EntityId),
+  confirmUrl: ConfirmUrl,
+});
+
+export type CreateApiKeyPayload = typeof CreateApiKeyPayload.Type;
+
+/** A key as created: the only time its credential is shown. */
+export const CreatedApiKey = Schema.Struct({ ...ApiKey.fields, key: Schema.String });
+
+export type CreatedApiKey = typeof CreatedApiKey.Type;
+
 /** A short-lived public link to a campaign's rendered preview. */
 export const PreviewLink = Schema.Struct({ url: Schema.String, expiresAt: Timestamp });
 
