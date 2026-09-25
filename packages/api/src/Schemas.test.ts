@@ -656,6 +656,28 @@ describe("ImportContactsPayload", () => {
   });
 });
 
+describe("ImportContactsFile", () => {
+  const decode = Schema.decodeUnknownResult(Schemas.ImportContactsFile);
+
+  const contacts = (count: number) =>
+    Array.from({ length: count }, (_, index) => ({ email: `contact${index}@example.com` }));
+
+  it("admits a file larger than one call's batch", () => {
+    const file = { contacts: contacts(Schemas.maxImportEntries + 1) };
+
+    expect(Result.getOrThrow(decode(file)).contacts).toHaveLength(Schemas.maxImportEntries + 1);
+  });
+
+  it("rejects one mailbox named twice, even batches apart", () => {
+    const file = contacts(30);
+
+    file[0] = { email: "Sam@example.com" };
+    file[25] = { email: "sam@EXAMPLE.com" };
+
+    expect(Result.isFailure(decode({ contacts: file }))).toBe(true);
+  });
+});
+
 describe("TestSendPayload", () => {
   const decode = Schema.decodeUnknownResult(Schemas.TestSendPayload);
 

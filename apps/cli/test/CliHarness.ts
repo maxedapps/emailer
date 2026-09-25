@@ -27,6 +27,8 @@ interface Service {
   readonly campaignUpdates: Array<Schemas.UpdateCampaignPayload>;
   readonly testSends: Array<Schemas.TestSendPayload>;
   readonly startedAt: Map<string, string>;
+  /** The contacts each import call carried, in arrival order, refused calls included. */
+  readonly importCalls: Array<Schemas.ImportContactsPayload["contacts"]>;
   /** A list named "Readers" at `listId` whose members hold these addresses. */
   readonly seedList: (emails: ReadonlyArray<string>) => void;
 }
@@ -47,7 +49,11 @@ export const pausedSubmission: Schemas.CampaignSubmission = {
 
 export const inMemoryService = (
   accepted: string,
-  options: { readonly queueUnavailable?: boolean } = {},
+  options: {
+    readonly queueUnavailable?: boolean;
+    /** The first import call answers 503, as a throttled table would. */
+    readonly importUnavailableOnce?: boolean;
+  } = {},
 ): Service => {
   const authorizations: Array<string> = [];
   const updates: Array<Schemas.ContactAttributes> = [];
@@ -58,6 +64,8 @@ export const inMemoryService = (
   const campaignUpdates: Array<Schemas.UpdateCampaignPayload> = [];
   const testSends: Array<Schemas.TestSendPayload> = [];
   const startedAt = new Map<string, string>();
+  const importCalls: Array<Schemas.ImportContactsPayload["contacts"]> = [];
+  let importedContacts = 0;
 
   const authorization = Layer.succeed(Authorization)(
     Authorization.of({
@@ -230,13 +238,24 @@ export const inMemoryService = (
           return Effect.void;
         }),
       import: (request) =>
-        Effect.suspend(() => {
-          if (!lists.has(request.params.listId)) {
-            return Effect.fail(new Errors.ListNotFound());
+        Effect.gen(function* () {
+          importCalls.push(request.payload.contacts);
+
+          if (options.importUnavailableOnce === true && importCalls.length === 1) {
+            return yield* new Errors.StorageUnavailable({
+              operation: "importContacts",
+              failure: "ThrottlingException",
+            });
           }
 
-          const imported = request.payload.contacts.map((entry, index) => {
-            const id = `0195f0a0-1111-4222-8333-4444444c${String(index).padStart(4, "0")}`;
+          if (!lists.has(request.params.listId)) {
+            return yield* new Errors.ListNotFound();
+          }
+
+          const imported = request.payload.contacts.map((entry) => {
+            importedContacts += 1;
+
+            const id = `0195f0a0-1111-4222-8333-4444444d${String(importedContacts).padStart(4, "0")}`;
             const contact: Schemas.Contact = { id, email: entry.email, createdAt };
 
             contacts.set(id, contact);
@@ -244,12 +263,12 @@ export const inMemoryService = (
             return { email: entry.email, contactId: id, member: true };
           });
 
-          members.set(
-            request.params.listId,
-            imported.map((entry) => entry.contactId),
-          );
+          members.set(request.params.listId, [
+            ...(members.get(request.params.listId) ?? []),
+            ...imported.map((entry) => entry.contactId),
+          ]);
 
-          return Effect.succeed({ contacts: imported });
+          return { contacts: imported };
         }),
     }),
   );
@@ -549,6 +568,7 @@ export const inMemoryService = (
     campaignUpdates,
     testSends,
     startedAt,
+    importCalls,
     seedList,
   };
 };

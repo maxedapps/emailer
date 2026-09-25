@@ -4,7 +4,7 @@ Self-hosted marketing email over Amazon SES. Deploy it to your own AWS account, 
 
 ## What you get
 
-- **Audience:** contacts with up to 20 `key=value` attributes, lists, and JSON imports.
+- **Audience:** contacts with up to 20 `key=value` attributes, lists, and JSON or CSV imports.
 - **Campaigns** written in Markdown and rendered to email-safe HTML and plain text, or supplied as your own text and HTML files.
 - **Targeting:** send to a whole list, or only to members whose attributes match a filter.
 - **Drafting:** preview links that open on any device, and `[Test]` copies to up to 20 addresses.
@@ -22,7 +22,6 @@ Self-hosted marketing email over Amazon SES. Deploy it to your own AWS account, 
 - There is no personalization. Every recipient gets the same content, apart from their own unsubscribe link.
 - There is no open or click tracking.
 - Markdown campaigns share one fixed layout. For any other design, supply your own HTML.
-- An import takes at most 20 contacts per call, so a larger file needs a loop.
 
 ## How it works
 
@@ -225,7 +224,15 @@ Every command also accepts:
    }
    ```
 
-   Import it, at most 20 contacts per file:
+   A CSV file (`.csv`) works too, such as a spreadsheet export. Its header row names the columns: `email` is required, `name` is optional, and every other column becomes an attribute:
+
+   ```csv
+   email,name,plan
+   ada@example.com,Ada,pro
+   grace@example.com,,
+   ```
+
+   Import it, whatever its size:
 
    ```sh
    pnpm emailer lists import <listId> --file ~/emailer/contacts.json
@@ -283,17 +290,17 @@ Each command below is run as `pnpm emailer <command>`. `[…]` marks an optional
 
 **Lists**
 
-| Command                                                    | What it does                                               |
-| ---------------------------------------------------------- | ---------------------------------------------------------- |
-| `lists create --name <name>`                               | Create a list                                              |
-| `lists get <listId>`                                       | Show a list                                                |
-| `lists list [--limit <n>] [--cursor <cursor>]`             | List lists in the order they were created                  |
-| `lists members <listId> [--limit <n>] [--cursor <cursor>]` | List a list's contacts                                     |
-| `lists rename <listId> --name <name>`                      | Rename a list                                              |
-| `lists add-contact <listId> <contactId>`                   | Add a contact to a list; repeating it changes nothing      |
-| `lists remove-contact <listId> <contactId>`                | Remove a contact from a list; repeating it changes nothing |
-| `lists import <listId> --file <contacts.json>`             | Create or find up to 20 contacts and add them to the list  |
-| `lists delete <listId>`                                    | Delete a list and its memberships; its contacts stay       |
+| Command                                                    | What it does                                                               |
+| ---------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `lists create --name <name>`                               | Create a list                                                              |
+| `lists get <listId>`                                       | Show a list                                                                |
+| `lists list [--limit <n>] [--cursor <cursor>]`             | List lists in the order they were created                                  |
+| `lists members <listId> [--limit <n>] [--cursor <cursor>]` | List a list's contacts                                                     |
+| `lists rename <listId> --name <name>`                      | Rename a list                                                              |
+| `lists add-contact <listId> <contactId>`                   | Add a contact to a list; repeating it changes nothing                      |
+| `lists remove-contact <listId> <contactId>`                | Remove a contact from a list; repeating it changes nothing                 |
+| `lists import <listId> --file <file>`                      | Create or find the contacts in a JSON or CSV file and add them to the list |
+| `lists delete <listId>`                                    | Delete a list and its memberships; its contacts stay                       |
 
 **Campaigns**
 
@@ -323,7 +330,7 @@ Each command below is run as `pnpm emailer <command>`. `[…]` marks an optional
 - **A contact:** `{ id, email, name?, attributes?, createdAt }`. **A list:** `{ id, name, createdAt }`.
 - **Listings:** `{ items, nextCursor? }`. Pass `nextCursor` as `--cursor` to get the next page.
 - **`lists add-contact` / `remove-contact`:** `{ listId, contactId, member }`. **Deletes:** `{ id, deleted: true }`.
-- **`lists import`:** `{ contacts: [{ email, contactId, member }] }`, one entry per imported address.
+- **`lists import`:** `{ contacts: [{ email, contactId, member }] }`, one entry per imported address, in file order.
 - **A campaign:** `{ id, listId, subject, createdAt, filter?, submission, text, html? }`; `campaigns list` leaves out `text` and `html`.
   - `submission.state` is `draft`, `scheduled` (with `sendAt`), `queued`, `sending`, `paused` (with a `reason`) or `completed`.
   - From `sending` on, it carries `progress` (`accepted`, `rejected`, `uncertain`, `skipped`) and `feedback` (`bounced`, `complained`).
@@ -343,16 +350,16 @@ Each command below is run as `pnpm emailer <command>`. `[…]` marks an optional
 
 ### Limits
 
-| What                   | Limit                                                   |
-| ---------------------- | ------------------------------------------------------- |
-| Subject                | 200 characters                                          |
-| Contact and list names | 200 characters                                          |
-| Text body              | 64 KB (UTF-8), including a body rendered from Markdown  |
-| HTML body              | 256 KB (UTF-8), including a body rendered from Markdown |
-| Contact attributes     | 20 entries; keys up to 64 characters, values up to 512  |
-| `lists import`         | 20 contacts per call; one address may not appear twice  |
-| `campaigns test`       | 20 recipients                                           |
-| Listings               | `--limit` 1–100, default 25                             |
+| What                   | Limit                                                                                |
+| ---------------------- | ------------------------------------------------------------------------------------ |
+| Subject                | 200 characters                                                                       |
+| Contact and list names | 200 characters                                                                       |
+| Text body              | 64 KB (UTF-8), including a body rendered from Markdown                               |
+| HTML body              | 256 KB (UTF-8), including a body rendered from Markdown                              |
+| Contact attributes     | 20 entries; keys up to 64 characters, values up to 512                               |
+| `lists import`         | any file size, sent 20 contacts per call; one address may not appear twice in a file |
+| `campaigns test`       | 20 recipients                                                                        |
+| Listings               | `--limit` 1–100, default 25                                                          |
 
 ### Behavior
 
@@ -360,6 +367,8 @@ Each command below is run as `pnpm emailer <command>`. `[…]` marks an optional
 - An update, delete or import that races another change to the same contact tries again twice, then answers **409** `ContactChanged`; run it again.
 - `--attr` replaces the whole attribute map; it does not merge. Repeat it per entry. `--clear-name` removes the name.
 - `lists import` rejects a file with a key the format does not declare, such as a misspelled `attributs`, before anything is sent, and names the key's path. It reports where each address stands after the import, not what changed, so running the same file again is safe and returns the same answer. An address that already has a contact gains the membership but keeps its name and attributes; use `contacts update` for those.
+- `lists import` sends the file 20 contacts per call, 4 calls at a time: about 250 contacts a second into one list, near the most DynamoDB takes for one list without throttling. A call that fails in transit, times out or answers 408, 429 or 5xx is sent again for about two minutes. Progress goes to stderr every 1,000 contacts. If the import stops, stderr says how many contacts went in; running the same file again completes it.
+- A `.csv` file is read as CSV. The header's `email` and `name` columns match in any case, and every other column becomes an attribute named by its header, so delete export columns you don't want first. Empty cells are left out. A missing `email` column or a column named twice is rejected, and a row that fails the checks is named by its line.
 - `--filter` keeps members whose attributes equal every `key=value` (AND). Omit it for the whole list. Members that don't match are left out entirely and are not counted in `skipped`.
 - An opt-out holds the address. While opted out, moving the contact onto a different address answers **409** `AddressOptedOut`. Deleting the contact and creating another at the same address does not make it mailable.
 - `addresses unsuppress` clears local suppression and the SES **account** suppression list (one list per account and Region, shared with every other sender there). SES stores suppression entries case-sensitively, so pass the address in the case SES stored it: as the contact holds it (`contacts by-email` shows it) or as `aws sesv2 list-suppressed-destinations` lists it. `addresses status` echoes the address you pass, so another case shows no account entry rather than an error. It never clears an opt-out.

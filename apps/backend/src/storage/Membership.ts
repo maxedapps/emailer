@@ -82,10 +82,10 @@ export const membershipOperations = (
   ];
 
   /**
-   * Adding to or importing into a list that is gone must write no membership, and removing from one
-   * answers `ListNotFound`, so each of those transactions carries this check. It targets the list's
-   * `META`, never a member item, so it shares a transaction with the member writes without targeting
-   * any item twice.
+   * Adding to a list that is gone must write no membership, and removing from one answers
+   * `ListNotFound`, so both transactions carry this check. It targets the list's `META`, never a
+   * member item, so it shares a transaction with the member writes without targeting any item twice.
+   * An import reads the list instead; `importContacts` says why.
    */
   const listExists = (listId: string) => ({
     ConditionCheck: {
@@ -342,22 +342,38 @@ export const membershipOperations = (
    * whole batch, where an upsert makes a re-run a no-op. `addedAt` is kept through `if_not_exists`,
    * so re-importing does not rewrite when somebody joined.
    *
-   * The pre-read is advisory only — a strong read still does not make a later write atomic. The
-   * transaction's own conditions are the authority: the list is checked, so a missing list is
-   * `ListNotFound`; every existing contact carries a `ConditionCheck`, so an import racing that
-   * contact's deletion fails rather than resurrecting a membership; and each new address is
-   * reserved conditionally, so losing a race to a concurrent creation fails too. Both races are
-   * retried from a fresh pre-read, which then sees the new state.
+   * The list is read, not checked inside the transaction. Its `META` shares a partition with every
+   * member item, so a transactional check would lock the one partition a large import already
+   * saturates, and parallel batches would collide on it (ADR-0025). A missing list is `ListNotFound`
+   * before any write. A list deleted between the read and the commit leaves this batch's
+   * memberships behind — the leftover ADR-0005 already accepts for an import during a delete
+   * cascade; every later batch reads the list as missing.
+   *
+   * The reservation pre-read is advisory only — a strong read still does not make a later write
+   * atomic. The transaction's own conditions are the authority: every existing contact carries a
+   * `ConditionCheck`, so an import racing that contact's deletion fails rather than resurrecting a
+   * membership; and each new address is reserved conditionally, so losing a race to a concurrent
+   * creation fails too. Both races are retried from a fresh pre-read, which then sees the new state.
    */
   const importContacts = Effect.fn("Storage.importContacts")(function* (
     listId: string,
     candidates: ReadonlyArray<Schemas.Contact>,
     addedAt: string,
   ) {
-    const reserved = yield* readItems(
-      "importContacts",
-      candidates.map((candidate) => reservationKey(candidate.email)),
+    const [list, reserved] = yield* Effect.all(
+      [
+        readItem("importContacts", listKey(listId)),
+        readItems(
+          "importContacts",
+          candidates.map((candidate) => reservationKey(candidate.email)),
+        ),
+      ],
+      { concurrency: 2 },
     );
+
+    if (list.Item === undefined) {
+      return yield* new ListNotFound();
+    }
 
     const holders = new Map<string, string>();
 
@@ -367,8 +383,7 @@ export const membershipOperations = (
       holders.set(entry.pk.slice("EMAIL#".length), entry.contactId);
     }
 
-    // The list comes first: an import into a list that is gone answers that, whatever else raced.
-    const actions: Array<Action<ListNotFound | ContactChanged>> = [listExists(listId)];
+    const actions: Array<Action<ContactChanged>> = [];
 
     const imported: Array<Schemas.ImportContactsResult["contacts"][number]> = [];
 
