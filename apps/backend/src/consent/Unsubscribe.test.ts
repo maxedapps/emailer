@@ -123,7 +123,7 @@ describe("unsubscribe tokens", () => {
     }),
   );
 
-  // Forged and malformed tokens are SignedToken.test.ts's table. This row pins that the wrapper
+  // Forged and malformed tokens are Tokens.test.ts's table. This row pins that the wrapper
   // checks the signature, under the key it is given.
   it.effect("rejects a token signed under another secret", () =>
     Effect.gen(function* () {

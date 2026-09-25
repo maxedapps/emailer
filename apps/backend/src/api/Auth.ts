@@ -2,7 +2,7 @@ import { Authorization } from "@emailer/api/Api";
 import { Unauthorized } from "@emailer/api/Errors";
 import { Config, Data, Effect, Layer, Redacted } from "effect";
 
-import { tokensMatch } from "../SignedToken.ts";
+import { tokensMatch } from "../Tokens.ts";
 
 const tokenPattern = /^[A-Za-z0-9_-]{43}$/;
 

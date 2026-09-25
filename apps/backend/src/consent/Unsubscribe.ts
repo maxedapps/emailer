@@ -3,7 +3,7 @@ import { Random } from "alchemy";
 import * as AWS from "alchemy/AWS";
 import { Config, Effect, Encoding, Option, Redacted, Result, Schema } from "effect";
 
-import * as SignedToken from "../SignedToken.ts";
+import * as Tokens from "../Tokens.ts";
 
 export const unsubscribeSecret = Random("UnsubscribeSecret");
 
@@ -25,7 +25,7 @@ const listIdLength = 36;
  * 444 characters. Shortening it would mean shortening the signature or the address limit, not the
  * route.
  */
-export const maxTokenLength = SignedToken.lengthFor([
+export const maxTokenLength = Tokens.lengthFor([
   encodedLength(Schemas.maxEmailLength),
   listIdLength,
 ]);
@@ -52,7 +52,7 @@ export const mintToken = (
   signingKey: Redacted.Redacted<string>,
   target: UnsubscribeTarget,
 ): string =>
-  SignedToken.sign(signingKey, [encodePayload(Schemas.mailboxKey(target.mailbox)), target.listId]);
+  Tokens.sign(signingKey, [encodePayload(Schemas.mailboxKey(target.mailbox)), target.listId]);
 
 const mailboxOf = (payload: string): Option.Option<string> =>
   Result.getSuccess(Encoding.decodeBase64UrlString(payload)).pipe(
@@ -73,7 +73,7 @@ export const verifyToken = (
   token: string,
 ): Option.Option<UnsubscribeTarget> =>
   Option.flatMap(
-    SignedToken.verify(signingKey, token, { fields: 2, maxLength: maxTokenLength }),
+    Tokens.verify(signingKey, token, { fields: 2, maxLength: maxTokenLength }),
     ([payload = "", listId = ""]) =>
       isListId(listId)
         ? Option.map(mailboxOf(payload), (mailbox) => ({ mailbox, listId }))

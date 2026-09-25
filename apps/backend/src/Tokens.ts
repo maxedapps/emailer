@@ -1,13 +1,18 @@
-import { Option, Redacted } from "effect";
+import { Crypto, Effect, Encoding, Option, Redacted } from "effect";
 // Effect exposes no HMAC or constant-time comparison, so these are the platform primitives it would wrap.
 // oxlint-disable-next-line effecttsgo/node-builtin-import
 import { createHmac, timingSafeEqual } from "node:crypto";
 
 /**
- * Tokens the backend issues and later accepts back from the public internet — unsubscribe links and
- * preview links — share one format: `v1.<field>.….<hex HMAC-SHA256>`. The version travels inside
- * the signed material; signing the fields alone would leave the prefix free to be rewritten, which
- * is the whole value of versioning it.
+ * The tokens the backend issues and later accepts back come in two kinds.
+ *
+ * Signed tokens — unsubscribe links and preview links — share one format:
+ * `v1.<field>.….<hex HMAC-SHA256>`. The version travels inside the signed material; signing the
+ * fields alone would leave the prefix free to be rewritten, which is the whole value of versioning
+ * it.
+ *
+ * Hashed secrets — API keys and confirmation links — are random, and only their hash is stored, so
+ * reading the table reveals no credential.
  */
 const version = "v1";
 
@@ -87,3 +92,26 @@ export const verify = (
     ? Option.some(fields)
     : Option.none();
 };
+
+const secretBytes = 32;
+
+/** A fresh random secret: 32 bytes as unpadded base64url, 43 characters. */
+export const issueSecret = Effect.gen(function* () {
+  const crypto = yield* Crypto.Crypto;
+  const bytes = yield* Effect.orDie(crypto.randomBytes(secretBytes));
+
+  return Redacted.make(Encoding.encodeBase64Url(bytes));
+});
+
+/** What is stored in a secret's place: its SHA-256, as hex. */
+export const hashSecret = Effect.fn("Tokens.hashSecret")(function* (
+  secret: Redacted.Redacted<string>,
+) {
+  const crypto = yield* Crypto.Crypto;
+
+  const digest = yield* Effect.orDie(
+    crypto.digest("SHA-256", encoder.encode(Redacted.value(secret))),
+  );
+
+  return Encoding.encodeHex(digest);
+});

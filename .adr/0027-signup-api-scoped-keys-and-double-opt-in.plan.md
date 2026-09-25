@@ -99,7 +99,7 @@ Status: Done
 
 ### T3 — One module for the tokens we issue
 
-Status: To do
+Status: Done
 
 - **Rename** `apps/backend/src/SignedToken.ts` to `Tokens.ts` and update its importers: `consent/Unsubscribe.ts`, `campaigns/Previews.ts`, `api/Auth.ts`, and their tests.
 - **Add the hashed-secret half:**

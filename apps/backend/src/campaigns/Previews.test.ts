@@ -2,7 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 import { ConfigProvider, Effect, Option, Redacted } from "effect";
 import { TestClock } from "effect/testing";
 
-import * as SignedToken from "../SignedToken.ts";
+import * as Tokens from "../Tokens.ts";
 import {
   maxPreviewTokenLength,
   mintPreviewToken,
@@ -39,13 +39,13 @@ describe("preview tokens", () => {
     ["another key", mintPreviewToken(Redacted.make("another key"), campaignId, expiresAt)],
     [
       "a signed id that is not a campaign id",
-      SignedToken.sign(signingKey, ["not-an-id", String(expiresAt)]),
+      Tokens.sign(signingKey, ["not-an-id", String(expiresAt)]),
     ],
     [
       "a signed expiry that is not ten digits",
-      SignedToken.sign(signingKey, [campaignId, "17900000000"]),
+      Tokens.sign(signingKey, [campaignId, "17900000000"]),
     ],
-    ["a token of the unsubscribe shape", SignedToken.sign(signingKey, [campaignId])],
+    ["a token of the unsubscribe shape", Tokens.sign(signingKey, [campaignId])],
   ])("refuses %s", (_label, token) => {
     expect(verifyPreviewToken(signingKey, token, expiresAt - 100)).toStrictEqual(Option.none());
   });
