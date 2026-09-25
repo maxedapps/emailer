@@ -7,7 +7,7 @@ import {
 } from "@emailer/api/Errors";
 import type { SendingPaused } from "@emailer/api/Errors";
 import * as AWS from "alchemy/AWS";
-import { Config, Context, Effect, Layer, Option } from "effect";
+import { Config, Context, Duration, Effect, Exit, Layer, Option } from "effect";
 import { RateLimiter } from "effect/unstable/persistence";
 
 import { unavailable } from "../Errors.ts";
@@ -79,13 +79,23 @@ export const makeSlot = (limiter: RateLimiter.RateLimiter) => (limit: number) =>
       Effect.mapError(unavailable(StorageUnavailable, "pacing")),
     );
 
+/**
+ * The allowance as read at most 30 seconds ago, for sign-ups. SES allows one `GetAccount` per second
+ * for the whole account, and every dispatch slice needs it, so a burst of sign-ups must not read it
+ * each time. A sign-up may therefore act on a halt or a spent budget up to 30 seconds late; `slot`
+ * still paces each mail. Only a successful read is kept, so the next sign-up retries a failed one.
+ */
+export const recentAllowance = <E>(current: Effect.Effect<SendAllowance, E>) =>
+  Effect.cachedWithTTL(current, (exit) => (Exit.isSuccess(exit) ? "30 seconds" : Duration.zero));
+
 const dailySendCeiling = Config.option(Config.Int("EMAILER_DAILY_SEND_CEILING"));
 
 /**
  * Account-wide admission. Every sender — each dispatch slice and each test send — asks for the
  * current allowance before its first message and takes a pacing slot before each one, so no path
- * can outrun the reputation guardrails, the daily budget or the account's send rate. Tests stub
- * the service instead of the AWS reads and the rate limiter behind it.
+ * can outrun the reputation guardrails, the daily budget or the account's send rate. Sign-ups ask
+ * for the `recent` allowance instead, which this instance reads at most every 30 seconds. Tests
+ * stub the service instead of the AWS reads and the rate limiter behind it.
  */
 export class SendGuard extends Context.Service<SendGuard>()("emailer/backend/SendGuard", {
   make: Effect.gen(function* () {
@@ -100,13 +110,16 @@ export class SendGuard extends Context.Service<SendGuard>()("emailer/backend/Sen
     const alarmStates: Effect.Effect<cloudwatch.DescribeAlarmsOutput, AlarmsUnavailable> =
       Effect.mapError(describeAlarms(), unavailable(AlarmsUnavailable, "describeAlarms"));
 
+    // Two independent reads; neither depends on the other.
+    const current = Effect.zip(
+      getAccount().pipe(Effect.mapError(unavailable(EmailServiceUnavailable, "getAccount"))),
+      alarmStates,
+      { concurrent: true },
+    ).pipe(Effect.map(([account, alarms]) => sendGuard(account, alarms, ceiling)));
+
     return {
-      // Two independent reads; neither depends on the other.
-      current: Effect.zip(
-        getAccount().pipe(Effect.mapError(unavailable(EmailServiceUnavailable, "getAccount"))),
-        alarmStates,
-        { concurrent: true },
-      ).pipe(Effect.map(([account, alarms]) => sendGuard(account, alarms, ceiling))),
+      current,
+      recent: yield* recentAllowance(current),
       slot: makeSlot(limiter),
     } as const;
   }),

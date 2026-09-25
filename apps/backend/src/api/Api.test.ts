@@ -1,6 +1,7 @@
 import * as sesv2 from "@distilled.cloud/aws/sesv2";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
+import { EmailerApi } from "@emailer/api/Api";
 import { makeEmailerClient } from "@emailer/api/Client";
 import type { EmailerClient } from "@emailer/api/Client";
 import * as Errors from "@emailer/api/Errors";
@@ -18,7 +19,10 @@ import {
   Redacted,
   Schema,
 } from "effect";
+// oxlint-disable-next-line effecttsgo/node-builtin-import
+import { createHash } from "node:crypto";
 import { FetchHttpClient, HttpEffect } from "effect/unstable/http";
+import { HttpApi } from "effect/unstable/httpapi";
 
 import { makeApiHandler } from "./Api.ts";
 import { AccountSuppression } from "../audience/Addresses.ts";
@@ -28,10 +32,13 @@ import { reportingLayer } from "../Reporting.ts";
 import { CampaignWake } from "../sending/Dispatch.ts";
 import { Mailer } from "../sending/Mailer.ts";
 import { SendGuard } from "../sending/SendGuard.ts";
+import { ApiKeyStore } from "../storage/ApiKeys.ts";
 import { AudienceStore } from "../storage/Audience.ts";
 import { CampaignStore } from "../storage/Campaigns.ts";
+import { SubscriptionState } from "../storage/Subscriptions.ts";
 import { unusedAudience, unusedCampaigns } from "../storage/Testing.ts";
 
+import type { ApiKeyOperations, StoredApiKey } from "../storage/ApiKeys.ts";
 import type { AudienceOperations } from "../storage/Audience.ts";
 import type { CampaignControl, CampaignStoreOperations } from "../storage/Campaigns.ts";
 
@@ -76,15 +83,44 @@ const campaign: Schemas.Campaign = {
 
 const draft: CampaignControl = { state: "draft" };
 
+const keyId = "0195f0a0-1111-4222-8333-44444444ce01";
+
+const keySecret = "Aa1Bb2Cc3Dd4Ee5Ff6Gg7Hh8Ii9Jj0Kk-Ll_MmNnOoP";
+
+/** A valid scoped key for `storedKey`, which the sign-up endpoints accept. */
+const scopedKey = `emk.${keyId}.${keySecret}`;
+
+const confirmUrl = "https://www.example.com/newsletter/confirm";
+
+const apiKey: Schemas.ApiKey = {
+  id: keyId,
+  name: "Website",
+  lists: [listId],
+  confirmUrl,
+  createdAt,
+};
+
+// Computed independently: `printf '%s' "$keySecret" | sha256sum`.
+const storedKey = {
+  ...apiKey,
+  secretHash: "8ff2188e7463211f1a0af5b018552b52a593961c9d2787014067565a31862a83",
+};
+
 const record = {
   email,
   status: "mailable" as const,
+  optOuts: [],
   transientBounces: [],
+  consents: [],
+  pending: [],
   accountSuppression: null,
 };
 
 const notExercised = (operation: string) => () =>
   Effect.die(new Error(`${operation} is not exercised by this test`));
+
+/** Only sign-ups read the recent allowance; every other sender must read the current one. */
+const recentNotRead = Effect.die(new Error("SendGuard.recent is not exercised by this test"));
 
 /** Answers `value` and records the arguments of every call. */
 const recording =
@@ -104,6 +140,7 @@ interface Stubs {
   readonly schedule?: CampaignSchedule["Service"];
   readonly mailer?: Mailer["Service"];
   readonly guard?: SendGuard["Service"];
+  readonly keys?: Partial<ApiKeyOperations>;
 }
 
 /** Every service the API uses, as the deployed function composes them, from the stubs. */
@@ -111,6 +148,13 @@ const servicesFor = (stubs: Stubs) =>
   Layer.mergeAll(
     Layer.succeed(AudienceStore)({ ...unusedAudience, ...stubs.audience }),
     Layer.succeed(CampaignStore)({ ...unusedCampaigns, ...stubs.campaigns }),
+    Layer.succeed(ApiKeyStore)({
+      createKey: notExercised("ApiKeyStore.createKey"),
+      getKey: () => Effect.succeed(storedKey),
+      listKeys: notExercised("ApiKeyStore.listKeys"),
+      revokeKey: notExercised("ApiKeyStore.revokeKey"),
+      ...stubs.keys,
+    }),
     Layer.succeed(AccountSuppression)({
       getSuppressedDestination: notExercised("AccountSuppression.getSuppressedDestination"),
       deleteSuppressedDestination: notExercised("AccountSuppression.deleteSuppressedDestination"),
@@ -124,6 +168,7 @@ const servicesFor = (stubs: Stubs) =>
     Layer.succeed(SendGuard)(
       stubs.guard ?? {
         current: Effect.die(new Error("SendGuard.current is not exercised by this test")),
+        recent: recentNotRead,
         slot: notExercised("SendGuard.slot"),
       },
     ),
@@ -165,9 +210,9 @@ const api = Effect.fnUntraced(function* (stubs: Stubs = {}) {
   const fetch = HttpEffect.toWebHandler(handle);
 
   /** Runs the generated client against the application. */
-  const call = <A, E>(use: (client: EmailerClient) => Effect.Effect<A, E>) =>
+  const call = <A, E>(use: (client: EmailerClient) => Effect.Effect<A, E>, credential = token) =>
     Effect.gen(function* () {
-      return yield* use(yield* makeEmailerClient(baseUrl, Redacted.make(token)));
+      return yield* use(yield* makeEmailerClient(baseUrl, Redacted.make(credential)));
     }).pipe(
       Effect.provide(
         Layer.provide(
@@ -459,6 +504,7 @@ describe("campaigns", () => {
         campaigns: { getCampaign: () => Effect.succeed(campaign) },
         guard: {
           current: Effect.succeed({ limit: 14 }),
+          recent: recentNotRead,
           slot: () => Effect.succeed(Duration.zero),
         },
         mailer: {
@@ -615,6 +661,240 @@ describe("addresses", () => {
   );
 });
 
+describe("keys", () => {
+  it.effect("creates a key, shows it once, and stores only its secret's hash", () =>
+    Effect.gen(function* () {
+      const stored: Array<StoredApiKey> = [];
+
+      const { call } = yield* api({
+        keys: {
+          createKey: (key) =>
+            Effect.sync(() => {
+              stored.push(key);
+            }),
+        },
+      });
+
+      const created = yield* call((client) =>
+        client.keys.create({ payload: { name: " Website ", lists: [listId], confirmUrl } }),
+      );
+
+      const [prefix, id, secret = ""] = created.key.split(".");
+      const { key: _key, ...listed } = created;
+
+      expect(listed).toMatchObject({ name: "Website", lists: [listId], confirmUrl });
+      expect([prefix, id]).toStrictEqual(["emk", created.id]);
+      expect(secret).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(stored).toStrictEqual([
+        { ...listed, secretHash: createHash("sha256").update(secret).digest("hex") },
+      ]);
+    }),
+  );
+
+  it.effect(
+    "answers 201 for a created key, and 400 for a confirm page that is not https or a list named twice",
+    () =>
+      Effect.gen(function* () {
+        const { respond } = yield* api({ keys: { createKey: () => Effect.void } });
+
+        const payload = (url: string) =>
+          JSON.stringify({ name: "Website", lists: [listId], confirmUrl: url });
+
+        expect((yield* respond(send("POST", "/keys", payload(confirmUrl)))).status).toBe(201);
+        expect(
+          (yield* respond(send("POST", "/keys", payload("http://www.example.com/confirm")))).status,
+        ).toBe(400);
+        expect((yield* respond(send("POST", "/keys", payload("/confirm")))).status).toBe(400);
+
+        const twice = `{"name":"Website","lists":["${listId}","${listId}"],"confirmUrl":"${confirmUrl}"}`;
+
+        expect((yield* respond(send("POST", "/keys", twice))).status).toBe(400);
+      }),
+  );
+
+  it.effect("lists the keys and revokes one, answering 404 for a key that is not there", () =>
+    Effect.gen(function* () {
+      const calls: Array<ReadonlyArray<unknown>> = [];
+
+      const { call, respond } = yield* api({
+        keys: {
+          listKeys: recording(calls, [apiKey]),
+          revokeKey: (id) =>
+            id === keyId
+              ? recording(calls, undefined)(id)
+              : Effect.fail(new Errors.ApiKeyNotFound()),
+        },
+      });
+
+      const revoke = (id: string) =>
+        respond(new Request(`${baseUrl}/keys/${id}`, { method: "DELETE", headers: authorized() }));
+
+      expect(yield* call((client) => client.keys.list())).toStrictEqual([apiKey]);
+      expect((yield* revoke(keyId)).status).toBe(204);
+      expect((yield* revoke(contactId)).status).toBe(404);
+      expect(calls).toStrictEqual([[], [keyId]]);
+    }),
+  );
+});
+
+describe("subscriptions", () => {
+  const scoped = { authorization: `Bearer ${scopedKey}` };
+
+  const subscribing = (fields: { readonly listId?: string; readonly consent?: undefined } = {}) =>
+    send(
+      "POST",
+      "/subscriptions",
+      JSON.stringify({
+        listId,
+        email,
+        consent: { source: "Website footer", wording: "Send me the newsletter." },
+        ip: "203.0.113.7",
+        ...fields,
+      }),
+      scoped,
+    );
+
+  const signUp = (
+    state: SubscriptionState,
+    requestSubscription: AudienceOperations["requestSubscription"] = () => Effect.void,
+  ): Stubs => ({
+    audience: {
+      getList: () => Effect.succeed(list),
+      subscriptionState: () => Effect.succeed(state),
+      requestSubscription,
+    },
+    guard: {
+      current: Effect.die(new Error("A sign-up reads the recent allowance, not the current one")),
+      recent: Effect.succeed({ limit: 14 }),
+      slot: () => Effect.succeed(Duration.zero),
+    },
+    mailer: { send: () => Effect.succeed("message-1") },
+  });
+
+  it.effect(
+    "answers a sign-up with 202 when the mail went out and 200 when already subscribed",
+    () =>
+      Effect.gen(function* () {
+        const sent = yield* api(signUp(SubscriptionState.NotSubscribed()));
+        const already = yield* api(signUp(SubscriptionState.Subscribed()));
+
+        const accepted = yield* sent.respond(subscribing());
+        const repeated = yield* already.respond(subscribing());
+
+        expect([accepted.status, accepted.body]).toStrictEqual([
+          202,
+          `{"_tag":"ConfirmationSent"}`,
+        ]);
+        expect([repeated.status, repeated.body]).toStrictEqual([
+          200,
+          `{"_tag":"AlreadySubscribed"}`,
+        ]);
+      }),
+  );
+
+  it.effect.each([
+    [
+      "a list outside the key",
+      signUp(SubscriptionState.NotSubscribed()),
+      { listId: campaignId },
+      403,
+      "Forbidden",
+    ],
+    [
+      "an undeliverable address",
+      signUp(SubscriptionState.Undeliverable({ reason: "suppressed" })),
+      {},
+      422,
+      "AddressUndeliverable",
+    ],
+    [
+      "a sign-up within the hour",
+      signUp(SubscriptionState.NotSubscribed(), () =>
+        Effect.fail(new Errors.ConfirmationRecentlySent({ retryAfter: createdAt })),
+      ),
+      {},
+      429,
+      "ConfirmationRecentlySent",
+    ],
+    [
+      "a sign-up without consent",
+      signUp(SubscriptionState.NotSubscribed()),
+      { consent: undefined },
+      400,
+      undefined,
+    ],
+  ] as const)("answers %s with its status and tag", ([_label, stubs, fields, status, tag]) =>
+    Effect.gen(function* () {
+      const { respond } = yield* api(stubs);
+      const response = yield* respond(subscribing(fields));
+
+      expect(response.status).toBe(status);
+
+      if (tag !== undefined) {
+        expect(response.body).toContain(`"_tag":"${tag}"`);
+      }
+    }),
+  );
+
+  it.effect("confirms a link with 200, and answers 404 to one that does not work", () =>
+    Effect.gen(function* () {
+      const token = `${email}.${listId}.${keySecret}`;
+
+      const { respond } = yield* api({
+        audience: {
+          confirmSubscription: (confirmation) =>
+            confirmation.secretHash === storedKey.secretHash
+              ? Effect.succeed(confirmation.listId)
+              : Effect.fail(new Errors.ConfirmationNotFound()),
+        },
+      });
+
+      const confirming = (presented: string) =>
+        respond(
+          send(
+            "POST",
+            "/subscriptions/confirm",
+            JSON.stringify({ token: presented, ip: "203.0.113.8" }),
+            scoped,
+          ),
+        );
+
+      const confirmed = yield* confirming(token);
+      const refused = yield* confirming(`${email}.${listId}.${"x".repeat(43)}`);
+
+      expect([confirmed.status, confirmed.body]).toStrictEqual([
+        200,
+        `{"_tag":"Subscribed","listId":"${listId}"}`,
+      ]);
+      expect([refused.status, refused.body]).toStrictEqual([
+        404,
+        `{"_tag":"ConfirmationNotFound"}`,
+      ]);
+    }),
+  );
+
+  it.effect("decodes both answers through the typed client, holding the scoped key", () =>
+    Effect.gen(function* () {
+      const { call } = yield* api(signUp(SubscriptionState.NotSubscribed()));
+
+      const answer = yield* call(
+        (client) =>
+          client.subscriptions.subscribe({
+            payload: {
+              listId,
+              email,
+              consent: { source: "Website footer", wording: "Send me the newsletter." },
+              ip: "203.0.113.7",
+            },
+          }),
+        scopedKey,
+      );
+
+      expect(answer).toStrictEqual(Schemas.ConfirmationSent.make({}));
+    }),
+  );
+});
+
 describe("public errors", () => {
   const conflict = { state: "sending", runToken, startedAt: createdAt } as const;
 
@@ -694,6 +974,7 @@ describe("public errors", () => {
         campaigns: { getCampaign: () => Effect.succeed(campaign) },
         guard: {
           current: Effect.succeed({ limit: 14, refusal: "reputation" as const }),
+          recent: recentNotRead,
           slot: notExercised("SendGuard.slot"),
         },
       },
@@ -787,6 +1068,7 @@ describe("failure reporting", () => {
           current: Effect.fail(
             new Errors.AlarmsUnavailable({ operation: "describeAlarms", ...unavailable }),
           ),
+          recent: recentNotRead,
           slot: notExercised("SendGuard.slot"),
         },
       },
@@ -876,6 +1158,64 @@ describe("authorization", () => {
 
       expect((yield* respond(send("POST", "/contacts", "{not json", {}))).status).toBe(401);
       expect(lines).toStrictEqual([]);
+    }),
+  );
+
+  // `middleware` covers only the groups added before it, so this is what pins the contract's order.
+  it.effect("refuses a valid scoped key on every administrative endpoint", () =>
+    Effect.gen(function* () {
+      const { respond } = yield* api();
+      const endpoints: Array<{ readonly method: string; readonly path: string }> = [];
+
+      HttpApi.reflect(EmailerApi, {
+        onGroup: () => undefined,
+        onEndpoint: ({ group, endpoint }) => {
+          if (group.identifier !== "subscriptions") {
+            endpoints.push({ method: endpoint.method, path: endpoint.path });
+          }
+        },
+      });
+
+      const answered = yield* Effect.forEach(endpoints, ({ method, path }) =>
+        Effect.map(
+          respond(
+            new Request(`${baseUrl}${path.replaceAll(/:\w+/g, listId)}`, {
+              method,
+              headers: { authorization: `Bearer ${scopedKey}` },
+            }),
+          ),
+          (response) => `${method} ${path} ${response.status}`,
+        ),
+      );
+
+      expect(endpoints.length).toBeGreaterThan(30);
+      expect(answered).toStrictEqual(endpoints.map(({ method, path }) => `${method} ${path} 401`));
+    }),
+  );
+
+  it.effect("refuses the admin token on every sign-up endpoint", () =>
+    Effect.gen(function* () {
+      const { respond } = yield* api();
+      const endpoints: Array<{ readonly method: string; readonly path: string }> = [];
+
+      HttpApi.reflect(EmailerApi, {
+        onGroup: () => undefined,
+        onEndpoint: ({ group, endpoint }) => {
+          if (group.identifier === "subscriptions") {
+            endpoints.push({ method: endpoint.method, path: endpoint.path });
+          }
+        },
+      });
+
+      const answered = yield* Effect.forEach(endpoints, ({ method, path }) =>
+        Effect.map(
+          respond(new Request(`${baseUrl}${path}`, { method, headers: authorized() })),
+          (response) => `${method} ${path} ${response.status}`,
+        ),
+      );
+
+      expect(endpoints.length).toBeGreaterThan(0);
+      expect(answered).toStrictEqual(endpoints.map(({ method, path }) => `${method} ${path} 401`));
     }),
   );
 

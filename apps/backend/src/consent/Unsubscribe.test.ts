@@ -20,6 +20,10 @@ const secret = "8f14e45fceea167a5a36dedd4bea2543a1b2c3d4e5f60718293a4b5c6d7e8f90
 
 const otherSecret = "1c383cd30b7c298ab50293adfecb7b18dd1c2b9dd3f4e5a6978899aabbccddee";
 
+const listId = "0195f0a0-1111-4222-8333-44444444109e";
+
+const otherListId = "0195f0a0-1111-4222-8333-44444444209e";
+
 const baseUrl = "https://unsubscribe-abc123.lambda-url.eu-central-1.on.aws";
 
 // 254 bytes: the longest address the shared schema admits, and so the longest token.
@@ -33,43 +37,66 @@ const signingKeyFor = (configured: string) =>
 
 const encode = (value: string) => Buffer.from(value, "utf8").toString("base64url");
 
+const target = (address: string, list: string = listId) => ({ mailbox: address, listId: list });
+
 /** A token signed the way the implementation should sign, built without calling it. */
-const signIndependently = (key: string, payload: string): string => {
-  const signed = `v1.${payload}`;
+const signIndependently = (key: string, payload: string, list: string = listId): string => {
+  const signed = `v1.${payload}.${list}`;
 
   return `${signed}.${createHmac("sha256", key).update(signed).digest("hex")}`;
 };
 
 describe("unsubscribe tokens", () => {
-  // Links already sit in inboxes, so the exact bytes a key and an address mint are a contract. The
+  // Links sit in inboxes, so the exact bytes a key, an address and a list mint are a contract. The
   // twenty-byte address does not end on a base64 group, which pins the encoding as unpadded.
   it.effect.each([
     [
       email,
       mailbox,
-      "v1.cmVjaXBpZW50QGV4YW1wbGUuY29t.051454aaab35bc94e7d5bfbe7438617a78c802ee64b584ff42af318ef228a44b",
+      "v1.cmVjaXBpZW50QGV4YW1wbGUuY29t.0195f0a0-1111-4222-8333-44444444109e.01368e9c6936052e78465c55e84153ee6ae286bd16168d996e92d99d4f3beb88",
     ],
     [
       "recipient@example.co",
       "recipient@example.co",
-      "v1.cmVjaXBpZW50QGV4YW1wbGUuY28.e053d45987c097a0813b4f677c491477e83b83d4ccc37c1638970c530f6edbb6",
+      "v1.cmVjaXBpZW50QGV4YW1wbGUuY28.0195f0a0-1111-4222-8333-44444444109e.ded20617d5ee611f9df5b6876fd11067c76adbc837b08a1da68658c25b059ac7",
     ],
-  ] as const)(
-    "mints and verifies the exact token already issued for %s",
-    ([address, expected, token]) =>
-      Effect.gen(function* () {
-        const signingKey = yield* signingKeyFor(secret);
+  ] as const)("mints and verifies the exact token issued for %s", ([address, expected, token]) =>
+    Effect.gen(function* () {
+      const signingKey = yield* signingKeyFor(secret);
 
-        expect(mintToken(signingKey, address)).toBe(token);
-        expect(verifyToken(signingKey, token)).toStrictEqual(Option.some(expected));
-      }),
+      expect(mintToken(signingKey, target(address))).toBe(token);
+      expect(verifyToken(signingKey, token)).toStrictEqual(Option.some(target(expected)));
+    }),
+  );
+
+  it.effect("rejects a token whose list was changed after signing", () =>
+    Effect.gen(function* () {
+      const signingKey = yield* signingKeyFor(secret);
+      const token = mintToken(signingKey, target(email));
+
+      expect(verifyToken(signingKey, token.replace(listId, otherListId))).toStrictEqual(
+        Option.none(),
+      );
+    }),
+  );
+
+  it.effect("rejects a correctly signed token whose list is not an identifier", () =>
+    Effect.gen(function* () {
+      const signingKey = yield* signingKeyFor(secret);
+
+      expect(
+        verifyToken(signingKey, signIndependently(secret, encode(mailbox), "not-a-list")),
+      ).toStrictEqual(Option.none());
+    }),
   );
 
   it.effect("canonicalizes the address before signing, so one mailbox has one token", () =>
     Effect.gen(function* () {
       const signingKey = yield* signingKeyFor(secret);
 
-      expect(mintToken(signingKey, " RECIPIENT@EXAMPLE.COM ")).toBe(mintToken(signingKey, email));
+      expect(mintToken(signingKey, target(" RECIPIENT@EXAMPLE.COM "))).toBe(
+        mintToken(signingKey, target(email)),
+      );
     }),
   );
 
@@ -78,8 +105,8 @@ describe("unsubscribe tokens", () => {
       const signingKey = yield* signingKeyFor(secret);
       const punctuated = "first.last+tag_v1!#$%&'*/=?^`{|}~-@sub.example.co.uk";
 
-      expect(verifyToken(signingKey, mintToken(signingKey, punctuated))).toStrictEqual(
-        Option.some(punctuated),
+      expect(verifyToken(signingKey, mintToken(signingKey, target(punctuated)))).toStrictEqual(
+        Option.some(target(punctuated)),
       );
     }),
   );
@@ -87,24 +114,24 @@ describe("unsubscribe tokens", () => {
   it.effect("stays within the derived bound at the longest permitted address", () =>
     Effect.gen(function* () {
       const signingKey = yield* signingKeyFor(secret);
-      const token = mintToken(signingKey, longestAddress);
+      const token = mintToken(signingKey, target(longestAddress));
 
       expect(longestAddress).toHaveLength(maxEmailLength);
-      expect(maxTokenLength).toBe(407);
+      expect(maxTokenLength).toBe(444);
       expect(token).toHaveLength(maxTokenLength);
-      expect(verifyToken(signingKey, token)).toStrictEqual(Option.some(longestAddress));
+      expect(verifyToken(signingKey, token)).toStrictEqual(Option.some(target(longestAddress)));
     }),
   );
 
-  // Forged and malformed tokens are SignedToken.test.ts's table. This row pins that the wrapper
+  // Forged and malformed tokens are Tokens.test.ts's table. This row pins that the wrapper
   // checks the signature, under the key it is given.
   it.effect("rejects a token signed under another secret", () =>
     Effect.gen(function* () {
       const signingKey = yield* signingKeyFor(secret);
       const alienKey = yield* signingKeyFor(otherSecret);
 
-      const minted = mintToken(signingKey, email);
-      const presented = mintToken(alienKey, email);
+      const minted = mintToken(signingKey, target(email));
+      const presented = mintToken(alienKey, target(email));
 
       expect(presented).not.toBe(minted);
       expect(verifyToken(signingKey, presented)).toStrictEqual(Option.none());
@@ -163,7 +190,7 @@ describe("unsubscribe tokens", () => {
 
       // The canonical spelling of the same mailbox is still accepted.
       expect(verifyToken(signingKey, signIndependently(secret, canonical))).toStrictEqual(
-        Option.some(unaligned),
+        Option.some(target(unaligned)),
       );
     }),
   );
@@ -184,21 +211,23 @@ describe("unsubscribeLink", () => {
     Effect.gen(function* () {
       const signingKey = yield* signingKeyFor(secret);
 
-      const link = yield* unsubscribeLink(email).pipe(
+      const link = yield* unsubscribeLink(target(email)).pipe(
         withEnvironment({
           EMAILER_UNSUBSCRIBE_URL: configured,
           EMAILER_UNSUBSCRIBE_SECRET: secret,
         }),
       );
 
-      expect(link).toBe(`${baseUrl}/unsubscribe/${mintToken(signingKey, email)}`);
+      expect(link).toBe(`${baseUrl}/unsubscribe/${mintToken(signingKey, target(email))}`);
     }),
   );
 
   it.effect("fails rather than building a partial link when the base URL is absent", () =>
     Effect.gen(function* () {
       const attempt = yield* Effect.result(
-        unsubscribeLink(email).pipe(withEnvironment({ EMAILER_UNSUBSCRIBE_SECRET: secret })),
+        unsubscribeLink(target(email)).pipe(
+          withEnvironment({ EMAILER_UNSUBSCRIBE_SECRET: secret }),
+        ),
       );
 
       expect(Result.isFailure(attempt)).toBe(true);
@@ -208,7 +237,7 @@ describe("unsubscribeLink", () => {
   it.effect("fails rather than building an unsigned link when the secret is absent", () =>
     Effect.gen(function* () {
       const attempt = yield* Effect.result(
-        unsubscribeLink(email).pipe(withEnvironment({ EMAILER_UNSUBSCRIBE_URL: baseUrl })),
+        unsubscribeLink(target(email)).pipe(withEnvironment({ EMAILER_UNSUBSCRIBE_URL: baseUrl })),
       );
 
       expect(Result.isFailure(attempt)).toBe(true);

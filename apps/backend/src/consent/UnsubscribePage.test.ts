@@ -8,13 +8,15 @@ import { UnsubscribeStore } from "../storage/Unsubscribe.ts";
 import { maxTokenLength, mintToken } from "./Unsubscribe.ts";
 import { makeUnsubscribeHandler } from "./UnsubscribePage.ts";
 
-import type { AddressUnsubscribe } from "../storage/Addresses.ts";
+import type { AddressOptOut } from "../storage/Addresses.ts";
 
 const baseUrl = "http://unsubscribe.test";
 
 const signingKey = "6f1c2d3e4a5b60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9";
 
 const email = "Sam@Example.com";
+
+const listId = "0195f0a0-1111-4222-8333-44444444109e";
 
 const longestAddress = `${"a".repeat(Schemas.maxEmailLength - "@example.com".length)}@example.com`;
 
@@ -24,34 +26,23 @@ const configuration = Layer.succeed(ConfigProvider.ConfigProvider)(
 
 interface Store {
   readonly operations: UnsubscribeStore["Service"];
-  readonly written: Array<AddressUnsubscribe>;
+  readonly written: Array<AddressOptOut>;
 }
 
 const storeWith = (writeFails = false): Store => {
-  const written: Array<AddressUnsubscribe> = [];
-  const keys = new Set<string>();
+  const written: Array<AddressOptOut> = [];
 
   // The whole capability, stated in full, because the whole capability is one
   // update. There is no contact read to stub out and none to reach:
   // the service the handler is given does not have one.
   const operations: UnsubscribeStore["Service"] = {
-    unsubscribeAddress: (unsubscribe) =>
+    optOut: (entry) =>
       writeFails
         ? Effect.fail(
-            new StorageUnavailable({
-              operation: "unsubscribeAddress",
-              failure: "InternalServerError",
-            }),
+            new StorageUnavailable({ operation: "optOut", failure: "InternalServerError" }),
           )
         : Effect.sync(() => {
-            const key = Schemas.mailboxKey(unsubscribe.email);
-
-            // The store keeps the first opt-out an address item holds, so the
-            // double keeps only the first record for an address.
-            if (!keys.has(key)) {
-              keys.add(key);
-              written.push(unsubscribe);
-            }
+            written.push(entry);
           }),
   };
 
@@ -76,7 +67,10 @@ type Handler = Effect.Success<ReturnType<typeof handlerFor>>;
 
 const ask = (handler: Handler, request: Request) => Effect.promise(() => handler(request));
 
-const tokenFor = (address: string) => mintToken(Redacted.make(signingKey), address);
+const tokenFor = (address: string) =>
+  mintToken(Redacted.make(signingKey), { mailbox: address, listId });
+
+const forgedToken = mintToken(Redacted.make("a different key"), { mailbox: email, listId });
 
 const validToken = tokenFor(email);
 
@@ -120,9 +114,7 @@ describe("GET /unsubscribe/:token", () => {
   it.effect("refuses a forged signature rather than offering a button that cannot work", () =>
     Effect.gen(function* () {
       const store = storeWith();
-      const forged = mintToken(Redacted.make("a different key"), email);
-
-      const response = yield* responding(store, "GET", forged);
+      const response = yield* responding(store, "GET", forgedToken);
 
       expect(response.status).toBe(404);
       expect(store.written).toHaveLength(0);
@@ -131,15 +123,14 @@ describe("GET /unsubscribe/:token", () => {
 });
 
 describe("POST /unsubscribe/:token", () => {
-  it.effect("writes the opt-out keyed by the mailbox the token named", () =>
+  it.effect("writes the opt-out from the list the token named, keyed by its mailbox", () =>
     Effect.gen(function* () {
       const store = storeWith();
 
       const response = yield* responding(store, "POST");
 
       expect(response.status).toBe(200);
-      expect(store.written).toHaveLength(1);
-      expect(store.written[0]?.email).toBe("sam@example.com");
+      expect(store.written).toStrictEqual([{ email: "sam@example.com", listId }]);
     }),
   );
 
@@ -182,9 +173,7 @@ describe("POST /unsubscribe/:token", () => {
   it.effect("refuses a forged signature with a 404 and writes nothing", () =>
     Effect.gen(function* () {
       const store = storeWith();
-      const forged = mintToken(Redacted.make("a different key"), email);
-
-      expect((yield* responding(store, "POST", forged)).status).toBe(404);
+      expect((yield* responding(store, "POST", forgedToken)).status).toBe(404);
       expect(store.written).toHaveLength(0);
     }),
   );
@@ -206,13 +195,12 @@ describe("application lifetime", () => {
     Effect.gen(function* () {
       const store = storeWith();
       const handler = yield* handlerFor(store);
-      const forged = mintToken(Redacted.make("a different key"), email);
 
       const post = (token: string) =>
         ask(handler, new Request(`${baseUrl}/unsubscribe/${token}`, { method: "POST" }));
 
       expect((yield* post(validToken)).status).toBe(200);
-      expect((yield* post(forged)).status).toBe(404);
+      expect((yield* post(forgedToken)).status).toBe(404);
       expect((yield* post(tokenFor("other@example.com"))).status).toBe(200);
 
       expect(store.written.map((entry) => entry.email)).toStrictEqual([

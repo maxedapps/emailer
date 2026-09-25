@@ -286,6 +286,12 @@ export const Campaign = Schema.Struct({ ...CampaignSummary.fields, ...CampaignBo
 
 export type Campaign = typeof Campaign.Type;
 
+/** Whether a mailbox takes mail at all, whichever list sends it. */
+export const MailboxStatus = Schema.Literals(["mailable", "suppressed", "bouncing"]);
+
+export type MailboxStatus = typeof MailboxStatus.Type;
+
+/** Whether a mailbox takes mail from one list: `unsubscribed` means it opted out of that list. */
 export const AddressStatus = Schema.Literals([
   "mailable",
   "unsubscribed",
@@ -303,14 +309,50 @@ export const SuppressionReason = Schema.Literals(["bounce", "complaint"]);
 
 export type SuppressionReason = typeof SuppressionReason.Type;
 
+const maxConsentWordingLength = 1000;
+
+/** IPv6 in its longest textual form, with an embedded IPv4 address, is 45 characters. */
+const maxIpLength = 45;
+
+/** What the subscriber agreed to, exactly as the site showed it. */
+export const ConsentWording = Schema.String.check(
+  Schema.isNonEmpty(),
+  Schema.isMaxLength(maxConsentWordingLength),
+);
+
+/** An address as the calling site saw it, kept as consent evidence rather than parsed. */
+export const IpAddress = Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(maxIpLength));
+
+/** The evidence of one confirmed opt-in: what was asked, where and from where, and when. */
+export const ConsentRecord = Schema.Struct({
+  listId: EntityId,
+  source: EntityName,
+  wording: ConsentWording,
+  ip: IpAddress,
+  requestedAt: Timestamp,
+  confirmedAt: Timestamp,
+  confirmIp: IpAddress,
+});
+
+export type ConsentRecord = typeof ConsentRecord.Type;
+
+/** A sign-up waiting for its confirmation link to be used. */
+export const PendingConfirmation = Schema.Struct({
+  listId: EntityId,
+  requestedAt: Timestamp,
+  expiresAt: Timestamp,
+});
+
+export type PendingConfirmation = typeof PendingConfirmation.Type;
+
 /**
- * Account-list presence is always reported: `null` means SES has no entry. Local unsubscribe and
- * suppression rows are optional keys because they may not exist.
+ * Account-list presence is always reported: `null` means SES has no entry. `optOuts` names the
+ * lists the address left; the local suppression is an optional key because it may not exist.
  */
 export const AddressRecord = Schema.Struct({
   email: ListedEmailAddress,
-  status: AddressStatus,
-  unsubscribedAt: Schema.optionalKey(Timestamp),
+  status: MailboxStatus,
+  optOuts: Schema.Array(EntityId),
   suppression: Schema.optionalKey(
     Schema.Struct({
       reason: SuppressionReason,
@@ -321,6 +363,8 @@ export const AddressRecord = Schema.Struct({
     }),
   ),
   transientBounces: Schema.Array(Schema.String),
+  consents: Schema.Array(ConsentRecord),
+  pending: Schema.Array(PendingConfirmation),
   accountSuppression: Schema.NullOr(
     Schema.Struct({
       reason: SuppressionReason,
@@ -506,6 +550,92 @@ export type TestSendOutcome = typeof TestSendOutcome.Type;
 export const TestSendResult = Schema.Struct({ recipients: Schema.Array(TestSendOutcome) });
 
 export type TestSendResult = typeof TestSendResult.Type;
+
+const maxConfirmUrlLength = 2000;
+
+/**
+ * The page on the integrating site that confirms a sign-up. Absolute and `https:`, since the link
+ * carries the confirmation's secret.
+ */
+export const ConfirmUrl = Schema.String.check(
+  Schema.isMaxLength(maxConfirmUrlLength),
+  Schema.makeFilter((value: string) =>
+    URL.parse(value)?.protocol === "https:" ? undefined : "Expected an absolute https: URL",
+  ),
+);
+
+/** A scoped API key as listed: what it may do, never its secret. */
+export const ApiKey = Schema.Struct({
+  id: EntityId,
+  name: EntityName,
+  lists: Schema.NonEmptyArray(EntityId),
+  confirmUrl: ConfirmUrl,
+  createdAt: Timestamp,
+});
+
+export type ApiKey = typeof ApiKey.Type;
+
+export const CreateApiKeyPayload = Schema.Struct({
+  name: EntityName,
+  // Stored as a string set, which DynamoDB refuses outright when it holds a value twice.
+  lists: Schema.NonEmptyArray(EntityId).check(
+    Schema.makeFilter((lists: ReadonlyArray<string>) =>
+      new Set(lists).size === lists.length ? undefined : "Expected each list at most once",
+    ),
+  ),
+  confirmUrl: ConfirmUrl,
+});
+
+export type CreateApiKeyPayload = typeof CreateApiKeyPayload.Type;
+
+/** A key as created: the only time its credential is shown. */
+export const CreatedApiKey = Schema.Struct({ ...ApiKey.fields, key: Schema.String });
+
+export type CreatedApiKey = typeof CreatedApiKey.Type;
+
+/** What the subscriber agreed to, and where: the form, page or campaign the site names. */
+const Consent = Schema.Struct({ source: EntityName, wording: ConsentWording });
+
+/**
+ * A sign-up from an integrating site. `ip` is the subscriber's address as the site saw it, kept as
+ * consent evidence.
+ */
+export const SubscribePayload = Schema.Struct({
+  listId: EntityId,
+  email: EmailAddress,
+  name: Schema.optional(EntityName),
+  attributes: Schema.optional(ContactAttributes),
+  consent: Consent,
+  ip: IpAddress,
+});
+
+export type SubscribePayload = typeof SubscribePayload.Type;
+
+/** A confirmation mail went out; the subscriber joins once they use its link. */
+export const ConfirmationSent = Schema.TaggedStruct("ConfirmationSent", {});
+
+/** The address is already on the list, so no mail went out. */
+export const AlreadySubscribed = Schema.TaggedStruct("AlreadySubscribed", {});
+
+/** `<mailbox>.<listId>.<secret>`, where the secret is 43 base64url characters. */
+const maxConfirmationTokenLength = maxEmailLength + 1 + 36 + 1 + 43;
+
+/**
+ * The token from a confirmation link, exactly as the site received it. The service parses it, so a
+ * token that is not one answers `ConfirmationNotFound` like any other link that does not work.
+ */
+const ConfirmationToken = Schema.String.check(
+  Schema.isNonEmpty(),
+  Schema.isMaxLength(maxConfirmationTokenLength),
+);
+
+/** A confirmation from the site's page. `ip` is the subscriber's address as the site saw it. */
+export const ConfirmPayload = Schema.Struct({ token: ConfirmationToken, ip: IpAddress });
+
+export type ConfirmPayload = typeof ConfirmPayload.Type;
+
+/** The subscriber is on the list. */
+export const Subscribed = Schema.TaggedStruct("Subscribed", { listId: EntityId });
 
 /** A short-lived public link to a campaign's rendered preview. */
 export const PreviewLink = Schema.Struct({ url: Schema.String, expiresAt: Timestamp });

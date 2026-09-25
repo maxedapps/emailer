@@ -7,6 +7,7 @@ import { TestClock } from "effect/testing";
 import { sendTest } from "./TestSends.ts";
 import { unsubscribeLink } from "../consent/Unsubscribe.ts";
 import {
+  Mail,
   Mailer,
   SendingSuspended,
   SendRejected,
@@ -18,14 +19,15 @@ import { AudienceStore } from "../storage/Audience.ts";
 import { CampaignStore } from "../storage/Campaigns.ts";
 import { unusedAudience, unusedCampaigns } from "../storage/Testing.ts";
 
-import type { SendError, SendPurpose } from "../sending/Mailer.ts";
-import type { MessageContent } from "../sending/Message.ts";
+import type { SendError } from "../sending/Mailer.ts";
 import type { SendAllowance } from "../sending/SendGuard.ts";
-import type { AddressStatus } from "@emailer/api/Schemas";
+import type { MailboxStatus } from "@emailer/api/Schemas";
 
 const campaignId = "0195f0a0-1111-4222-8333-4444444ca409";
 
 const listId = "0195f0a0-1111-4222-8333-44444444109e";
+
+const otherListId = "0195f0a0-1111-4222-8333-44444444209e";
 
 const campaign: Schemas.Campaign = {
   id: campaignId,
@@ -54,7 +56,8 @@ const member = (n: number): Schemas.Contact => ({
 
 interface Scenario {
   readonly allowance?: SendAllowance;
-  readonly statuses?: ReadonlyArray<readonly [string, AddressStatus]>;
+  readonly statuses?: ReadonlyArray<readonly [string, MailboxStatus]>;
+  readonly optOuts?: ReadonlyArray<readonly [email: string, listId: string]>;
   /** How SES answers each send in turn: an error, or acceptance once they run out. */
   readonly failures?: ReadonlyArray<SendError>;
   readonly members?: ReadonlyArray<Schemas.Contact>;
@@ -66,9 +69,7 @@ interface Scenario {
 
 interface Sent {
   readonly recipient: string;
-  readonly content: MessageContent;
-  readonly unsubscribeUrl: string;
-  readonly purpose: SendPurpose;
+  readonly mail: Mail;
 }
 
 const fixture = (scenario: Scenario = {}) => {
@@ -78,6 +79,7 @@ const fixture = (scenario: Scenario = {}) => {
   const pageRequests: Array<number> = [];
   const failures = [...(scenario.failures ?? [])];
   const statuses = new Map(scenario.statuses ?? []);
+  const optOuts = new Set((scenario.optOuts ?? []).map(([email, list]) => `${email} ${list}`));
 
   const layer = Layer.mergeAll(
     configuration,
@@ -97,7 +99,12 @@ const fixture = (scenario: Scenario = {}) => {
             ? { items }
             : { items, nextCursor: scenario.nextCursor };
         }),
-      addressStatus: (email) => Effect.succeed(statuses.get(email) ?? ("mailable" as const)),
+      addressStatus: (email, list) =>
+        Effect.succeed(
+          optOuts.has(`${email} ${list}`)
+            ? ("unsubscribed" as const)
+            : (statuses.get(email) ?? ("mailable" as const)),
+        ),
     }),
     Layer.succeed(CampaignStore)({
       ...unusedCampaigns,
@@ -105,9 +112,9 @@ const fixture = (scenario: Scenario = {}) => {
         id === campaignId ? Effect.succeed(campaign) : Effect.fail(new Errors.CampaignNotFound()),
     }),
     Layer.succeed(Mailer)({
-      send: (recipient, content, unsubscribeUrl, purpose) =>
+      send: (recipient, mail) =>
         Effect.gen(function* () {
-          sent.push({ recipient, content, unsubscribeUrl, purpose });
+          sent.push({ recipient, mail });
           sentAt.push(yield* Clock.currentTimeMillis);
 
           const failure = failures.shift();
@@ -117,6 +124,7 @@ const fixture = (scenario: Scenario = {}) => {
     }),
     Layer.succeed(SendGuard)({
       current: Effect.succeed(scenario.allowance ?? healthy),
+      recent: Effect.die(new Error("Only sign-ups read the recent allowance")),
       slot: (limit) =>
         Effect.sync(() => {
           slots.push(limit);
@@ -158,15 +166,20 @@ describe("sendTest", () => {
         const recipients = ["b@example.com", "a@example.com"];
 
         const links = yield* Effect.forEach(recipients, (recipient) =>
-          unsubscribeLink(recipient).pipe(Effect.provide(configuration)),
+          unsubscribeLink({ mailbox: recipient, listId }).pipe(Effect.provide(configuration)),
         );
 
         expect(fix.sent).toStrictEqual(
           recipients.map((recipient, index) => ({
             recipient,
-            content: { subject: "[Test] Release notes", text: campaign.text, html: campaign.html },
-            unsubscribeUrl: links[index],
-            purpose: { kind: "test" },
+            mail: Mail.Test({
+              content: {
+                subject: "[Test] Release notes",
+                text: campaign.text,
+                html: campaign.html,
+              },
+              unsubscribeUrl: links[index] ?? "",
+            }),
           })),
         );
         expect(fix.slots).toStrictEqual([healthy.limit, healthy.limit]);
@@ -189,8 +202,8 @@ describe("sendTest", () => {
   it.effect("skips addresses that are not mailable, without taking a slot", () =>
     Effect.gen(function* () {
       const fix = fixture({
+        optOuts: [["gone@example.com", listId]],
         statuses: [
-          ["gone@example.com", "unsubscribed"],
           ["hard@example.com", "suppressed"],
           ["soft@example.com", "bouncing"],
         ],
@@ -248,6 +261,32 @@ describe("sendTest", () => {
         { email: "member1@example.com", outcome: "accepted", messageId: "message-1" },
         { email: "member2@example.com", outcome: "accepted", messageId: "message-2" },
       ]);
+    }),
+  );
+
+  // A test copy stands in for the campaign's mail, so the campaign's list decides, whichever list
+  // the copy goes to.
+  it.effect("skips members who left the campaign's list, not the list the test went to", () =>
+    Effect.gen(function* () {
+      const fix = fixture({
+        members: [member(1), member(2)],
+        optOuts: [
+          ["member1@example.com", listId],
+          ["member2@example.com", otherListId],
+        ],
+      });
+
+      const attempt = yield* run(fix, { listId: otherListId });
+
+      expect(Result.isSuccess(attempt) && attempt.success.recipients).toStrictEqual([
+        { email: "member1@example.com", outcome: "skipped", reason: "unsubscribed" },
+        { email: "member2@example.com", outcome: "accepted", messageId: "message-1" },
+      ]);
+      expect(fix.sent[0]?.mail).toMatchObject({
+        unsubscribeUrl: yield* unsubscribeLink({ mailbox: "member2@example.com", listId }).pipe(
+          Effect.provide(configuration),
+        ),
+      });
     }),
   );
 

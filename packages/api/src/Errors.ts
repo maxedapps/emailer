@@ -20,6 +20,27 @@ export class Unauthorized extends Schema.TaggedError<Unauthorized>()(
   }
 }
 
+export class ApiKeyNotFound extends Schema.TaggedError<ApiKeyNotFound>()(
+  "ApiKeyNotFound",
+  {},
+  { httpApiStatus: 404 },
+) {
+  override get [ErrorReporter.ignore]() {
+    return true;
+  }
+}
+
+/** A scoped key may not act on the list the request names. */
+export class Forbidden extends Schema.TaggedError<Forbidden>()(
+  "Forbidden",
+  {},
+  { httpApiStatus: 403 },
+) {
+  override get [ErrorReporter.ignore]() {
+    return true;
+  }
+}
+
 export class ContactNotFound extends Schema.TaggedError<ContactNotFound>()(
   "ContactNotFound",
   {},
@@ -103,6 +124,45 @@ export class CampaignStateConflict extends Schema.TaggedError<CampaignStateConfl
   "CampaignStateConflict",
   { state: CampaignState },
   { httpApiStatus: 409 },
+) {
+  override get [ErrorReporter.ignore]() {
+    return true;
+  }
+}
+
+/**
+ * The address refuses mail: the mail system reported it suppressed, or it is bouncing. It cannot
+ * sign up until the operator unsuppresses it.
+ */
+export class AddressUndeliverable extends Schema.TaggedError<AddressUndeliverable>()(
+  "AddressUndeliverable",
+  { reason: Schema.Literals(["suppressed", "bouncing"]) },
+  { httpApiStatus: 422 },
+) {
+  override get [ErrorReporter.ignore]() {
+    return true;
+  }
+}
+
+/**
+ * The confirmation link is not valid: it never was, it expired, or it was already used. The
+ * subscriber can sign up again for a new one.
+ */
+export class ConfirmationNotFound extends Schema.TaggedError<ConfirmationNotFound>()(
+  "ConfirmationNotFound",
+  {},
+  { httpApiStatus: 404 },
+) {
+  override get [ErrorReporter.ignore]() {
+    return true;
+  }
+}
+
+/** A confirmation mail went to this address for this list within the hour. */
+export class ConfirmationRecentlySent extends Schema.TaggedError<ConfirmationRecentlySent>()(
+  "ConfirmationRecentlySent",
+  { retryAfter: Timestamp },
+  { httpApiStatus: 429 },
 ) {
   override get [ErrorReporter.ignore]() {
     return true;

@@ -12,7 +12,10 @@ const email = "User@Example.com";
 const local = {
   email,
   status: "suppressed" as const,
+  optOuts: [],
   transientBounces: [],
+  consents: [],
+  pending: [],
   accountSuppression: null,
 };
 

@@ -16,6 +16,7 @@ import { awsProviders } from "../../../stacks/providers.ts";
 import { apiSuite } from "../src/api/Api.live.ts";
 import { cancellationSuite } from "../src/campaigns/CampaignCancellation.live.ts";
 import { draftingSuite } from "../src/campaigns/Drafting.live.ts";
+import { subscriptionsSuite } from "../src/consent/Subscriptions.live.ts";
 import { unsubscribeSuite } from "../src/consent/Unsubscribe.live.ts";
 import { feedbackSuite } from "../src/feedback/Feedback.live.ts";
 import { awsClient, Deployment } from "./IntegrationSupport.ts";
@@ -78,5 +79,7 @@ cancellationSuite(live);
 draftingSuite(live);
 
 unsubscribeSuite(live);
+
+subscriptionsSuite(live);
 
 feedbackSuite(live);

@@ -3,7 +3,7 @@ import { Random } from "alchemy";
 import * as AWS from "alchemy/AWS";
 import { Clock, Config, DateTime, Duration, Effect, Option, Redacted, Schema } from "effect";
 
-import * as SignedToken from "../SignedToken.ts";
+import * as Tokens from "../Tokens.ts";
 
 /** Its own secret, so replacing it revokes every preview link without touching unsubscribe links. */
 export const previewSecret = Random("PreviewSecret");
@@ -22,7 +22,7 @@ const uuidLength = 36;
 const epochSecondsLength = 10;
 
 /** 115 characters: longer than the router's default parameter cap, which the page raises to this. */
-export const maxPreviewTokenLength = SignedToken.lengthFor([uuidLength, epochSecondsLength]);
+export const maxPreviewTokenLength = Tokens.lengthFor([uuidLength, epochSecondsLength]);
 
 const isEntityId = Schema.is(Schemas.EntityId);
 
@@ -32,7 +32,7 @@ export const mintPreviewToken = (
   signingKey: Redacted.Redacted<string>,
   campaignId: string,
   expiresAtSeconds: number,
-): string => SignedToken.sign(signingKey, [campaignId, String(expiresAtSeconds)]);
+): string => Tokens.sign(signingKey, [campaignId, String(expiresAtSeconds)]);
 
 /** The campaign a token names, if this system issued it and it has not expired by `nowSeconds`. */
 export const verifyPreviewToken = (
@@ -41,7 +41,7 @@ export const verifyPreviewToken = (
   nowSeconds: number,
 ): Option.Option<string> =>
   Option.flatMap(
-    SignedToken.verify(signingKey, token, { fields: 2, maxLength: maxPreviewTokenLength }),
+    Tokens.verify(signingKey, token, { fields: 2, maxLength: maxPreviewTokenLength }),
     ([campaignId = "", expires = ""]) =>
       isEntityId(campaignId) && epochSecondsPattern.test(expires) && Number(expires) > nowSeconds
         ? Option.some(campaignId)

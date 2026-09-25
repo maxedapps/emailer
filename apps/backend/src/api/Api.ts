@@ -13,15 +13,17 @@ import { CampaignSchedule } from "../campaigns/CampaignSchedule.ts";
 import * as Campaigns from "../campaigns/Campaigns.ts";
 import { PreviewFunction, previewLink, previewSecret } from "../campaigns/Previews.ts";
 import { sendTest } from "../campaigns/TestSends.ts";
+import * as Subscriptions from "../consent/Subscriptions.ts";
 import { UnsubscribeFunction, unsubscribeSecret } from "../consent/Unsubscribe.ts";
 import { functionServicesLayer, lambdaBasics } from "../Lambda.ts";
 import { respondingToFailures } from "../Reporting.ts";
 import { CampaignWake } from "../sending/Dispatch.ts";
 import { Mailer } from "../sending/Mailer.ts";
 import { SendGuard } from "../sending/SendGuard.ts";
+import { ApiKeyStore } from "../storage/ApiKeys.ts";
 import { AudienceStore } from "../storage/Audience.ts";
 import { CampaignStore } from "../storage/Campaigns.ts";
-import { apiToken, authorizationUsing } from "./Auth.ts";
+import { adminAuthorization, apiToken, createKey, subscriptionAuthorization } from "./Auth.ts";
 
 /**
  * Cold starts and pagination keep this a bound to validate against, not a completion guarantee
@@ -98,6 +100,25 @@ const addressesHandlers = HttpApiBuilder.group(EmailerApi, "addresses", (handler
   }),
 );
 
+const keysHandlers = HttpApiBuilder.group(EmailerApi, "keys", (handlers) =>
+  Effect.gen(function* () {
+    const keys = yield* ApiKeyStore;
+
+    return handlers.handleAll({
+      create: (request) => createKey(request.payload),
+      list: () => keys.listKeys(),
+      revoke: (request) => keys.revokeKey(request.params.id),
+    });
+  }),
+);
+
+const subscriptionsHandlers = HttpApiBuilder.group(EmailerApi, "subscriptions", (handlers) =>
+  handlers.handleAll({
+    subscribe: (request) => Subscriptions.subscribe(request.payload),
+    confirm: (request) => Subscriptions.confirm(request.payload),
+  }),
+);
+
 const apiProps = Effect.gen(function* () {
   const basics = yield* lambdaBasics("Api", "api");
 
@@ -137,9 +158,16 @@ export const makeApiHandler = (token: Redacted.Redacted<string>) =>
     HttpRouter.toHttpEffect(
       HttpApiBuilder.layer(EmailerApi).pipe(
         Layer.provide(
-          Layer.mergeAll(contactsHandlers, listsHandlers, campaignsHandlers, addressesHandlers),
+          Layer.mergeAll(
+            contactsHandlers,
+            listsHandlers,
+            campaignsHandlers,
+            addressesHandlers,
+            keysHandlers,
+            subscriptionsHandlers,
+          ),
         ),
-        Layer.provide(authorizationUsing(token)),
+        Layer.provide(Layer.mergeAll(adminAuthorization(token), subscriptionAuthorization)),
         Layer.provide(HttpServer.layerServices),
       ),
     ),
@@ -157,6 +185,7 @@ export const makeApiHandler = (token: Redacted.Redacted<string>) =>
 /** Every service the handlers use, bound once per instance. */
 const apiLayer = Layer.mergeAll(
   AudienceStore.layer,
+  ApiKeyStore.layer,
   CampaignStore.layer,
   Addresses.AccountSuppression.layer,
   CampaignWake.layer,

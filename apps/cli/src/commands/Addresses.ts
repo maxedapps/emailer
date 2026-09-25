@@ -17,7 +17,11 @@ const addressesStatus = Command.make(
       yield* withClient((client) => client.addresses.status({ query: { email: input.email } })),
     );
   }),
-).pipe(Command.withDescription("Show an address's local and account suppression state"));
+).pipe(
+  Command.withDescription(
+    "Show the lists an address left, its consents and pending sign-ups, and its suppression",
+  ),
+);
 
 const addressesUnsuppress = Command.make(
   "unsuppress",

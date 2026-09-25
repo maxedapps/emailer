@@ -1,5 +1,5 @@
 import { NodeHttpServer, NodeServices } from "@effect/platform-node";
-import { Authorization, EmailerApi } from "@emailer/api/Api";
+import { AdminAuthorization, EmailerApi, SubscriptionAuthorization } from "@emailer/api/Api";
 import * as Errors from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
 import {
@@ -37,7 +37,11 @@ export const listId = "0195f0a0-1111-4222-8333-44444444109e";
 
 export const campaignId = "0195f0a0-1111-4222-8333-4444444ca409";
 
+export const keyId = "0195f0a0-1111-4222-8333-44444444ce01";
+
 export const createdAt = "2026-09-11T10:00:00.000Z";
+
+export const confirmUrl = "https://www.example.com/newsletter/confirm";
 
 export const textBody = "Hello there";
 
@@ -110,8 +114,8 @@ export const fakeService = (seed: Seed = {}) => {
   const unused = (endpoint: string) => () =>
     Effect.die(new Error(`${endpoint} is not exercised by these tests`));
 
-  const authorization = Layer.succeed(Authorization)(
-    Authorization.of({
+  const authorization = Layer.succeed(AdminAuthorization)(
+    AdminAuthorization.of({
       bearer: (httpEffect, options) => {
         const credential = Redacted.value(options.credential);
 
@@ -119,6 +123,18 @@ export const fakeService = (seed: Seed = {}) => {
 
         return credential === token ? httpEffect : Effect.fail(new Errors.Unauthorized());
       },
+    }),
+  );
+
+  // The CLI holds the admin token, so it never reaches the sign-up endpoints.
+  const scopedKeys = Layer.succeed(SubscriptionAuthorization)(
+    SubscriptionAuthorization.of({ bearer: () => Effect.fail(new Errors.Unauthorized()) }),
+  );
+
+  const subscriptionsGroup = HttpApiBuilder.group(EmailerApi, "subscriptions", (handlers) =>
+    handlers.handleAll({
+      subscribe: unused("subscriptions.subscribe"),
+      confirm: unused("subscriptions.confirm"),
     }),
   );
 
@@ -273,8 +289,11 @@ export const fakeService = (seed: Seed = {}) => {
           Effect.as({
             email: request.query.email,
             status: "suppressed" as const,
+            optOuts: [listId],
             suppression: { reason: "bounce" as const, suppressedAt: createdAt },
             transientBounces: [],
+            consents: [],
+            pending: [],
             accountSuppression: { reason: "bounce" as const, lastUpdateTime: createdAt },
           }),
         ),
@@ -283,16 +302,42 @@ export const fakeService = (seed: Seed = {}) => {
           Effect.as({
             email: request.payload.email,
             status: "mailable" as const,
+            optOuts: [],
             transientBounces: [],
+            consents: [],
+            pending: [],
             accountSuppression: null,
           }),
         ),
     }),
   );
 
+  const keysGroup = HttpApiBuilder.group(EmailerApi, "keys", (handlers) =>
+    handlers.handleAll({
+      create: (request) =>
+        receive("keys.create", { payload: request.payload }).pipe(
+          Effect.as({ id: keyId, ...request.payload, createdAt, key: `emk.${keyId}.${token}` }),
+        ),
+      list: () =>
+        receive("keys.list").pipe(
+          Effect.as([{ id: keyId, name: "Website", lists: [listId], confirmUrl, createdAt }]),
+        ),
+      revoke: (request) => receive("keys.revoke", { params: request.params }),
+    }),
+  );
+
   const routes = HttpApiBuilder.layer(EmailerApi).pipe(
-    Layer.provide(Layer.mergeAll(contactsGroup, listsGroup, campaignsGroup, addressesGroup)),
-    Layer.provide(authorization),
+    Layer.provide(
+      Layer.mergeAll(
+        contactsGroup,
+        listsGroup,
+        campaignsGroup,
+        addressesGroup,
+        keysGroup,
+        subscriptionsGroup,
+      ),
+    ),
+    Layer.provide(Layer.mergeAll(authorization, scopedKeys)),
     Layer.provide(HttpServer.layerServices),
   );
 

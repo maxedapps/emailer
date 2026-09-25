@@ -6,7 +6,7 @@ import { Context, Data, Duration, Effect, Layer } from "effect";
 
 import { describeCause } from "../Errors.ts";
 import { sendingIdentity } from "../identity/SendingIdentity.ts";
-import { compose, fromHeader, senderSettings } from "./Message.ts";
+import { compose, composeConfirmation, fromHeader, senderSettings } from "./Message.ts";
 
 import type { MessageContent } from "./Message.ts";
 import type { SubmissionOutcome } from "../storage/Campaigns.ts";
@@ -23,12 +23,22 @@ export const configurationSet = AWS.SES.ConfigurationSet(configurationSetLogical
 export const submissionTimeout = Duration.seconds(8);
 
 /**
- * Why a message goes out. A campaign send is tagged so its feedback lands on the campaign's
- * counters; a test send carries no tags, so its bounces and complaints never reach them.
+ * What goes out, and why. A campaign mail is tagged so its feedback lands on the campaign's
+ * counters; a test copy and a sign-up's confirmation carry no tags, so their bounces and complaints
+ * never reach them.
  */
-export type SendPurpose =
-  | { readonly kind: "campaign"; readonly campaignId: string; readonly sendId: string }
-  | { readonly kind: "test" };
+export type Mail = Data.TaggedEnum<{
+  Campaign: {
+    readonly content: MessageContent;
+    readonly unsubscribeUrl: string;
+    readonly campaignId: string;
+    readonly sendId: string;
+  };
+  Test: { readonly content: MessageContent; readonly unsubscribeUrl: string };
+  Confirmation: { readonly listName: string; readonly confirmUrl: string };
+}>;
+
+export const Mail = Data.taggedEnum<Mail>();
 
 /** SES refused the message for good; the code is what a send row or a test report records. */
 export class SendRejected extends Data.TaggedError("SendRejected")<{
@@ -98,10 +108,31 @@ export const feedbackPublishing = Effect.gen(function* () {
   });
 });
 
-const tagsFor = (purpose: SendPurpose & { readonly kind: "campaign" }) => [
-  { Name: "campaignId", Value: purpose.campaignId },
-  { Name: "sendId", Value: purpose.sendId },
-];
+/**
+ * A mail as SES is sent it: the composed message, its tags, and what a log line may say about it.
+ * The log names neither the recipient nor a link: each is its action's whole authorization.
+ */
+const prepare = (mail: Mail, postal: string) =>
+  Mail.$match(mail, {
+    Campaign: ({ content, unsubscribeUrl, campaignId, sendId }) => ({
+      message: compose(content, unsubscribeUrl, postal),
+      tags: [
+        { Name: "campaignId", Value: campaignId },
+        { Name: "sendId", Value: sendId },
+      ],
+      logged: { mail: "Campaign", campaignId, sendId },
+    }),
+    Test: ({ content, unsubscribeUrl }) => ({
+      message: compose(content, unsubscribeUrl, postal),
+      tags: [],
+      logged: { mail: "Test" },
+    }),
+    Confirmation: ({ listName, confirmUrl }) => ({
+      message: composeConfirmation(listName, confirmUrl, postal),
+      tags: [],
+      logged: { mail: "Confirmation" },
+    }),
+  });
 
 export const makeSend =
   (
@@ -111,14 +142,9 @@ export const makeSend =
     from: string,
     postal: string,
   ) =>
-  (
-    recipient: string,
-    content: MessageContent,
-    unsubscribeUrl: string,
-    purpose: SendPurpose,
-  ): Effect.Effect<string, SendError> =>
+  (recipient: string, mail: Mail): Effect.Effect<string, SendError> =>
     Effect.gen(function* () {
-      const message = compose(content, unsubscribeUrl, postal);
+      const { message, tags, logged } = prepare(mail, postal);
       const text = { Text: { Data: message.text, Charset: "UTF-8" } };
 
       const request: AWS.SES.SendEmailRequest = {
@@ -140,13 +166,13 @@ export const makeSend =
       // classified, reduced so neither the recipient nor an SDK payload reaches the log.
       const uncertain = (reason: SubmissionUncertain["reason"], cause: unknown) =>
         Effect.logWarning("submission uncertain", {
-          ...purpose,
+          ...logged,
           reason,
           cause: describeCause(cause),
         }).pipe(Effect.andThen(Effect.fail(new SubmissionUncertain({ reason }))));
 
       const response = yield* sendEmail(
-        purpose.kind === "campaign" ? { ...request, EmailTags: tagsFor(purpose) } : request,
+        tags.length === 0 ? request : { ...request, EmailTags: tags },
       ).pipe(
         Retry.none,
         Effect.catch((error): Effect.Effect<never, SendError> => {

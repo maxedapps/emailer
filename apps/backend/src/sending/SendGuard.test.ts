@@ -4,7 +4,9 @@ import { describe, expect, it } from "@effect/vitest";
 import { Duration, Effect } from "effect";
 import { RateLimiter } from "effect/unstable/persistence";
 
-import { makeSlot, sendGuard } from "./SendGuard.ts";
+import { makeSlot, recentAllowance, sendGuard } from "./SendGuard.ts";
+
+import type { SendAllowance } from "./SendGuard.ts";
 
 const account = (
   quota: sesv2.SendQuota | undefined,
@@ -182,5 +184,31 @@ describe("makeSlot", () => {
         expect(delays.map(Duration.toMillis)).toStrictEqual([0, 0, 1000]);
         expect(keys).toStrictEqual(["ses-send", "ses-send", "ses-send"]);
       }).pipe(Effect.provide(RateLimiter.layerStoreMemory)),
+  );
+});
+
+describe("recentAllowance", () => {
+  it.effect("keeps only a successful read, so the next caller retries a failed one", () =>
+    Effect.gen(function* () {
+      const outcomes: Array<Effect.Effect<SendAllowance, "throttled">> = [
+        Effect.fail("throttled"),
+        Effect.succeed({ limit: 11 }),
+      ];
+
+      let reads = 0;
+
+      const recent = yield* recentAllowance(
+        Effect.suspend(() => {
+          reads += 1;
+
+          return outcomes.shift() ?? Effect.die(new Error("read a third time"));
+        }),
+      );
+
+      expect(yield* Effect.flip(recent)).toBe("throttled");
+      expect(yield* recent).toStrictEqual({ limit: 11 });
+      expect(yield* recent).toStrictEqual({ limit: 11 });
+      expect(reads).toBe(2);
+    }),
   );
 });

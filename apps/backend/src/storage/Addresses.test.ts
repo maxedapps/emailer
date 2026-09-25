@@ -8,6 +8,7 @@ import { addressReads, addressWrites, suppressionWrites, unsubscribeWrites } fro
 import {
   conditionFailed,
   createdAt,
+  listId,
   primitivesFor,
   scriptedTable,
   serverError,
@@ -15,7 +16,7 @@ import {
 
 import type { Table } from "./Testing.ts";
 
-import type { AddressSuppression, AddressUnsubscribe } from "./Addresses.ts";
+import type { AddressOptOut, AddressSuppression } from "./Addresses.ts";
 
 const operationsFor = (table: Table) => {
   const primitives = primitivesFor(table);
@@ -44,7 +45,9 @@ const suppression: AddressSuppression = {
   suppressedAt: createdAt,
 };
 
-const unsubscribe: AddressUnsubscribe = { email: "User@Example.com", unsubscribedAt: createdAt };
+const optOut: AddressOptOut = { email: "User@Example.com", listId };
+
+const otherListId = "0195f0a0-1111-4222-8333-44444444209e";
 
 const now = Date.parse("2026-09-15T00:00:00.000Z");
 
@@ -61,7 +64,7 @@ const stored = (facts: dynamodb.AttributeMap = {}): dynamodb.AttributeMap => ({
   ...facts,
 });
 
-const optedOut = { unsubscribedAt: { S: createdAt } };
+const optedOut = { optOuts: { SS: [listId] } };
 
 const suppressed = {
   suppression: {
@@ -114,19 +117,19 @@ describe("suppressAddress", () => {
   );
 });
 
-describe("unsubscribeAddress", () => {
-  it.effect("records the first opt-out on the mailbox's item and names no contact", () =>
+describe("optOut", () => {
+  it.effect("adds the list to the mailbox's opt-outs in one update and names no contact", () =>
     Effect.gen(function* () {
       const table = scriptedTable({});
 
-      yield* operationsFor(table).unsubscribeAddress(unsubscribe);
+      yield* operationsFor(table).optOut(optOut);
 
       expect(table.updateItemRequests).toStrictEqual([
         {
           Key: key,
           UpdateExpression:
-            "SET v = if_not_exists(v, :v), email = if_not_exists(email, :email), unsubscribedAt = if_not_exists(unsubscribedAt, :at)",
-          ExpressionAttributeValues: { ...stampValues, ":at": { S: createdAt } },
+            "SET v = if_not_exists(v, :v), email = if_not_exists(email, :email) ADD optOuts :list",
+          ExpressionAttributeValues: { ...stampValues, ":list": { SS: [listId] } },
         },
       ]);
     }),
@@ -136,10 +139,10 @@ describe("unsubscribeAddress", () => {
     Effect.gen(function* () {
       const table = scriptedTable({ updateItem: [Effect.fail(serverError)] });
 
-      const failure = yield* Effect.flip(operationsFor(table).unsubscribeAddress(unsubscribe));
+      const failure = yield* Effect.flip(operationsFor(table).optOut(optOut));
 
       expect(failure).toBeInstanceOf(Errors.StorageUnavailable);
-      expect(failure).toMatchObject({ operation: "unsubscribeAddress" });
+      expect(failure).toMatchObject({ operation: "optOut" });
     }),
   );
 });
@@ -149,14 +152,24 @@ describe("addressStatus", () => {
     Effect.gen(function* () {
       const table = holding(stored(optedOut));
 
-      expect(yield* operationsFor(table).addressStatus("User@Example.com")).toBe("unsubscribed");
+      expect(yield* operationsFor(table).addressStatus("User@Example.com", listId)).toBe(
+        "unsubscribed",
+      );
       expect(table.getItemRequests).toStrictEqual([{ Key: key, ConsistentRead: true }]);
+    }),
+  );
+
+  it.effect("reports an address that left another list as mailable on this one", () =>
+    Effect.gen(function* () {
+      const table = holding(stored(optedOut));
+
+      expect(yield* operationsFor(table).addressStatus(email, otherListId)).toBe("mailable");
     }),
   );
 
   it.effect("reports a mailbox nothing was ever recorded for as mailable", () =>
     Effect.gen(function* () {
-      expect(yield* operationsFor(scriptedTable({})).addressStatus(email)).toBe("mailable");
+      expect(yield* operationsFor(scriptedTable({})).addressStatus(email, listId)).toBe("mailable");
     }),
   );
 
@@ -164,7 +177,7 @@ describe("addressStatus", () => {
     Effect.gen(function* () {
       const table = holding(stored({ ...optedOut, ...suppressed, ...bounces(bounce(now, "a")) }));
 
-      expect(yield* operationsFor(table).addressStatus(email)).toBe("unsubscribed");
+      expect(yield* operationsFor(table).addressStatus(email, listId)).toBe("unsubscribed");
     }),
   );
 
@@ -183,7 +196,7 @@ describe("addressStatus", () => {
         }),
       );
 
-      expect(yield* operationsFor(table).addressStatus(email)).toBe("suppressed");
+      expect(yield* operationsFor(table).addressStatus(email, listId)).toBe("suppressed");
     }),
   );
 
@@ -195,7 +208,7 @@ describe("addressStatus", () => {
         stored(bounces(bounce(now, "a"), bounce(now - day, "b"), bounce(now - 30 * day, "c"))),
       );
 
-      expect(yield* operationsFor(table).addressStatus(email)).toBe("bouncing");
+      expect(yield* operationsFor(table).addressStatus(email, listId)).toBe("bouncing");
     }),
   );
 
@@ -213,16 +226,7 @@ describe("addressStatus", () => {
         ),
       );
 
-      expect(yield* operationsFor(table).addressStatus(email)).toBe("mailable");
-    }),
-  );
-
-  // Presence, not validity: a mangled opt-out still keeps its recipient from being mailed.
-  it.effect("counts an opt-out it cannot read as an opt-out", () =>
-    Effect.gen(function* () {
-      const table = holding(stored({ unsubscribedAt: { S: "not a timestamp" } }));
-
-      expect(yield* operationsFor(table).addressStatus(email)).toBe("unsubscribed");
+      expect(yield* operationsFor(table).addressStatus(email, listId)).toBe("mailable");
     }),
   );
 
@@ -230,7 +234,7 @@ describe("addressStatus", () => {
     Effect.gen(function* () {
       const table = scriptedTable({ getItem: [Effect.fail(serverError)] });
 
-      const failure = yield* Effect.flip(operationsFor(table).addressStatus(email));
+      const failure = yield* Effect.flip(operationsFor(table).addressStatus(email, listId));
 
       expect(failure).toBeInstanceOf(Errors.StorageUnavailable);
       expect(failure).toMatchObject({ operation: "addressStatus" });
@@ -239,22 +243,76 @@ describe("addressStatus", () => {
 });
 
 describe("addressRecord", () => {
-  it.effect("reports every fact and the status they give, for the address as given", () =>
-    Effect.gen(function* () {
-      yield* TestClock.setTime(now);
+  it.effect(
+    "reads the address's partition and reports its item, consents and pending sign-ups",
+    () =>
+      Effect.gen(function* () {
+        yield* TestClock.setTime(now);
 
-      const occurrences = [bounce(now - day, "a"), bounce(now - 2 * day, "b")];
-      const table = holding(stored({ ...optedOut, ...suppressed, ...bounces(...occurrences) }));
+        const occurrences = [bounce(now - day, "a"), bounce(now - 2 * day, "b")];
 
-      expect(yield* operationsFor(table).addressRecord("User@Example.com")).toStrictEqual({
-        email: "User@Example.com",
-        status: "unsubscribed",
-        unsubscribedAt: createdAt,
-        suppression: { reason: "bounce", suppressedAt: createdAt, bounceSubType: "General" },
-        transientBounces: occurrences,
-        accountSuppression: null,
-      });
-    }),
+        const consent = {
+          listId,
+          source: "Website footer",
+          wording: "Send me the newsletter.",
+          ip: "203.0.113.7",
+          requestedAt: createdAt,
+          confirmedAt: "2026-09-11T10:05:00.000Z",
+          confirmIp: "203.0.113.8",
+        };
+
+        const table = scriptedTable({
+          query: [
+            Effect.succeed({
+              Items: [
+                stored({ ...optedOut, ...suppressed, ...bounces(...occurrences) }),
+                {
+                  pk: key.pk,
+                  sk: { S: `CONSENT#${listId}#${consent.confirmedAt}` },
+                  v: { N: "1" },
+                  ...Object.fromEntries(
+                    Object.entries(consent).map(([name, value]) => [name, { S: value }]),
+                  ),
+                },
+                {
+                  pk: key.pk,
+                  sk: { S: `PENDING#${otherListId}` },
+                  v: { N: "1" },
+                  email: { S: email },
+                  listId: { S: otherListId },
+                  source: { S: "Website footer" },
+                  wording: { S: "Send me the newsletter." },
+                  ip: { S: "203.0.113.7" },
+                  requestedAt: { S: createdAt },
+                  secretHash: { S: "0".repeat(64) },
+                  // 2026-09-18T10:00:00.000Z
+                  ttl: { N: "1789725600" },
+                },
+              ],
+            }),
+          ],
+        });
+
+        expect(yield* operationsFor(table).addressRecord("User@Example.com")).toStrictEqual({
+          email: "User@Example.com",
+          status: "suppressed",
+          optOuts: [listId],
+          suppression: { reason: "bounce", suppressedAt: createdAt, bounceSubType: "General" },
+          transientBounces: occurrences,
+          consents: [consent],
+          pending: [
+            { listId: otherListId, requestedAt: createdAt, expiresAt: "2026-09-18T10:00:00.000Z" },
+          ],
+          accountSuppression: null,
+        });
+        expect(table.queryRequests).toStrictEqual([
+          {
+            KeyConditionExpression: "pk = :pk",
+            ExpressionAttributeValues: { ":pk": key.pk },
+            ConsistentRead: true,
+          },
+        ]);
+      }),
   );
 
   it.effect("reports a mailbox nothing was recorded for as mailable and empty", () =>
@@ -262,7 +320,10 @@ describe("addressRecord", () => {
       expect(yield* operationsFor(scriptedTable({})).addressRecord(email)).toStrictEqual({
         email,
         status: "mailable",
+        optOuts: [],
         transientBounces: [],
+        consents: [],
+        pending: [],
         accountSuppression: null,
       });
     }),

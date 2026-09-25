@@ -9,7 +9,8 @@ Self-hosted marketing email over Amazon SES. Deploy it to your own AWS account, 
 - **Targeting:** send to a whole list, or only to members whose attributes match a filter.
 - **Drafting:** preview links that open on any device, and `[Test]` copies to up to 20 addresses.
 - **Delivery:** send now or schedule for later; cancel a pending send and resume a paused one.
-- **Compliance:** one-click unsubscribe (`List-Unsubscribe` and `List-Unsubscribe-Post`) and your postal address in every footer.
+- **Sign-ups:** an API for your website's newsletter form, with double opt-in and stored consent evidence, reached with scoped keys ([Sign-ups from your website](#sign-ups-from-your-website)).
+- **Compliance:** one-click unsubscribe per list (`List-Unsubscribe` and `List-Unsubscribe-Post`) and your postal address in every footer.
 - **List hygiene:** bounced and complaining addresses are suppressed automatically. A campaign pauses itself when its list bounces or complains too much, and every campaign pauses when the account's reputation alarms fire.
 - **Pacing:** sends stay within your SES rate and daily quota, with an optional daily cap of your own.
 - **Alerts:** CloudWatch alarms, delivered by email.
@@ -18,7 +19,7 @@ Self-hosted marketing email over Amazon SES. Deploy it to your own AWS account, 
 ## What it does not do
 
 - There is no web interface. You manage everything from the CLI.
-- There are no sign-up forms or double opt-in. Contacts come in through the CLI.
+- There are no hosted sign-up or confirm pages. Your site hosts both and calls the sign-up API.
 - There is no personalization. Every recipient gets the same content, apart from their own unsubscribe link.
 - There is no open or click tracking.
 - Markdown campaigns share one fixed layout. For any other design, supply your own HTML.
@@ -28,11 +29,11 @@ Self-hosted marketing email over Amazon SES. Deploy it to your own AWS account, 
 - **Two stacks**, both deployed with [Alchemy](https://alchemy.run):
   - `stacks/sending-identity.ts` owns the SES domain identity and, optionally, its DNS records. You deploy it once per AWS account and Region.
   - `alchemy.run.ts` is the service. You deploy it once per stage, such as `prod`.
-- **API:** a Lambda behind a public Function URL, authorized with a bearer token. The CLI is its client.
+- **API:** a Lambda behind a public Function URL, authorized with a bearer token: the admin token for everything the CLI does, or a scoped key for the sign-up endpoints only.
 - **Sending:** `campaigns send`, or a one-time EventBridge Scheduler schedule, queues the campaign on SQS. A dispatcher Lambda then sends one message per recipient through SES, paced within your quota.
 - **Feedback:** SES bounce and complaint events reach a feedback Lambda through EventBridge and an SQS queue. It suppresses the address and counts the event against its campaign.
 - **Public pages:** the unsubscribe page and the preview page are separate Lambdas that accept only signed links.
-- **Storage and alerts:** one DynamoDB table holds contacts, lists, campaigns and sends. CloudWatch alarms notify an SNS topic.
+- **Storage and alerts:** one DynamoDB table holds contacts, lists, campaigns, sends, scoped keys, pending sign-ups and consent records. Pending sign-ups expire through DynamoDB TTL. CloudWatch alarms notify an SNS topic.
 
 ## Requirements
 
@@ -74,7 +75,7 @@ Do not keep a plain `.env` in the repository root. Alchemy's test harness reads 
 
 | Variable                     | Required | Purpose                                                                                                                                                                                                                               |
 | ---------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `EMAILER_API_TOKEN`          | yes      | Bearer token for every API route. 32 random bytes, base64url (43 characters). Generate with `node -e 'import("node:crypto").then(c => console.log(c.randomBytes(32).toString("base64url")))'`                                         |
+| `EMAILER_API_TOKEN`          | yes      | Admin bearer token for every route but the sign-up endpoints. 32 random bytes, base64url (43 characters). Generate with `node -e 'import("node:crypto").then(c => console.log(c.randomBytes(32).toString("base64url")))'`             |
 | `EMAILER_SENDER_IDENTITY`    | yes      | SES domain identity, e.g. `mail.example.com`. Both stacks must use the same value. Changing it on the identity stack **replaces** the identity and leaves the old one retained but untracked.                                         |
 | `EMAILER_FROM_EMAIL`         | yes      | From address. Must belong to `EMAILER_SENDER_IDENTITY`. The domain does not need a mailbox.                                                                                                                                           |
 | `EMAILER_POSTAL_ADDRESS`     | yes      | Physical postal address rendered into every message footer (CAN-SPAM). Empty fails closed at function construction.                                                                                                                   |
@@ -322,10 +323,18 @@ Each command below is run as `pnpm emailer <command>`. `[…]` marks an optional
 
 **Addresses**
 
-| Command                                  | What it does                                                       |
-| ---------------------------------------- | ------------------------------------------------------------------ |
-| `addresses status --email <address>`     | Show an address's opt-out, suppression and SES account suppression |
-| `addresses unsuppress --email <address>` | Clear an address's local and SES account suppression               |
+| Command                                  | What it does                                                                                                 |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `addresses status --email <address>`     | Show the lists an address left, its consents and pending sign-ups, and its local and SES account suppression |
+| `addresses unsuppress --email <address>` | Clear an address's local and SES account suppression                                                         |
+
+**Keys**
+
+| Command                                                                 | What it does                                                    |
+| ----------------------------------------------------------------------- | --------------------------------------------------------------- |
+| `keys create --name <name> --list <listId> … --confirm-url <https-url>` | Create a scoped key for a site's sign-up form; it is shown once |
+| `keys list`                                                             | List the scoped keys, without their secrets                     |
+| `keys revoke <keyId>`                                                   | Revoke a scoped key; it stops working at once                   |
 
 ### What commands print
 
@@ -342,11 +351,14 @@ Each command below is run as `pnpm emailer <command>`. `[…]` marks an optional
   - `rejected`, with a `rejectionCode`;
   - `uncertain`: SES's answer was lost.
 - **`campaigns preview`:** `{ url, expiresAt }`.
-- **`addresses status` / `unsuppress`:** `{ email, status, unsubscribedAt?, suppression?, transientBounces, accountSuppression }`, where `status` is `mailable`, `unsubscribed`, `suppressed` or `bouncing`.
+- **`addresses status` / `unsuppress`:** `{ email, status, optOuts, suppression?, transientBounces, consents, pending, accountSuppression }`.
+  - `status` is the mailbox's: `mailable`, `suppressed` or `bouncing`. `optOuts` lists the lists the address left.
+  - `consents` holds one record per confirmed sign-up: `{ listId, source, wording, ip, requestedAt, confirmedAt, confirmIp }`. `pending` holds the sign-ups still waiting for confirmation: `{ listId, requestedAt, expiresAt }`.
+- **`keys create`:** `{ id, name, lists, confirmUrl, createdAt, key }`. `keys list` prints the same without `key`. **`keys revoke`:** `{ id, revoked: true }`.
 - **A failure** goes to stderr as the error the API answered, named by its `_tag`, and the command exits non-zero:
   - **400** for a request the contract refuses, including a value over a limit below;
   - **401** `Unauthorized` for a missing or wrong API token;
-  - **404** `ContactNotFound`, `ListNotFound` or `CampaignNotFound`;
+  - **404** `ContactNotFound`, `ListNotFound`, `CampaignNotFound` or `ApiKeyNotFound`;
   - **409** for a conflict: `EmailAlreadyUsed`, `AddressOptedOut`, `ContactChanged`, `CampaignStateConflict`, `SendAtNotInFuture` or `TestAudienceTooLarge`;
   - **503** when sending is halted (`SendingPaused`) or a dependency is unavailable: `StorageUnavailable`, `EmailServiceUnavailable`, `QueueUnavailable`, `SchedulerUnavailable` or `AlarmsUnavailable`, each naming the `operation` and the `failure`.
 
@@ -362,6 +374,8 @@ Each command below is run as `pnpm emailer <command>`. `[…]` marks an optional
 | `lists import`         | any file size, sent 20 contacts per call; one address may not appear twice in a file |
 | `campaigns test`       | 20 recipients                                                                        |
 | Listings               | `--limit` 1–100, default 25                                                          |
+| Sign-up consent        | `wording` 1,000 characters, `source` 200, `ip` 45                                    |
+| Key confirm page       | an absolute `https:` URL, 2,000 characters                                           |
 
 ### Behavior
 
@@ -372,7 +386,7 @@ Each command below is run as `pnpm emailer <command>`. `[…]` marks an optional
 - `lists import` sends the file 20 contacts per call, 4 calls at a time: about 250 contacts a second into one list, near the most DynamoDB takes for one list without throttling. A call that fails in transit, times out or answers 408, 429 or 5xx is sent again for about two minutes. Progress goes to stderr every 1,000 contacts. If the import stops, stderr says how many contacts went in; running the same file again completes it.
 - A `.csv` file is read as CSV. The header's `email` and `name` columns match in any case, and every other column becomes an attribute named by its header, so delete export columns you don't want first. Empty cells are left out. A missing `email` column or a column named twice is rejected, and a row that fails the checks is named by its line.
 - `--filter` keeps members whose attributes equal every `key=value` (AND). Omit it for the whole list. Members that don't match are left out entirely and are not counted in `skipped`.
-- An opt-out holds the address. While opted out, moving the contact onto a different address answers **409** `AddressOptedOut`. Deleting the contact and creating another at the same address does not make it mailable.
+- An opt-out covers one list: a campaign's unsubscribe link opts the address out of that campaign's list and no other. It holds the address, not the contact, so deleting the contact and creating another at the same address does not make it mailable on that list. While an address has an opt-out from any list, moving its contact onto a different address answers **409** `AddressOptedOut`. Imports and the CLI never lift an opt-out; only the address's own confirmed sign-up to that list does.
 - `addresses unsuppress` clears local suppression and the SES **account** suppression list (one list per account and Region, shared with every other sender there). SES stores suppression entries case-sensitively, so pass the address in the case SES stored it: as the contact holds it (`contacts by-email` shows it) or as `aws sesv2 list-suppressed-destinations` lists it. `addresses status` echoes the address you pass, so another case shows no account entry rather than an error. It never clears an opt-out.
 - Deleting a contact removes it from every list; deleting a list removes every membership in it. Neither deletes the other side. A delete that times out on a large list is safe to repeat.
 - Listings page in created order. A page's `nextCursor` is absent when there is nothing more; a full last page may still carry one that leads to an empty page.
@@ -381,10 +395,83 @@ Each command below is run as `pnpm emailer <command>`. `[…]` marks an optional
 - `campaigns cancel` withdraws a pending send. A `scheduled` campaign, or a `queued` first send that never started, returns to `draft`. A `queued` resume returns to `paused` with reason `manual`. A campaign that is `sending` or `completed`, or whose send another command replaced in the meantime, answers **409** `CampaignStateConflict`. Cancel does not stop messages already handed to SES, or recall mail.
 - `campaigns update` and `campaigns delete` apply to drafts only; any other state is **409** `CampaignStateConflict`. Cancel a scheduled campaign to edit it. Content flags replace the whole body: `--text` without `--html` drops an earlier HTML body. `--markdown` excludes `--text`/`--html`. `--clear-filter` sends to the whole list again.
 - `campaigns preview`: anyone holding the link sees that campaign until it expires, so share it like a password. It always renders the campaign as it is now, with a placeholder instead of the recipient's unsubscribe link. A single link cannot be revoked; destroying the stage revokes all of them.
-- `campaigns test` sends right away to the `--to` addresses, or to every member of a `--list`; the campaign's filter does not apply. For `--list` it shows the member count and asks on stderr; pass `--yes` when no one can answer (a script or pipe). The subject gets a `[Test] ` prefix. Unsubscribed, suppressed and bouncing addresses are skipped, and each address gets one attempt. It uses the account's daily quota and send pacing, and answers **503** `SendingPaused` while a reputation halt or the daily budget stops sending. **The unsubscribe link in a test message is real**: clicking it opts that address out of every campaign. A test bounce or complaint suppresses the address but never counts against the campaign.
+- `campaigns test` sends right away to the `--to` addresses, or to every member of a `--list`; the campaign's filter does not apply. For `--list` it shows the member count and asks on stderr; pass `--yes` when no one can answer (a script or pipe). The subject gets a `[Test] ` prefix. Unsubscribed, suppressed and bouncing addresses are skipped, and each address gets one attempt. It uses the account's daily quota and send pacing, and answers **503** `SendingPaused` while a reputation halt or the daily budget stops sending. **The unsubscribe link in a test message is real**: clicking it opts that address out of the campaign's list, whichever list the test went to. Addresses that left the campaign's list are skipped for the same reason. A test bounce or complaint suppresses the address but never counts against the campaign.
 - An individual recipient is never retried automatically. A recipient whose SES response was lost stays `uncertain`.
 
-Every message gets a postal footer, `List-Unsubscribe` and one-click `List-Unsubscribe-Post`. Open/click tracking is off.
+Every campaign and test message gets a postal footer, `List-Unsubscribe` and one-click `List-Unsubscribe-Post`. Open/click tracking is off.
+
+## Sign-ups from your website
+
+Your site's newsletter form can add subscribers with double opt-in. The site calls the API server to server with a scoped key. The emailer mails the confirmation link, and the site hosts both the form and the confirm page. Check for bots on your side (for example with a CAPTCHA) before calling.
+
+### Scoped keys
+
+```sh
+pnpm emailer keys create --name "Website" --list <listId> --confirm-url https://www.example.com/newsletter/confirm
+```
+
+- The output's `key` (`emk.<id>.<secret>`) is shown **once**. Store it as the site's secret. The service keeps only its hash.
+- A key reaches only the two sign-up endpoints, only for its `--list`s (repeat the flag for several), and its links point to its `--confirm-url`. The admin token is refused there, and a key is refused everywhere else.
+- Keys neither expire nor change. To rotate one, create a new key, switch the site to it, then `keys revoke <keyId>`. A revoked key stops working at once.
+
+### Sign up: `POST /subscriptions`
+
+Send the key as `Authorization: Bearer <key>` and a JSON body:
+
+```json
+{
+  "listId": "<listId>",
+  "email": "ada@example.com",
+  "name": "Ada",
+  "attributes": { "plan": "pro" },
+  "consent": {
+    "source": "Website footer",
+    "wording": "Send me the monthly newsletter. I can unsubscribe at any time."
+  },
+  "ip": "203.0.113.7"
+}
+```
+
+`name` and `attributes` are optional. `consent.wording` is the text the subscriber agreed to, `consent.source` names the form, and `ip` is the subscriber's address as your server saw it. All three are stored as consent evidence.
+
+| Status | `_tag`                                                                                  | Meaning                                                                                 |
+| ------ | --------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| 202    | `ConfirmationSent`                                                                      | The confirmation mail went out                                                          |
+| 200    | `AlreadySubscribed`                                                                     | The address is already on the list; no mail went out                                    |
+| 400    |                                                                                         | The body breaks the contract, for example a missing `consent` or a value over a limit   |
+| 401    | `Unauthorized`                                                                          | A missing, wrong or revoked key                                                         |
+| 403    | `Forbidden`                                                                             | The list is not one of the key's                                                        |
+| 404    | `ListNotFound`                                                                          | The list is gone                                                                        |
+| 422    | `AddressUndeliverable`                                                                  | The address is `suppressed` or `bouncing` (`reason`) until the operator unsuppresses it |
+| 429    | `ConfirmationRecentlySent`                                                              | A confirmation for this address and list went out within the hour; see `retryAfter`     |
+| 503    | `SendingPaused`, `EmailServiceUnavailable`, `AlarmsUnavailable` or `StorageUnavailable` | Try again later                                                                         |
+
+Show one "check your inbox" message for 202, 200 and 429, so the form never tells a visitor whether an address is subscribed.
+
+The confirmation mail is neutral and in English. It names the list and links to the key's confirm page with a `token` query parameter added (the page's own query is kept). The link works for 7 days; the mail says to ignore it if the reader did not sign up, and carries your postal address.
+
+### Confirm: `POST /subscriptions/confirm`
+
+The confirm page must **never confirm on GET**: mail scanners and link previews open every link in a mail. On GET, show a button. The URL carries the subscriber's address and the link's one-time secret, so the page should load no analytics or third-party scripts, or should remove `token` from the URL before they run. On its POST, call the API with the same key:
+
+```json
+{ "token": "<the token query parameter>", "ip": "203.0.113.7" }
+```
+
+| Status | `_tag`                 | Meaning                                                                               |
+| ------ | ---------------------- | ------------------------------------------------------------------------------------- |
+| 200    | `Subscribed`           | The subscriber is on the list (`listId`)                                              |
+| 400    |                        | The body breaks the contract                                                          |
+| 401    | `Unauthorized`         | A missing, wrong or revoked key                                                       |
+| 403    | `Forbidden`            | The token's list is not one of the key's                                              |
+| 404    | `ConfirmationNotFound` | The link is not valid, has expired or was already used; the subscriber signs up again |
+| 404    | `ListNotFound`         | The list was deleted since the sign-up                                                |
+| 409    | `ContactChanged`       | The contact changed while joining; try again                                          |
+| 503    | `StorageUnavailable`   | Try again later                                                                       |
+
+Confirming joins the list as an import does, creating the contact if no one holds the address. It records the consent, which `addresses status` shows, and lifts an earlier opt-out from that list, and only that list.
+
+Send only the fields documented here. Unknown fields are ignored for now; they will answer **400** once the contract rejects them ([ADR-0022](.adr/0022-api-contract-rejects-undeclared-fields.md)).
 
 ## Operate
 

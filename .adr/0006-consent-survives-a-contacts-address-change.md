@@ -7,6 +7,7 @@
 - Amended: 2026-09-24, on the user's decision in the simplification plan (`work/simplify.md` T3) — storage answers the refused move with `AddressOptedOut` itself, where it answered an `opted-out` outcome for the domain to map.
 - Authority: Reviewing the trunk after the contact-management (`work/contact-list.md`, in git history) and consent (`work/consent-and-unsubscribe.md`, in git history) slices merged found that together they let an opt-out be escaped. The user asked for it fixed in the cleanest way, with the alternatives weighed in the follow-up (`work/consent-identity-and-storage-cleanup.md`, in git history) (I1), and approved this design for implementation. Acceptance follows the live confirmation below, as it did for ADR-0004 and ADR-0005.
 - Superseded in part: [ADR-0024](0024-typed-errors-and-cost-neutral-storage.md) for the item the opt-out check targets. The check reads `unsubscribedAt` on the address item being left, not an `UNSUBSCRIBE#` item.
+- Superseded in part: [ADR-0027](0027-signup-api-scoped-keys-and-double-opt-in.md) for the check itself. It is now `attribute_not_exists(optOuts)`: a move is refused while the address being left has an opt-out from any list.
 
 ## Context
 

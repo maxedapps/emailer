@@ -4,6 +4,7 @@ import { Cause, ConfigProvider, Effect, Exit, Option, Result } from "effect";
 import {
   belongsToIdentity,
   compose,
+  composeConfirmation,
   footerFor,
   fromHeader,
   htmlFooterFor,
@@ -61,6 +62,32 @@ describe("compose", () => {
 
   it("appends the HTML footer when the document has no closing body tag", () => {
     expect(composedHtml("<p>Hallo</p>")).toBe(`<p>Hallo</p>${footer}`);
+  });
+});
+
+describe("composeConfirmation", () => {
+  const confirmUrl = "https://www.example.com/confirm?token=sam%40example.com.a.b&lang=en";
+  const message = composeConfirmation("News & <Updates>", confirmUrl, postalAddress);
+
+  it("asks to confirm the list by name, and sets no unsubscribe headers", () => {
+    expect(message.subject).toBe("Please confirm your subscription to News & <Updates>");
+    expect(message.headers).toStrictEqual([]);
+  });
+
+  it("gives the link, its expiry, what to do if it wasn't you, and the postal address", () => {
+    expect(message.text).toContain(`\n${confirmUrl}\n`);
+    expect(message.text).toContain("7 days");
+    expect(message.text).toContain("ignore this email and you won't be added");
+    expect(message.text.endsWith(postalAddress)).toBe(true);
+  });
+
+  it("escapes the list name and the link in the HTML part", () => {
+    const escapedUrl = confirmUrl.replaceAll("&", "&amp;");
+
+    expect(message.html).toContain("<strong>News &amp; &lt;Updates&gt;</strong>");
+    expect(message.html).toContain(`href="${escapedUrl}"`);
+    expect(message.html).not.toContain("<Updates>");
+    expect(message.html).toContain("7 days");
   });
 });
 

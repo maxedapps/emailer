@@ -45,7 +45,7 @@ const Reservation = Schema.Struct({ contactId: Schemas.EntityId });
 
 const writeReservation = itemWriter(Reservation);
 
-const readReservation = itemReader(Reservation);
+export const readReservation = itemReader(Reservation);
 
 /** Builds a contact with its absent fields omitted rather than set to `undefined`. */
 export const contactOf = (
@@ -180,15 +180,16 @@ export const contactOperations = (
         ? []
         : [
             {
-              // The address being left must not be opted out. An opted-out address is one that
-              // delivered mail and whose owner acted on it, so leaving it is never a typo
+              // The address being left must not be opted out of any list. An opted-out address is
+              // one that delivered mail and whose owner acted on it, so leaving it is never a typo
               // correction: it is a move to a different mailbox, the one way an opt-out could
               // otherwise be escaped. Checked in the transaction rather than read first, so an
-              // opt-out landing mid-update cannot slip past.
+              // opt-out landing mid-update cannot slip past. DynamoDB drops a set emptied of its
+              // last list, so an address whose opt-outs were all lifted is free again.
               ConditionCheck: {
                 Table: tableLogicalId,
                 Key: addressKey(current.email),
-                ConditionExpression: "attribute_not_exists(unsubscribedAt)",
+                ConditionExpression: "attribute_not_exists(optOuts)",
               },
               refused: () => new AddressOptedOut({ email: current.email }),
             },

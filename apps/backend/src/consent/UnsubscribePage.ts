@@ -1,7 +1,6 @@
 import { Duration, Effect, Layer, Option } from "effect";
 import { HttpRouter, HttpServerResponse } from "effect/unstable/http";
 
-import { nowIso } from "../Identifiers.ts";
 import { functionServicesLayer, lambdaBasics } from "../Lambda.ts";
 import { respondingToFailures } from "../Reporting.ts";
 import { UnsubscribeStore } from "../storage/Unsubscribe.ts";
@@ -33,13 +32,13 @@ ${body}
 const confirmation = HttpServerResponse.html(
   page(
     "Unsubscribe",
-    `<p>Confirm that you no longer want to receive these emails.</p>
+    `<p>Confirm that you no longer want to receive emails from this list.</p>
 <form method="post"><button type="submit">Unsubscribe me</button></form>`,
   ),
 );
 
 const confirmed = HttpServerResponse.html(
-  page("You are unsubscribed", "<p>You will not receive these emails again.</p>"),
+  page("You are unsubscribed", "<p>You will not receive emails from this list again.</p>"),
 );
 
 const notFound = HttpServerResponse.text(page("Link not valid", "<p>This link is not valid.</p>"), {
@@ -84,15 +83,12 @@ const recordOptOut = HttpRouter.add(
       return notFound;
     }
 
-    // The token named the mailbox, so there is nothing left to resolve. No
-    // contact is read, which is why no concurrent edit or deletion can change
-    // where this opt-out lands or make the link stop working.
-    yield* storage.unsubscribeAddress({
-      email: presented.value,
-      unsubscribedAt: yield* nowIso,
-    });
+    // The token named the mailbox and the list, so there is nothing left to
+    // resolve. No contact is read, which is why no concurrent edit or deletion
+    // can change where this opt-out lands or make the link stop working.
+    yield* storage.optOut({ email: presented.value.mailbox, listId: presented.value.listId });
 
-    // The mailbox is the whole payload, so it is what must not be logged.
+    // The mailbox is in the payload, so it is what must not be logged.
     yield* Effect.logInfo("unsubscribe honoured");
 
     // No storage or configuration failure is turned into a page. A provider

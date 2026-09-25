@@ -3,7 +3,7 @@ import * as Schemas from "@emailer/api/Schemas";
 import { Effect } from "effect";
 
 import { unsubscribeLink } from "../consent/Unsubscribe.ts";
-import { accepted, failureOutcomes, Mailer } from "../sending/Mailer.ts";
+import { accepted, failureOutcomes, Mail, Mailer } from "../sending/Mailer.ts";
 import { SendGuard } from "../sending/SendGuard.ts";
 import { AudienceStore } from "../storage/Audience.ts";
 import { CampaignStore } from "../storage/Campaigns.ts";
@@ -56,20 +56,26 @@ export const sendTest = Effect.fn("TestSends.sendTest")(function* (
   const outcomes: Array<Schemas.TestSendOutcome> = [];
 
   for (const email of recipients) {
-    const status = yield* audience.addressStatus(email);
+    // The campaign's list, not the one a test may be sent to: the copy stands in for the
+    // campaign's mail, and its unsubscribe link must work as the campaign's would.
+    const status = yield* audience.addressStatus(email, campaign.listId);
 
     if (status !== "mailable") {
       outcomes.push({ email, outcome: "skipped", reason: status });
       continue;
     }
 
-    const unsubscribeUrl = yield* unsubscribeLink(email).pipe(Effect.orDie);
+    const unsubscribeUrl = yield* unsubscribeLink({
+      mailbox: email,
+      listId: campaign.listId,
+    }).pipe(Effect.orDie);
+
     const delay = yield* guard.slot(allowance.limit);
 
     yield* Effect.sleep(delay);
 
     const outcome = yield* mailer
-      .send(email, content, unsubscribeUrl, { kind: "test" })
+      .send(email, Mail.Test({ content, unsubscribeUrl }))
       .pipe(Effect.map(accepted), Effect.catchTags(failureOutcomes));
 
     outcomes.push({ email, ...outcome });

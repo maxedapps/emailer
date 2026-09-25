@@ -1,7 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Exit } from "effect";
 
-import { createdAt, fakeService, parseJson, runCli } from "../../test/CliHarness.ts";
+import { createdAt, fakeService, listId, parseJson, runCli } from "../../test/CliHarness.ts";
 
 describe("address status and un-suppress from the command line", () => {
   it.effect("prints the address record addresses status answers, asking with the case given", () =>
@@ -17,8 +17,11 @@ describe("address status and un-suppress from the command line", () => {
       expect(yield* parseJson(run.stdout)).toStrictEqual({
         email: "Sam@Example.com",
         status: "suppressed",
+        optOuts: [listId],
         suppression: { reason: "bounce", suppressedAt: createdAt },
         transientBounces: [],
+        consents: [],
+        pending: [],
         accountSuppression: { reason: "bounce", lastUpdateTime: createdAt },
       });
     }),
@@ -37,7 +40,10 @@ describe("address status and un-suppress from the command line", () => {
       expect(yield* parseJson(run.stdout)).toStrictEqual({
         email: "sam@example.com",
         status: "mailable",
+        optOuts: [],
         transientBounces: [],
+        consents: [],
+        pending: [],
         accountSuppression: null,
       });
     }),

@@ -66,8 +66,12 @@ export const feedbackSuite = (test: LiveTest) => {
           feedback: { bounced: 1, complained: 1 },
         });
 
-        expect(yield* awaitAddressStatus(storage, bounce, "suppressed")).toBe("suppressed");
-        expect(yield* awaitAddressStatus(storage, complaint, "suppressed")).toBe("suppressed");
+        expect(yield* awaitAddressStatus(storage, bounce, list.id, "suppressed")).toBe(
+          "suppressed",
+        );
+        expect(yield* awaitAddressStatus(storage, complaint, list.id, "suppressed")).toBe(
+          "suppressed",
+        );
 
         const second = yield* client.campaigns.create({
           payload: {

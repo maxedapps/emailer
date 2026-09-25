@@ -66,21 +66,27 @@ export const unsubscribeSuite = (test: LiveTest) => {
 
         // The token names the mailbox, not the contact — ADR-0007. Minting from `contact.id` here
         // would build a link for a token payload that is not an address at all.
-        const link = `${unsubscribe.baseUrl}/unsubscribe/${mintToken(unsubscribe.signingKey, address)}`;
+        const token = mintToken(unsubscribe.signingKey, { mailbox: address, listId: list.id });
+        const link = `${unsubscribe.baseUrl}/unsubscribe/${token}`;
 
         const offered = yield* optOut(HttpClientRequest.get(link));
 
         expect(offered.status).toBe(200);
-        expect(yield* storage.addressStatus(address)).toBe("mailable");
+        expect(yield* storage.addressStatus(address, list.id)).toBe("mailable");
 
         const honoured = yield* optOut(HttpClientRequest.post(link));
 
         expect(honoured.status).toBe(200);
-        expect(yield* awaitAddressStatus(storage, address, "unsubscribed")).toBe("unsubscribed");
+        expect(yield* awaitAddressStatus(storage, address, list.id, "unsubscribed")).toBe(
+          "unsubscribed",
+        );
 
         const repeated = yield* optOut(HttpClientRequest.post(link));
 
         expect(repeated.status).toBe(200);
+
+        // The opt-out covers the campaign's list only: the address stays mailable on any other.
+        expect(yield* storage.addressStatus(address, yield* newIdentifier)).toBe("mailable");
 
         // Moving the contact to another mailbox would escape the opt-out, so it is refused.
         const moved = yield* Effect.result(
@@ -133,17 +139,21 @@ export const unsubscribeSuite = (test: LiveTest) => {
         const unsubscribe = yield* unsubscribeSettings;
         const storage = yield* liveStorage(settings.tableName);
         const address = yield* uniqueAddress;
+        const listId = yield* newIdentifier;
 
         // Forged for the very address checked below, so a handler that skipped verification would
         // opt it out.
-        const forged = mintToken(Redacted.make("not the deployed key"), address);
+        const forged = mintToken(Redacted.make("not the deployed key"), {
+          mailbox: address,
+          listId,
+        });
 
         const refused = yield* optOut(
           HttpClientRequest.post(`${unsubscribe.baseUrl}/unsubscribe/${forged}`),
         );
 
         expect(refused.status).toBe(404);
-        expect(yield* storage.addressStatus(address)).toBe("mailable");
+        expect(yield* storage.addressStatus(address, listId)).toBe("mailable");
       }),
     );
 
@@ -162,8 +172,9 @@ export const unsubscribeSuite = (test: LiveTest) => {
         const original = yield* uniqueAddress;
         const moved = yield* uniqueAddress;
 
+        const listId = yield* newIdentifier;
         const contactId = yield* contactFor(storage, original);
-        const token = mintToken(unsubscribe.signingKey, original);
+        const token = mintToken(unsubscribe.signingKey, { mailbox: original, listId });
         const link = `${unsubscribe.baseUrl}/unsubscribe/${token}`;
 
         // Edited to another address *before* the link is used. A link that resolved a contact
@@ -172,19 +183,19 @@ export const unsubscribeSuite = (test: LiveTest) => {
 
         expect((yield* optOut(HttpClientRequest.post(link))).status).toBe(200);
 
-        expect(yield* storage.addressStatus(original)).toBe("unsubscribed");
-        expect(yield* storage.addressStatus(moved)).toBe("mailable");
+        expect(yield* storage.addressStatus(original, listId)).toBe("unsubscribed");
+        expect(yield* storage.addressStatus(moved, listId)).toBe("mailable");
 
         // Deleting the contact removes neither the consent nor the link's meaning.
         yield* storage.deleteContact(contactId);
-        expect(yield* storage.addressStatus(original)).toBe("unsubscribed");
+        expect(yield* storage.addressStatus(original, listId)).toBe("unsubscribed");
         expect((yield* optOut(HttpClientRequest.post(link))).status).toBe(200);
 
         // Re-imported at the original address: the consent is still there, because it was never
         // the contact's to carry.
         const reimported = yield* contactFor(storage, original);
 
-        expect(yield* storage.addressStatus(original)).toBe("unsubscribed");
+        expect(yield* storage.addressStatus(original, listId)).toBe("unsubscribed");
         expect(reimported).not.toBe(contactId);
 
         // ADR-0006, against the real conditional transaction: the opted-out address cannot be left
@@ -194,7 +205,7 @@ export const unsubscribeSuite = (test: LiveTest) => {
         expect(
           yield* Effect.flip(storage.updateContact(reimported, { email: elsewhere })),
         ).toStrictEqual(new Errors.AddressOptedOut({ email: original }));
-        expect(yield* storage.addressStatus(elsewhere)).toBe("mailable");
+        expect(yield* storage.addressStatus(elsewhere, listId)).toBe("mailable");
       }),
     );
   });
