@@ -85,6 +85,9 @@ export const unsubscribeSuite = (test: LiveTest) => {
 
         expect(repeated.status).toBe(200);
 
+        // The opt-out covers the campaign's list only: the address stays mailable on any other.
+        expect(yield* storage.addressStatus(address, yield* newIdentifier)).toBe("mailable");
+
         // Moving the contact to another mailbox would escape the opt-out, so it is refused.
         const moved = yield* Effect.result(
           client.contacts.update({

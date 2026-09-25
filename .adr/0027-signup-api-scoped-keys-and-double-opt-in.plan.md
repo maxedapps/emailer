@@ -313,7 +313,15 @@ Deviations:
 
 ### T9 — Live gate
 
-Status: To do
+Status: Done
+
+Result, 2026-09-25: one run through `Test.make` on stage `test_<user>`. All 39 live tests passed (37 existing, 2 new) in 704 s, deploy and destroy included. Afterwards the account held no table, function, queue or alarm for the stage and no suppressed simulator address, and Alchemy's state held nothing for it. The real SES send of a confirmation (no `Headers` entries) and the 429 read of the old pending item through `ALL_OLD` both worked. The stage table's TTL on `ttl` reported `ENABLING` or `ENABLED`.
+
+Deviations:
+
+- No new `IntegrationSupport.ts` helpers. The live store (`liveStorage`) already plants a pending sign-up (`requestSubscription`), an opt-out (`optOut`) and reads the partition (`addressRecord`) through the production code.
+- The live suite also checks, through `describeTimeToLive`, that TTL is on for the stage's table, so prod is not the first deploy to prove the prop.
+- It also checks that a revoked key answers 401 at once.
 
 - **New module `apps/backend/src/consent/Subscriptions.live.ts`**, registered in `apps/backend/test/Live.integration.test.ts`. With the admin token it creates a list and a key, then with the key:
   - signs up `success@simulator.amazonses.com` and expects 202 and a pending record with a `ttl`;
