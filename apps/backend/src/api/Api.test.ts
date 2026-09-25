@@ -686,19 +686,25 @@ describe("keys", () => {
     }),
   );
 
-  it.effect("answers 201 for a created key and 400 for a confirm page that is not https", () =>
-    Effect.gen(function* () {
-      const { respond } = yield* api({ keys: { createKey: () => Effect.void } });
+  it.effect(
+    "answers 201 for a created key, and 400 for a confirm page that is not https or a list named twice",
+    () =>
+      Effect.gen(function* () {
+        const { respond } = yield* api({ keys: { createKey: () => Effect.void } });
 
-      const payload = (url: string) =>
-        JSON.stringify({ name: "Website", lists: [listId], confirmUrl: url });
+        const payload = (url: string) =>
+          JSON.stringify({ name: "Website", lists: [listId], confirmUrl: url });
 
-      expect((yield* respond(send("POST", "/keys", payload(confirmUrl)))).status).toBe(201);
-      expect(
-        (yield* respond(send("POST", "/keys", payload("http://www.example.com/confirm")))).status,
-      ).toBe(400);
-      expect((yield* respond(send("POST", "/keys", payload("/confirm")))).status).toBe(400);
-    }),
+        expect((yield* respond(send("POST", "/keys", payload(confirmUrl)))).status).toBe(201);
+        expect(
+          (yield* respond(send("POST", "/keys", payload("http://www.example.com/confirm")))).status,
+        ).toBe(400);
+        expect((yield* respond(send("POST", "/keys", payload("/confirm")))).status).toBe(400);
+
+        const twice = `{"name":"Website","lists":["${listId}","${listId}"],"confirmUrl":"${confirmUrl}"}`;
+
+        expect((yield* respond(send("POST", "/keys", twice))).status).toBe(400);
+      }),
   );
 
   it.effect("lists the keys and revokes one, answering 404 for a key that is not there", () =>

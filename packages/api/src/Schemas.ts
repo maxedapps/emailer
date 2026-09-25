@@ -577,7 +577,12 @@ export type ApiKey = typeof ApiKey.Type;
 
 export const CreateApiKeyPayload = Schema.Struct({
   name: EntityName,
-  lists: Schema.NonEmptyArray(EntityId),
+  // Stored as a string set, which DynamoDB refuses outright when it holds a value twice.
+  lists: Schema.NonEmptyArray(EntityId).check(
+    Schema.makeFilter((lists: ReadonlyArray<string>) =>
+      new Set(lists).size === lists.length ? undefined : "Expected each list at most once",
+    ),
+  ),
   confirmUrl: ConfirmUrl,
 });
 
