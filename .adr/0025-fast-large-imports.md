@@ -37,7 +37,7 @@
 
 1. **The CLI imports a file of any size.**
    - It checks the whole file before sending anything: the format, and that no address appears twice anywhere in it.
-   - It sends 20-contact calls, 8 in flight.
+   - It sends 20-contact calls, 4 in flight (8 until the live gate; see Confirmation).
    - A call that fails transiently is retried with jittered exponential backoff for about two minutes. Transient means a transport failure, a timeout, or 408, 429 or 5xx.
    - It prints the converged state for the whole file, in file order.
    - Its request deadline applies to each request, not to the whole command.
@@ -79,13 +79,13 @@
 
 ## Consequences
 
-- **Speed:** a list imports at about 200 contacts/s, so 50,000 contacts take about 4 minutes. DynamoDB may split the hot partition during a long import; that is unmeasured.
+- **Speed:** a list imports at about 250–280 contacts/s, so 50,000 contacts take about 3 minutes. DynamoDB may split the hot partition during a long import; that is unmeasured.
 - **Cost:**
   - per call, 2 write units become 1 read unit, and billed collisions go;
   - about $0.28 per 50,000 new contacts;
   - re-running a file costs about the same as the first run.
 - **Racing a list deletion can orphan memberships.**
-  - Only calls whose read came before the deletion and whose commit came after it can orphan, at most 8 × 20 memberships.
+  - Only calls whose read came before the deletion and whose commit came after it can orphan, at most 4 × 20 memberships.
   - Every later call answers `ListNotFound`.
   - This is the same class of leftover that ADR-0005 accepts for an import during a delete cascade.
 - **An interrupted import** leaves the finished calls in place. Running the same file again completes it.
@@ -106,3 +106,14 @@
   - the membership count is exact in both directions;
   - there are no transaction conflicts;
   - it uses about 8 table and 1 index write units per contact.
+- **As built (live gate, 2026-09-25, stage `test-import`):** each run imported 10,000 new contacts from a CSV file into a fresh list. All four runs had exact counts where checked, and none had a transaction conflict.
+
+  | In flight | Time | Throttled transactions | Table write units per contact |
+  |---|---|---|---|
+  | 8 | 40 s | about 250 | 11.0 |
+  | 8, control on a fresh list after the run with 4 | 40 s | 250 | 11.1 |
+  | 4 | 36 s | 11 | 8.15, with 1.0 index write unit and 1.08 read units |
+
+  - Throttled transaction attempts are billed and then retried, so 8 in flight cost 38% more writes and ran no faster.
+  - The CLI therefore sends 4 calls at a time.
+  - The re-run of the first file answered byte-identically.

@@ -116,11 +116,12 @@ const decodeImportFile = Schema.decodeUnknownEffect(
 );
 
 /**
- * Calls in flight at once. One list's member items share a DynamoDB partition, which caps an import
- * at about 200 contacts a second; eight calls reach that, and more only add throttled retries
- * (ADR-0025).
+ * Calls in flight at once. One list's member items share a DynamoDB partition, and past its limit
+ * DynamoDB throttles the transactions and still bills their attempts. On the live gate, four calls
+ * imported about 280 contacts a second with almost no throttling; eight were slower and used 38%
+ * more write units (ADR-0025).
  */
-const importConcurrency = 8;
+const importConcurrency = 4;
 
 const progressStep = 1_000;
 

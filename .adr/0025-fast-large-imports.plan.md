@@ -7,7 +7,7 @@
 
 **Done when:**
 
-- `emailer lists import` takes a JSON or CSV file of any size, sends 20-contact calls with 8 in flight, and retries transient failures;
+- `emailer lists import` takes a JSON or CSV file of any size, sends 20-contact calls with 4 in flight (8 until the live gate), and retries transient failures;
 - the import reads the list once per call instead of checking it inside the transaction;
 - the README describes the new behaviour and limits;
 - the live gate passes, and prod runs the result.
@@ -108,13 +108,16 @@ Status: Done. As built:
 
 ### T4 — Import a file of any size, in parallel
 
-Status: Done. As built: the one-address-twice test was widened to 30 entries with the duplicate at positions 0 and 25, rather than adding a second test.
+Status: Done. As built:
+
+- The one-address-twice test was widened to 30 entries, with the duplicate at positions 0 and 25, rather than adding a second test.
+- The concurrency is 4, not 8: the live gate (T7) showed 8 slower and 38% dearer.
 
 - **Where:** `lists import` in `apps/cli/src/commands/Lists.ts`.
 - **Behaviour:**
   - decode the file with `ImportContactsFile`;
   - split it into batches of `Schemas.maxImportEntries`;
-  - `Effect.forEach` with `concurrency: 8`, through the retrying client from T3;
+  - `Effect.forEach` with `concurrency: 8` (4 after T7), through the retrying client from T3;
   - print `{ contacts }` for the whole file, in file order, exactly as one call prints today.
 - **Progress:** a stderr line after every 1,000 imported contacts, such as `Imported 3,000 of 50,000 contacts`.
 - **Failure:**
@@ -180,7 +183,10 @@ Status: Done. As built:
 
 ### T6 — Docs and ADRs
 
-Status: Done. As built: nothing in the implementation departs from ADR-0025's decision, so the record needed no as-built notes. The commands table names the file generically (`--file <file>`).
+Status: Done. As built:
+
+- The commands table names the file generically (`--file <file>`).
+- ADR-0025's as-built notes came with T7's concurrency finding.
 
 - **README:**
   - drop "An import takes at most 20 contacts per call, so a larger file needs a loop.";
@@ -199,7 +205,24 @@ Status: Done. As built: nothing in the implementation departs from ADR-0025's de
 
 ### T7 — Live gate
 
-Status: Not started
+Status: Done on 2026-09-25 on stage `test-import`. The gate imported 40,000 contacts in four runs, and all DynamoDB costs together came to about $0.30.
+
+- **Full suite:** 41 of 41 passed.
+- **10,000-contact CSV import at 8 in flight** (the plan's number):
+  - exit 0 in 40 s, with a progress line every 1,000 contacts;
+  - exactly 10,000 forward and 10,000 reverse memberships;
+  - a sample contact holds its name and `plan` attribute;
+  - no `TransactionConflict` and no Lambda error.
+- **Re-run:** exit 0 in 39 s, and the output is byte-identical: 10,000 entries in file order, all members.
+- **Failed criterion:** about 8 table write units per contact.
+  - The runs measured 11.0 and 11.3. The index (1.0) and reads (1.06) were on target.
+  - About 250 `TransactWriteItems` per run were throttled. Their billed attempts, retried by the capped AWS retry, made up the difference.
+- **Follow-up, 10,000 new contacts each into a fresh list:**
+  - 4 in flight: 36 s, 11 throttled transactions, 8.15 table write units, 1.0 index write unit and 1.08 read units per contact.
+  - 8 in flight again, as the control: 40 s, 250 throttled, 11.1.
+- **Decision:** the CLI sends 4 calls at a time, which is faster and on budget.
+  - This departs from the plan's 8, so ADR-0025 and the README record it.
+  - The run with 4 used the committed code's number.
 
 - **Stage:** a dedicated one, `--stage test-import`, so it never shares state with the typed-errors gate.
   - Deploy it from the worktree.
