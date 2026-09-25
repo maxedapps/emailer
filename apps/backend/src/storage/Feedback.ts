@@ -130,9 +130,9 @@ export const feedbackWrites = (primitives: TransactionPrimitives) => {
 };
 
 /**
- * What the SES event consumer persists: a conditional suppression for the address, and a
- * transaction that writes the event's history row together with the campaign counter or the
- * transient window. Suppression stays a single conditional Put; history and counters share
+ * What the SES event consumer persists: the address's suppression, kept if one is already there,
+ * and a transaction that writes the event's history row together with the campaign counter or the
+ * transient window. Suppression stays a single update; history and counters share
  * `TransactWriteItems`.
  */
 const feedbackStoreOperations = (

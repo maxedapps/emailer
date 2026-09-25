@@ -657,6 +657,12 @@ describe("public errors", () => {
       },
     },
     {
+      error: "ContactChanged",
+      status: 409,
+      request: () => send("PATCH", `/contacts/${contactId}`, '{"name":"Sam"}'),
+      stubs: { audience: { updateContact: () => Effect.fail(new Errors.ContactChanged()) } },
+    },
+    {
       error: "CampaignStateConflict",
       status: 409,
       request: () => send("POST", `/campaigns/${campaignId}/cancel`, "{}"),

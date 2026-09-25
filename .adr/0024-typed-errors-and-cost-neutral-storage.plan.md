@@ -337,7 +337,7 @@ Status: Done. As built:
 - **BatchGetItem's unprocessed keys** fail with `UnprocessedKeys` and retry with `Schedule.exponential("100 millis")`, jittered, `upTo({ times: 3 })`. The hand-written loop and its jitter maths go; the operation deadline stays.
 - **One AWS retry layer** provides the client's `Retry` policy.
   - It is built from the client's own default factory (`Retry.makeDefault`), which honours server retry-after hints and waits at least 500 ms after a throttle.
-  - Its schedule is only capped with `Schedule.upTo({ duration: "4 seconds" })`, so it ends inside the 5 s operation timeout.
+  - Its schedule is only capped, so it ends inside the 5 s operation timeout: it stops when the next delay would end past 4 s (`Schedule.while`, as built above).
   - It goes in every Lambda's services, and the mailer overrides it with `Retry.none`.
   - This wiring is untested; the transport test below verifies it.
 

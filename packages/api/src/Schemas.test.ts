@@ -700,6 +700,7 @@ describe("public error statuses", () => {
     [Errors.CampaignNotFound, 404],
     [Errors.EmailAlreadyUsed, 409],
     [Errors.AddressOptedOut, 409],
+    [Errors.ContactChanged, 409],
     [Errors.SendAtNotInFuture, 409],
     [Errors.CampaignStateConflict, 409],
     [Errors.TestAudienceTooLarge, 409],
