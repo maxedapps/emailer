@@ -1,6 +1,6 @@
 # Plan: Fast imports of large contact files
 
-- Status: In progress
+- Status: Done
 - Decision: [ADR-0025](0025-fast-large-imports.md)
 
 ## Goal
@@ -257,7 +257,16 @@ Status: Done on 2026-09-25 on stage `test-import`. The gate imported 40,000 cont
 
 ### T8 — Prod rollout (after merge, with the user's go-ahead)
 
-Status: Not started
+Status: Done on 2026-09-25, with the user's go-ahead, after `fast-import` merged into `main` as `9bf64a3`, which was pushed after the leak check. As run:
+
+- **Preconditions:** the only campaign was a draft.
+- **Plan:** "no changes", since Alchemy compares a function's settings, not its code. The API already held `GetItem`, which the list read needs.
+- **Deploy:** `--force`, and all five functions have a new `CodeSha256`.
+- **Smoke test:**
+  - a three-address simulator CSV imported into a throwaway list;
+  - each member had exactly its row's name and attributes, empty cells left out;
+  - the list and the three contacts were then deleted and read back as not found.
+- **Errors:** no API function error and no failure logged since the deploy.
 
 - Deploy prod as the README describes, and confirm the API function's `CodeSha256` changed.
 - **Smoke test:**
