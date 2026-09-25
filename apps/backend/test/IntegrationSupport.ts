@@ -1,9 +1,6 @@
 /**
- * The one source of configuration, AWS clients and fixtures the integration suites share.
- *
- * It lives outside `src/` so the unit project never picks it up, and outside any one suite so that
- * splitting the suites did not mean three copies of the live storage composition and three
- * different ideas of which simulator address means what.
+ * The one source of configuration, AWS clients and fixtures the live suites share. The deployment
+ * they run against is the one `Live.integration.test.ts` deploys, described by `Deployment`.
  *
  * Automated sends go only to SES mailbox-simulator addresses. `submitToSimulatorList` is the
  * test-side guard: it pages a list and refuses to run the submit if any member is not a simulator
@@ -22,14 +19,17 @@ import type { EmailerClient } from "@emailer/api/Client";
 import * as Schemas from "@emailer/api/Schemas";
 import {
   Config,
+  Context,
   Crypto,
   Duration,
   Effect,
   Layer,
   Option,
   Predicate,
+  Redacted,
   Schedule,
   Schema,
+  Scope,
   Stream,
 } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
@@ -41,7 +41,6 @@ import { audienceOperations } from "../src/storage/Audience.ts";
 import { campaignStoreOperations } from "../src/storage/Campaigns.ts";
 import { feedbackWrites } from "../src/storage/Feedback.ts";
 import { transactionPrimitives, updatePrimitives } from "../src/storage/Primitives.ts";
-import { unsubscribeSigningKey } from "../src/consent/Unsubscribe.ts";
 import { feedbackRedelivery } from "../src/feedback/Feedback.ts";
 import { encodeDispatchMessage } from "../src/sending/Dispatch.ts";
 
@@ -106,25 +105,56 @@ export const simulator = (kind: SimulatorKind, runId: string, n = 0): string => 
   }
 };
 
+/** The stage the live run deployed, and the stack outputs it reads. None of them is a secret. */
+export class Deployment extends Context.Service<
+  Deployment,
+  {
+    readonly stage: string;
+    readonly apiUrl: string;
+    readonly unsubscribeUrl: string;
+    readonly tableName: string;
+    readonly setBounceAlarmName: string;
+  }
+>()("emailer/test/Deployment") {}
+
+/** A function of the deployed stage, named the way `lambdaBasics` names it. */
+const functionName = (name: string) =>
+  Effect.map(Deployment, ({ stage }) => `emailer-${stage}-${name}`);
+
 export const configuration = Effect.gen(function* () {
-  const apiUrl = yield* Config.String("EMAILER_API_URL");
+  const { apiUrl, tableName } = yield* Deployment;
   const token = yield* Config.Redacted("EMAILER_API_TOKEN");
-  const tableName = yield* Config.String("EMAILER_TEST_TABLE_NAME");
-  const dispatchFailuresQueueUrl = yield* Config.String("EMAILER_TEST_DISPATCH_FAILURES_QUEUE_URL");
 
-  return { apiUrl, token, tableName, dispatchFailuresQueueUrl };
+  return { apiUrl, token, tableName };
 });
 
-// Read only where it is needed: both keys are copied out of the deployment, so a
-// run that exercises nothing else should not require them.
+/**
+ * The unsubscribe page's URL and signing key. The key is minted by Alchemy and never a stack output,
+ * which the CLI would print, so it is read from the deployed function's own configuration.
+ */
 export const unsubscribeSettings = Effect.gen(function* () {
-  const baseUrl = yield* Config.String("EMAILER_UNSUBSCRIBE_URL");
-  const signingKey = yield* unsubscribeSigningKey;
+  const { unsubscribeUrl } = yield* Deployment;
+  const getFunctionConfiguration = yield* lambda.getFunctionConfiguration;
 
-  return { baseUrl: baseUrl.replace(/\/+$/, ""), signingKey };
+  const deployed = yield* getFunctionConfiguration({
+    FunctionName: yield* functionName("unsubscribe"),
+  });
+
+  const secret = deployed.Environment?.Variables?.["EMAILER_UNSUBSCRIBE_SECRET"];
+
+  if (secret === undefined) {
+    throw new Error("the deployed unsubscribe function has no signing key");
+  }
+
+  return {
+    baseUrl: unsubscribeUrl.replace(/\/+$/, ""),
+    // The AWS client marks environment values sensitive, and may already hand this one over redacted.
+    signingKey: Redacted.isRedacted(secret) ? secret : Redacted.make(secret),
+  };
 });
 
-const awsClient = Layer.mergeAll(FetchHttpClient.layer, fromChain(), NodeCrypto.layer);
+/** The clients every live test body uses: AWS calls through the credential chain. */
+export const awsClient = Layer.mergeAll(FetchHttpClient.layer, fromChain(), NodeCrypto.layer);
 
 /**
  * Runs `effect` on the first execution and is a no-op after that, including when the first
@@ -533,7 +563,7 @@ export const replayTransactWrite = (request: dynamodb.TransactWriteItemsInput) =
     return yield* transactWriteItems(request);
   });
 
-const dispatcherFunctionName = Config.String("EMAILER_TEST_DISPATCHER_FUNCTION_NAME");
+const dispatcherFunctionName = functionName("dispatcher");
 
 const dispatcherLogGroup = (functionName: string) => `/aws/lambda/${functionName}`;
 
@@ -703,7 +733,7 @@ export const awaitStaleWakeLog = (campaignId: string, runToken: string, sinceMs:
   });
 
 export const rateLimitItem = Effect.gen(function* () {
-  const tableName = yield* Config.String("EMAILER_TEST_TABLE_NAME");
+  const { tableName } = yield* Deployment;
   const getItem = yield* dynamodb.getItem;
 
   const response = yield* getItem({
@@ -717,24 +747,6 @@ export const rateLimitItem = Effect.gen(function* () {
   }
 
   return yield* readRateLimitWindow("rateLimitItem", response.Item);
-});
-
-export const dispatchFailureCount = Effect.gen(function* () {
-  const queueUrl = yield* Config.String("EMAILER_TEST_DISPATCH_FAILURES_QUEUE_URL");
-  const getQueueAttributes = yield* sqs.getQueueAttributes;
-
-  const result = yield* getQueueAttributes({
-    QueueUrl: queueUrl,
-    AttributeNames: ["ApproximateNumberOfMessages"],
-  });
-
-  const raw = result.Attributes?.ApproximateNumberOfMessages;
-
-  if (raw === undefined) {
-    throw new Error("DispatchFailures did not report ApproximateNumberOfMessages");
-  }
-
-  return Number.parseInt(raw, 10);
 });
 
 /** Every capability composed over one live table: what this suite drives, not what any function holds. */
@@ -758,10 +770,14 @@ export const awaitAddressStatus = (storage: LiveStorage, email: string, expected
     }),
   );
 
-export type AwsClient = Layer.Success<typeof awsClient>;
+type AwsClient = Layer.Success<typeof awsClient>;
 
-export const live = <A, E>(use: Effect.Effect<A, E, AwsClient>) =>
-  Effect.runPromise(Effect.provide(use, awsClient));
+/** Registers one live test: a body run against the deployment, with its timeout if it has one. */
+export type LiveTest = <E>(
+  name: string,
+  body: Effect.Effect<void, E, AwsClient | Deployment | Scope.Scope>,
+  timeout?: number,
+) => void;
 
 /** A fresh address nothing else in a run will touch. Never a simulator address. */
 export const uniqueAddress = Effect.map(newIdentifier, (id) => `probe-${id}@example.invalid`);

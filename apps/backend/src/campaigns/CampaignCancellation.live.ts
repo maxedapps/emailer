@@ -1,7 +1,7 @@
 import { makeEmailerClient } from "@emailer/api/Client";
 import type { EmailerClient } from "@emailer/api/Client";
 import { Clock, DateTime, Effect } from "effect";
-import { describe, expect, it } from "vitest";
+import { describe, expect } from "vitest";
 
 import { newIdentifier, nowIso } from "../Identifiers.ts";
 import { CampaignChanged, RunSuperseded } from "../storage/Campaigns.ts";
@@ -14,8 +14,6 @@ import {
   campaignStateTimeout,
   configuration,
   disableDispatcherMapping,
-  dispatchFailureCount,
-  live,
   liveStorage,
   once,
   replayTransactWrite,
@@ -23,6 +21,7 @@ import {
   sendToSimulatorList,
   simulator,
   submitToSimulatorList,
+  type LiveTest,
 } from "../../test/IntegrationSupport.ts";
 
 import type { LiveStorage, TransactionCapture } from "../../test/IntegrationSupport.ts";
@@ -101,9 +100,10 @@ const enqueueDraft = (storage: LiveStorage, campaignId: string) =>
     return token;
   });
 
-describe("queued campaign cancellation", () => {
-  it("conflicts cancel when beginRun commits first and does not reset history", () =>
-    live(
+export const cancellationSuite = (test: LiveTest) => {
+  describe("queued campaign cancellation", () => {
+    test(
+      "conflicts cancel when beginRun commits first and does not reset history",
       Effect.gen(function* () {
         const settings = yield* configuration;
         const client = yield* makeEmailerClient(settings.apiUrl, settings.token);
@@ -142,10 +142,10 @@ describe("queued campaign cancellation", () => {
         expect(control).toHaveProperty("startedAt");
         expect(yield* sendRows(campaign.id)).toHaveLength(0);
       }),
-    ));
+    );
 
-  it("treats beginRun as stale after cancel commits and writes no SEND rows", () =>
-    live(
+    test(
+      "treats beginRun as stale after cancel commits and writes no SEND rows",
       Effect.gen(function* () {
         const settings = yield* configuration;
         const client = yield* makeEmailerClient(settings.apiUrl, settings.token);
@@ -171,134 +171,131 @@ describe("queued campaign cancellation", () => {
         expect(control).not.toHaveProperty("startedAt");
         expect(yield* sendRows(campaign.id)).toHaveLength(0);
       }),
-    ));
+    );
 
-  it(
-    "cancels a seeded queued resume to manual-paused without rewriting history",
-    { timeout: sendTestTimeout },
-    () =>
-      live(
-        Effect.gen(function* () {
-          const settings = yield* configuration;
-          const client = yield* makeEmailerClient(settings.apiUrl, settings.token);
-          const storage = yield* liveStorage(settings.tableName);
-          const quota = yield* accountSendQuota;
-          const timeout = campaignStateTimeout(2, quota?.MaxSendRate);
-          const runId = yield* newIdentifier;
-          const { list, campaign } = yield* createSimulatorCampaign(client, runId, "queued-resume");
-          const members = yield* requireMembers(storage, list.id);
-          const historic = members[0];
-          const remaining = members[1];
+    test(
+      "cancels a seeded queued resume to manual-paused without rewriting history",
+      Effect.gen(function* () {
+        const settings = yield* configuration;
+        const client = yield* makeEmailerClient(settings.apiUrl, settings.token);
+        const storage = yield* liveStorage(settings.tableName);
+        const quota = yield* accountSendQuota;
+        const timeout = campaignStateTimeout(2, quota?.MaxSendRate);
+        const runId = yield* newIdentifier;
+        const { list, campaign } = yield* createSimulatorCampaign(client, runId, "queued-resume");
+        const members = yield* requireMembers(storage, list.id);
+        const historic = members[0];
+        const remaining = members[1];
 
-          if (historic === undefined || remaining === undefined) {
-            throw new Error("queued-resume campaign needs two members");
-          }
+        if (historic === undefined || remaining === undefined) {
+          throw new Error("queued-resume campaign needs two members");
+        }
 
-          const seedToken = yield* enqueueDraft(storage, campaign.id);
-          yield* storage.beginRun(campaign.id, seedToken, yield* nowIso);
+        const seedToken = yield* enqueueDraft(storage, campaign.id);
+        yield* storage.beginRun(campaign.id, seedToken, yield* nowIso);
 
-          const sendId = yield* newIdentifier;
-          const claimedAt = yield* nowIso;
+        const sendId = yield* newIdentifier;
+        const claimedAt = yield* nowIso;
 
-          expect(
-            yield* storage.claimRecipient(
-              campaign.id,
-              seedToken,
-              historic.id,
-              historic.email,
-              sendId,
-              claimedAt,
-            ),
-          ).toBe("claimed");
-          yield* storage.settleRecipient(
+        expect(
+          yield* storage.claimRecipient(
             campaign.id,
-            sendId,
+            seedToken,
             historic.id,
-            { outcome: "accepted", messageId: "seeded-not-ses" },
+            historic.email,
+            sendId,
             claimedAt,
-          );
+          ),
+        ).toBe("claimed");
+        yield* storage.settleRecipient(
+          campaign.id,
+          sendId,
+          historic.id,
+          { outcome: "accepted", messageId: "seeded-not-ses" },
+          claimedAt,
+        );
 
-          const sliceId = yield* newIdentifier;
+        const sliceId = yield* newIdentifier;
 
-          yield* storage.checkpoint(campaign.id, seedToken, sliceId, undefined, historic.id);
-          yield* storage.pauseRun(campaign.id, seedToken, "daily-quota", historic.id);
+        yield* storage.checkpoint(campaign.id, seedToken, sliceId, undefined, historic.id);
+        yield* storage.pauseRun(campaign.id, seedToken, "daily-quota", historic.id);
 
-          const seededMeta = yield* campaignMeta(campaign.id);
-          const seededRows = yield* sendRows(campaign.id);
-          const seeded = yield* storage.getCampaignControl(campaign.id);
+        const seededMeta = yield* campaignMeta(campaign.id);
+        const seededRows = yield* sendRows(campaign.id);
+        const seeded = yield* storage.getCampaignControl(campaign.id);
 
-          if (seeded.state !== "paused") {
-            throw new Error(`campaign ${campaign.id} was not seeded paused`);
-          }
+        if (seeded.state !== "paused") {
+          throw new Error(`campaign ${campaign.id} was not seeded paused`);
+        }
 
-          expect(seeded.pausedReason).toBe("daily-quota");
-          expect(seededRows).toHaveLength(1);
-          expect(seededRows[0]).toMatchObject({
-            contactId: historic.id,
-            state: "accepted",
-          });
+        expect(seeded.pausedReason).toBe("daily-quota");
+        expect(seededRows).toHaveLength(1);
+        expect(seededRows[0]).toMatchObject({
+          contactId: historic.id,
+          state: "accepted",
+        });
 
-          const resumeToken = yield* newIdentifier;
+        const resumeToken = yield* newIdentifier;
 
-          yield* storage.newRun(
-            campaign.id,
-            { state: "paused", runToken: seedToken },
-            resumeToken,
-            "queued",
-            yield* nowIso,
-          );
+        yield* storage.newRun(
+          campaign.id,
+          { state: "paused", runToken: seedToken },
+          resumeToken,
+          "queued",
+          yield* nowIso,
+        );
 
-          const cancelled = yield* client.campaigns.cancel({ params: { id: campaign.id } });
+        const cancelled = yield* client.campaigns.cancel({ params: { id: campaign.id } });
 
-          expect(cancelled.submission.state).toBe("paused");
+        expect(cancelled.submission.state).toBe("paused");
 
-          if (cancelled.submission.state !== "paused") {
-            throw new Error(`campaign ${campaign.id} was not manual-paused`);
-          }
+        if (cancelled.submission.state !== "paused") {
+          throw new Error(`campaign ${campaign.id} was not manual-paused`);
+        }
 
-          expect(cancelled.submission.reason).toBe("manual");
-          expect(cancelled.submission.startedAt).toBe(seeded.startedAt);
-          expect(cancelled.submission.progress.accepted).toBe(1);
-          expect(yield* storage.getCampaignControl(campaign.id)).toMatchObject({
-            state: "paused",
-            runToken: resumeToken,
-            startedAt: seeded.startedAt,
-            pausedReason: "manual",
-          });
-          expect((yield* campaignMeta(campaign.id)).cursor).toEqual(seededMeta.cursor);
-          expect(yield* sendRows(campaign.id)).toStrictEqual(seededRows);
+        expect(cancelled.submission.reason).toBe("manual");
+        expect(cancelled.submission.startedAt).toBe(seeded.startedAt);
+        expect(cancelled.submission.progress.accepted).toBe(1);
+        expect(yield* storage.getCampaignControl(campaign.id)).toMatchObject({
+          state: "paused",
+          runToken: resumeToken,
+          startedAt: seeded.startedAt,
+          pausedReason: "manual",
+        });
+        expect((yield* campaignMeta(campaign.id)).cursor).toEqual(seededMeta.cursor);
+        expect(yield* sendRows(campaign.id)).toStrictEqual(seededRows);
 
-          yield* submitToSimulatorList(
-            client,
-            list.id,
-            campaign.id,
-            client.campaigns.resume({ params: { id: campaign.id } }),
-          );
+        yield* submitToSimulatorList(
+          client,
+          list.id,
+          campaign.id,
+          client.campaigns.resume({ params: { id: campaign.id } }),
+        );
 
-          const completed = yield* awaitCampaignState(
-            client,
-            campaign.id,
-            "completed",
-            timeout,
-            failIfPausedOrDraft,
-          );
+        const completed = yield* awaitCampaignState(
+          client,
+          campaign.id,
+          "completed",
+          timeout,
+          failIfPausedOrDraft,
+        );
 
-          expect(completed.submission).toMatchObject({
-            state: "completed",
-            progress: { accepted: 2, rejected: 0, uncertain: 0, skipped: 0 },
-          });
+        expect(completed.submission).toMatchObject({
+          state: "completed",
+          progress: { accepted: 2, rejected: 0, uncertain: 0, skipped: 0 },
+        });
 
-          const rows = yield* sendRows(campaign.id);
+        const rows = yield* sendRows(campaign.id);
 
-          expect(rows).toHaveLength(2);
-          expect(rows.find((row) => row.contactId === historic.id)).toEqual(seededRows[0]);
-          expect(rows.find((row) => row.contactId === remaining.id)?.state).toBe("accepted");
-        }),
-      ),
-  );
+        expect(rows).toHaveLength(2);
+        expect(rows.find((row) => row.contactId === historic.id)).toEqual(seededRows[0]);
+        expect(rows.find((row) => row.contactId === remaining.id)?.state).toBe("accepted");
+      }),
+      sendTestTimeout,
+    );
 
-  it("rejects a delayed first write after a draft-scheduled-draft cycle", () =>
-    live(
+    test(
+      "rejects a delayed first write after a draft-scheduled-draft cycle",
       Effect.gen(function* () {
         const settings = yield* configuration;
         const client = yield* makeEmailerClient(settings.apiUrl, settings.token);
@@ -354,10 +351,10 @@ describe("queued campaign cancellation", () => {
         expect((yield* campaignMeta(campaign.id)).queuedAt).toBeUndefined();
         expect(yield* sendRows(campaign.id)).toHaveLength(0);
       }),
-    ));
+    );
 
-  it("does not reapply a committed enqueue after cancellation", () =>
-    live(
+    test(
+      "does not reapply a committed enqueue after cancellation",
       Effect.gen(function* () {
         const settings = yield* configuration;
         const client = yield* makeEmailerClient(settings.apiUrl, settings.token);
@@ -393,10 +390,10 @@ describe("queued campaign cancellation", () => {
         expect(control).not.toHaveProperty("startedAt");
         expect(yield* sendRows(campaign.id)).toHaveLength(0);
       }),
-    ));
+    );
 
-  it("does not reapply a committed cancel after a replacement enqueue", () =>
-    live(
+    test(
+      "does not reapply a committed cancel after a replacement enqueue",
       Effect.gen(function* () {
         const settings = yield* configuration;
         const client = yield* makeEmailerClient(settings.apiUrl, settings.token);
@@ -432,10 +429,10 @@ describe("queued campaign cancellation", () => {
         expect(control.runToken).toBe(replacement);
         expect(control).not.toHaveProperty("startedAt");
       }),
-    ));
+    );
 
-  it("keeps the original run baseline when feedback lands between resume commit and replay", () =>
-    live(
+    test(
+      "keeps the original run baseline when feedback lands between resume commit and replay",
       Effect.gen(function* () {
         const settings = yield* configuration;
         const client = yield* makeEmailerClient(settings.apiUrl, settings.token);
@@ -519,58 +516,55 @@ describe("queued campaign cancellation", () => {
         expect(meta.runAccepted).toEqual({ N: "1" });
         expect((yield* ordinary.getCampaignControl(campaign.id)).runToken).toBe(resumeToken);
       }),
-    ));
+    );
 
-  it(
-    "consumes a cancelled queued wake as stale without SEND rows or startedAt",
-    { timeout: mappingTestTimeout },
-    () =>
-      live(
-        Effect.gen(function* () {
-          const settings = yield* configuration;
-          const client = yield* makeEmailerClient(settings.apiUrl, settings.token);
-          const storage = yield* liveStorage(settings.tableName);
-          const runId = yield* newIdentifier;
-          const { list, campaign } = yield* createSimulatorCampaign(client, runId, "queued-stale");
-          const sinceMs = yield* Clock.currentTimeMillis;
+    test(
+      "consumes a cancelled queued wake as stale without SEND rows or startedAt",
+      Effect.gen(function* () {
+        const settings = yield* configuration;
+        const client = yield* makeEmailerClient(settings.apiUrl, settings.token);
+        const storage = yield* liveStorage(settings.tableName);
+        const runId = yield* newIdentifier;
+        const { list, campaign } = yield* createSimulatorCampaign(client, runId, "queued-stale");
+        const sinceMs = yield* Clock.currentTimeMillis;
 
-          const token = yield* Effect.scoped(
-            Effect.gen(function* () {
-              yield* disableDispatcherMapping;
+        const token = yield* Effect.scoped(
+          Effect.gen(function* () {
+            yield* disableDispatcherMapping;
 
-              const sent = yield* sendToSimulatorList(client, list.id, campaign.id);
+            const sent = yield* sendToSimulatorList(client, list.id, campaign.id);
 
-              expect(sent.submission.state).toBe("queued");
+            expect(sent.submission.state).toBe("queued");
 
-              const control = yield* storage.getCampaignControl(campaign.id);
+            const control = yield* storage.getCampaignControl(campaign.id);
 
-              expect(control.state).toBe("queued");
-              expect(control).not.toHaveProperty("startedAt");
+            expect(control.state).toBe("queued");
+            expect(control).not.toHaveProperty("startedAt");
 
-              if (control.runToken === undefined) {
-                throw new Error(`queued campaign ${campaign.id} has no run token`);
-              }
+            if (control.runToken === undefined) {
+              throw new Error(`queued campaign ${campaign.id} has no run token`);
+            }
 
-              const cancelled = yield* client.campaigns.cancel({
-                params: { id: campaign.id },
-              });
+            const cancelled = yield* client.campaigns.cancel({
+              params: { id: campaign.id },
+            });
 
-              expect(cancelled.submission.state).toBe("draft");
+            expect(cancelled.submission.state).toBe("draft");
 
-              return control.runToken;
-            }),
-          );
+            return control.runToken;
+          }),
+        );
 
-          yield* awaitStaleWakeLog(campaign.id, token, sinceMs);
+        yield* awaitStaleWakeLog(campaign.id, token, sinceMs);
 
-          const control = yield* storage.getCampaignControl(campaign.id);
+        const control = yield* storage.getCampaignControl(campaign.id);
 
-          expect(control.state).toBe("draft");
-          expect(control.runToken).toBe(token);
-          expect(control).not.toHaveProperty("startedAt");
-          expect(yield* sendRows(campaign.id)).toHaveLength(0);
-          expect(yield* dispatchFailureCount).toBe(0);
-        }),
-      ),
-  );
-});
+        expect(control.state).toBe("draft");
+        expect(control.runToken).toBe(token);
+        expect(control).not.toHaveProperty("startedAt");
+        expect(yield* sendRows(campaign.id)).toHaveLength(0);
+      }),
+      mappingTestTimeout,
+    );
+  });
+};

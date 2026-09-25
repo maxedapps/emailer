@@ -13,6 +13,7 @@ import FeedbackFunction, {
 } from "./apps/backend/src/feedback/Feedback.ts";
 import { feedbackPublishing } from "./apps/backend/src/sending/Mailer.ts";
 import { alertsTopic, reputationAlarms } from "./apps/backend/src/sending/Reputation.ts";
+import { dataTable } from "./apps/backend/src/storage/Table.ts";
 import { UnsubscribeFunction } from "./apps/backend/src/consent/Unsubscribe.ts";
 import UnsubscribePage from "./apps/backend/src/consent/UnsubscribePage.ts";
 import { awsProviders } from "./stacks/providers.ts";
@@ -39,7 +40,8 @@ export default Stack(
     yield* feedbackRouting;
 
     const topic = yield* alertsTopic;
-    yield* reputationAlarms;
+    const [setBounceRate] = yield* reputationAlarms;
+    const table = yield* dataTable;
 
     const alertEmail = yield* Config.option(Config.String("EMAILER_ALERT_EMAIL"));
 
@@ -56,6 +58,9 @@ export default Stack(
       unsubscribeUrl: unsubscribe.functionUrl,
       previewUrl: preview.functionUrl,
       alertsTopicArn: topic.topicArn,
+      // For the live suite, which deploys this stack itself.
+      tableName: table.tableName,
+      setBounceAlarmName: setBounceRate.alarmName,
     };
   }).pipe(
     // The public functions are declared as bare tags so the API's and the Dispatcher's props can

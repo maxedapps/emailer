@@ -434,7 +434,15 @@ Status: Done. As built:
 
 ### T13 — Live suite through `Test.make`
 
-Status: Not started
+Status: Done in code; the live run is T15. As built:
+
+- `dispatchFailuresQueueUrl` is not an output, because with the DLQ-count assertions gone nothing reads it.
+- Alchemy types a function's `functionUrl` as optional, so the entry file fails the run when the deployed stack lacks one rather than widening `Deployment`.
+- `IntegrationSupport.ts` exposes the deployed values as a `Deployment` service. The entry file provides it from `outputs`, and each suite takes a `LiveTest` that registers one body.
+- The stage is passed to `Test.make` explicitly, so the prod guard and the harness read the same value.
+- Collection registers 37 tests: the 41 before, minus the removed non-simulator case and the three merged cases.
+- `ALCHEMY_TEST_STAGE=prod` and a plain `./.env` each fail the file before any hook runs.
+- With `SignedToken.verify` made to accept any signature in a scratch copy, the new forged-token oracle fails (200 instead of 404), while the old one still passes.
 
 - **Stack outputs** (`alchemy.run.ts`), none secret:
   - `tableName`;

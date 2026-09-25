@@ -70,7 +70,7 @@ Nothing is manual outside the CLI when `EMAILER_DNS` manages your zone, except a
 
 Copy `.env.example` to an untracked `.env.prod` and fill it in. Alchemy reads the file you pass with `--env-file`, and the CLI reads `.env.prod` (see [Use](#use)). Neither interpolates `$OTHER` inside it.
 
-Do not keep a plain `.env` in the repository root. Alchemy's test harness reads `./.env` as a fallback for every key the test environment lacks, so its values would reach test deploys.
+Do not keep a plain `.env` in the repository root. Alchemy's test harness reads `./.env` as a fallback for every key the test environment lacks, so its values would reach test deploys; the live suite refuses to start while one exists.
 
 | Variable                     | Required | Purpose                                                                                                                                                                                                                               |
 | ---------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -88,8 +88,6 @@ Do not keep a plain `.env` in the repository root. Alchemy's test harness reads 
 | `AWS_PROFILE`                | deploy   | AWS CLI/SSO profile. Leave unset if you export credentials into the environment.                                                                                                                                                      |
 
 Do not set `EMAILER_UNSUBSCRIBE_SECRET` or `EMAILER_PREVIEW_SECRET`. Alchemy mints both, binds them into the functions, and **rotates them when the stage is destroyed**, which invalidates every unsubscribe link already sent and every preview link.
-
-`.env.example` also lists `EMAILER_TEST_*`, `EMAILER_UNSUBSCRIBE_URL` and `EMAILER_UNSUBSCRIBE_SECRET`. Those are for the live integration suite only, not for operating the service ([Develop and test](#develop-and-test)).
 
 ## One-time setup
 
@@ -437,24 +435,23 @@ The account suppression list survives `alchemy destroy`. A test run can leave `s
 
 `pnpm check` checks formatting, runs lint (including unused-suppression reporting), knip (unused files, exports and dependencies), typecheck, the unit tests and an import probe.
 
-The live integration suite runs against an ephemeral stage. Automated sends go only to SES mailbox-simulator addresses. One case temporarily disables the stage's dispatcher event-source mapping, so never point the suite at a real stage.
+The live integration suite deploys its own stage, runs against it, and destroys it. Automated sends go only to SES mailbox-simulator addresses. One case temporarily disables the stage's dispatcher event-source mapping, so the suite refuses to run as `prod`.
 
-1. Deploy a throwaway stage with `.env.test`, which holds the same deploy keys as `.env.prod` (API token, sender identity, From address, postal address, Region) plus the test keys:
-
-   ```sh
-   pnpm exec alchemy deploy --config alchemy.run.ts --stage test --env-file .env.test --profile emailer --yes --no-input
-   ```
-
-2. Point `.env.test` at that stage's values:
-   - `EMAILER_API_URL` and `EMAILER_UNSUBSCRIBE_URL`: the `apiUrl` and `unsubscribeUrl` outputs.
-   - `EMAILER_UNSUBSCRIBE_SECRET`: read from the unsubscribe function's environment (`aws lambda get-function-configuration --function-name emailer-test-unsubscribe --query Environment.Variables.EMAILER_UNSUBSCRIBE_SECRET --output text`).
-   - `EMAILER_TEST_TABLE_NAME`, `EMAILER_TEST_DISPATCH_FAILURES_QUEUE_URL`, `EMAILER_TEST_DISPATCHER_FUNCTION_NAME` and `EMAILER_TEST_SET_BOUNCE_ALARM`: from the deploy's resource inventory.
-3. Run `pnpm test:integration`. It loads `.env.test` itself.
-4. Destroy the stage:
+1. Fill `.env.test` with the deploy keys `.env.prod` holds (API token, sender identity, From address, postal address, Region). Nothing is copied out of a deployment.
+2. Export CLI credentials and the Region, because the test bodies call AWS through the SDK's default chain, which cannot read an SSO cache:
 
    ```sh
-   pnpm exec alchemy destroy --config alchemy.run.ts --stage test --env-file .env.test --profile emailer --yes --no-input
+   eval "$(aws configure export-credentials --profile <profile> --format env)"
+   export AWS_REGION=<the Region in .env.test>
    ```
+
+3. Run `pnpm test:integration`. It loads `.env.test` and deploys the stage `test_<user>`; set `ALCHEMY_TEST_STAGE` to pick another. Add `-t "<suite name>"` to run one suite.
+
+A killed run leaves its stage deployed. Destroy it by hand:
+
+```sh
+pnpm exec alchemy destroy --config alchemy.run.ts --stage <stage> --env-file .env.test --yes --no-input
+```
 
 ## License and credits
 
