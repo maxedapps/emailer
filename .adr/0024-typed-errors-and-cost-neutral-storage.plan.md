@@ -1,6 +1,6 @@
 # Plan: Typed errors, one item codec and cost-neutral storage
 
-- Status: In progress
+- Status: Done
 - Decision: [ADR-0024](0024-typed-errors-and-cost-neutral-storage.md)
 
 ## Goal
@@ -337,7 +337,7 @@ Status: Done. As built:
 - **BatchGetItem's unprocessed keys** fail with `UnprocessedKeys` and retry with `Schedule.exponential("100 millis")`, jittered, `upTo({ times: 3 })`. The hand-written loop and its jitter maths go; the operation deadline stays.
 - **One AWS retry layer** provides the client's `Retry` policy.
   - It is built from the client's own default factory (`Retry.makeDefault`), which honours server retry-after hints and waits at least 500 ms after a throttle.
-  - Its schedule is only capped with `Schedule.upTo({ duration: "4 seconds" })`, so it ends inside the 5 s operation timeout.
+  - Its schedule is only capped, so it ends inside the 5 s operation timeout: it stops when the next delay would end past 4 s (`Schedule.while`, as built above).
   - It goes in every Lambda's services, and the mailer overrides it with `Retry.none`.
   - This wiring is untested; the transport test below verifies it.
 
@@ -438,7 +438,14 @@ Status: Done on 2026-09-24. On the ephemeral stage `test`, 16 imports in flight 
 
 ### T11 — Prod rollout (after merge, with the user's go-ahead)
 
-Status: Not started
+Status: Done on 2026-09-25, with the user's go-ahead, after PR #8 merged as `7a223a5`. As run:
+
+- **Preconditions:** the only campaign was a draft, and the dispatch, feedback and both failure queues were empty.
+- **Before the deploy:** the prod plan showed four updates (the SES event destination, the feedback rule, the feedback and unsubscribe functions) and the unsubscribe and feedback bindings moving from `PutItem` to `UpdateItem`, with nothing replaced or deleted. Pass 1 merged 1 of 1 old rows, an `UNSUBSCRIBE#` row; prod held no `SUPPRESSION#` rows.
+- **Deploy:** `--force`; all five functions have a new `CodeSha256`. The event destination matches `BOUNCE` and `COMPLAINT` only, and the rule no longer routes delays.
+- **After five minutes:** pass 2 found the same row and changed nothing, `--verify` found none unmerged, and `--delete-old` deleted 1. Only the `ADDRESS#` item remains.
+- **Spot-check:** the opted-out address read `unsubscribed` before the deploy, after it and after the delete. Prod has no suppressed address, so that half of the check did not apply. Lists, contacts and campaigns answered through the new code, and no function logged a failure.
+- **Cleanup:** this commit deletes the migration script, its test and its knip entry, and the README's upgrade section.
 
 - **Preconditions:**
   - no campaign is `sending`, `queued` or `scheduled`;

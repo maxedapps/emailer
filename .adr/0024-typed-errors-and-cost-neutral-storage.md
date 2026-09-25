@@ -69,7 +69,7 @@
    - Existing rows move over in a verified one-off migration.
 6. **Retries are Schedules.**
    - The dispatcher's throttle backoff and the batch-read retry become `Effect.retry` with a Schedule.
-   - The AWS client keeps its own default policy, which honours server retry hints and waits at least 500 ms after a throttle. It is only capped, with `Schedule.upTo`, so that it ends inside the 5 s operation timeout and the real AWS error surfaces instead of `TimeoutError`.
+   - The AWS client keeps its own default policy, which honours server retry hints and waits at least 500 ms after a throttle. It is only capped, with `Schedule.while` on the elapsed time plus the next delay, so that it ends inside the 5 s operation timeout and the real AWS error surfaces instead of `TimeoutError`.
 7. **The contract drops the hand-written 413 check.** Field-size limits already answer an oversized body with 400.
 8. **SES delivery-delay events are no longer subscribed; the feedback queue stays.**
 
