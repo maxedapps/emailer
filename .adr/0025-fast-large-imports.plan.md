@@ -82,7 +82,11 @@ Status: Done. As built: the entry schema is exported in T5, its first user outsi
 
 ### T3 — Per-request deadline and transient retries in the CLI client
 
-Status: Not started
+Status: Done. As built:
+
+- **The deadline** is an `HttpClient.transform`. A request past it fails as a `TransportError`, which keeps the client's error type and is what `retryTransient` treats as transient.
+- **The transform** reaches the client through `makeEmailerClient`'s new optional `transformClient`, which is passed to `HttpApiClient.make`.
+- **The deadline bounds** the wait for a response's headers. The API function answers buffered, so the body follows at once.
 
 - **Where:** `apps/cli/src/Client.ts`.
 - **Deadline:**
