@@ -180,7 +180,7 @@ Status: Done. As built:
 
 ### T6 — Docs and ADRs
 
-Status: Not started
+Status: Done. As built: nothing in the implementation departs from ADR-0025's decision, so the record needed no as-built notes. The commands table names the file generically (`--file <file>`).
 
 - **README:**
   - drop "An import takes at most 20 contacts per call, so a larger file needs a loop.";
