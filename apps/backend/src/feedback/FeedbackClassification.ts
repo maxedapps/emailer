@@ -37,16 +37,6 @@ export const EmailEvent = Schema.Union([
       complaintSubType: Schema.optional(Schema.NullOr(Schema.String)),
     }),
   }),
-  Schema.Struct({
-    eventType: Schema.Literal("DeliveryDelay"),
-    mail: Mail,
-    deliveryDelay: Schema.Struct({
-      delayType: Schema.String,
-      delayedRecipients: Schema.Array(Recipient),
-      expirationTime: Schema.optionalKey(Schema.String),
-      timestamp: Schema.String,
-    }),
-  }),
 ]);
 
 export type EmailEvent = typeof EmailEvent.Type;
@@ -122,7 +112,7 @@ const decisions: Record<FeedbackClassification, Decision> = {
   },
 };
 
-interface ClassifiedFeedback extends Decision {
+export interface Classified extends Decision {
   readonly kind: Schemas.SuppressionReason;
   readonly feedbackId: string;
   readonly recipients: ReadonlyArray<string>;
@@ -131,15 +121,6 @@ interface ClassifiedFeedback extends Decision {
   readonly complaintFeedbackType?: string | undefined;
   readonly complaintSubType?: string | undefined;
 }
-
-interface ClassifiedDelay {
-  readonly classification: "delay";
-  readonly recipients: ReadonlyArray<string>;
-  readonly delayType: string;
-  readonly expirationTime?: string | undefined;
-}
-
-export type Classified = ClassifiedFeedback | ClassifiedDelay;
 
 const orUndefined = (value: string | null | undefined): string | undefined => value ?? undefined;
 
@@ -168,14 +149,6 @@ const classifyComplaint = (
 
 export const classify = (event: EmailEvent): Classified => {
   switch (event.eventType) {
-    case "DeliveryDelay":
-      return {
-        classification: "delay",
-        recipients: event.deliveryDelay.delayedRecipients.map((it) => it.emailAddress),
-        delayType: event.deliveryDelay.delayType,
-        expirationTime: event.deliveryDelay.expirationTime,
-      };
-
     case "Bounce": {
       const bounceSubType = orUndefined(event.bounce.bounceSubType);
 

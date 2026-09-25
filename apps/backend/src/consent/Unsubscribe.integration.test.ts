@@ -1,5 +1,5 @@
 import { makeEmailerClient } from "@emailer/api/Client";
-import * as Schemas from "@emailer/api/Schemas";
+import * as Errors from "@emailer/api/Errors";
 import { Effect, Redacted, Result } from "effect";
 import { describe, expect, it } from "vitest";
 
@@ -95,7 +95,7 @@ describe("one-click unsubscribe", () => {
           );
 
           expect(Result.isFailure(moved) && moved.failure).toStrictEqual(
-            new Schemas.AddressOptedOut({ email: address }),
+            new Errors.AddressOptedOut({ email: address }),
           );
 
           const second = yield* client.campaigns.create({
@@ -209,7 +209,7 @@ describe("one-click unsubscribe", () => {
 
         expect(
           yield* Effect.flip(storage.updateContact(contactId, { email: elsewhere })),
-        ).toStrictEqual(new Schemas.AddressOptedOut({ email: address }));
+        ).toStrictEqual(new Errors.AddressOptedOut({ email: address }));
         expect(yield* storage.addressStatus(elsewhere)).toBe("mailable");
       }),
     ));

@@ -1,9 +1,9 @@
 import { Duration, Effect, Layer, Option } from "effect";
 import { HttpRouter, HttpServerResponse } from "effect/unstable/http";
 
-import { reportedAndFatal } from "../Diagnostics.ts";
 import { nowIso } from "../Identifiers.ts";
-import { lambdaBasics } from "../Lambda.ts";
+import { FunctionServicesLive, lambdaBasics } from "../Lambda.ts";
+import { respondingToFailures } from "../Reporting.ts";
 import { UnsubscribeStore, UnsubscribeStoreLive } from "../storage/Unsubscribe.ts";
 import {
   UnsubscribeFunction,
@@ -61,7 +61,7 @@ const offerOptOut = HttpRouter.add(
     const signingKey = yield* unsubscribeSigningKey;
 
     return Option.isNone(verifyToken(signingKey, yield* tokenOf)) ? notFound : confirmation;
-  }).pipe(Effect.orDie),
+  }),
 );
 
 const recordOptOut = HttpRouter.add(
@@ -95,18 +95,14 @@ const recordOptOut = HttpRouter.add(
     // The mailbox is the whole payload, so it is what must not be logged.
     yield* Effect.logInfo("unsubscribe honoured");
 
-    return confirmed;
-  }).pipe(
     // No storage or configuration failure is turned into a page. A provider
     // treats a 2xx from the one-click POST as the opt-out being honoured and
     // does not retry, so claiming success without a durable write would turn a
     // transient fault into a permanent one on the single interaction the
-    // recipient gets. The boundary records what failed and why — safely, without
-    // the mailbox — and the failure still ends the invocation: as a defect it
-    // becomes an empty 500 through Alchemy's safeHttpEffect, and the router's own
-    // RouteNotFound, raised outside this handler, still renders its 404.
-    reportedAndFatal,
-  ),
+    // recipient gets. A failure reaches the boundary instead, which reports it
+    // without the mailbox and answers an empty 500.
+    return confirmed;
+  }),
 );
 
 // The router's default parameter cap is 100 characters and the token is longer
@@ -119,7 +115,7 @@ const routerConfig = Layer.succeed(HttpRouter.RouterConfig)({ maxParamLength: ma
 /** Built once, like the API's: an invocation answers a request, it does not assemble a router. */
 export const makeUnsubscribeHandler = HttpRouter.toHttpEffect(
   Layer.mergeAll(offerOptOut, recordOptOut),
-).pipe(Effect.provide(routerConfig));
+).pipe(Effect.map(respondingToFailures), Effect.provide(routerConfig));
 
 const unsubscribeProps = Effect.gen(function* () {
   const { logGroupName, ...basics } = yield* lambdaBasics("Unsubscribe", "unsubscribe");
@@ -149,7 +145,7 @@ const unsubscribeProps = Effect.gen(function* () {
 export default UnsubscribeFunction.make(
   unsubscribeProps,
   Effect.gen(function* () {
-    const services = yield* Layer.build(UnsubscribeStoreLive);
+    const services = yield* Layer.build(Layer.mergeAll(UnsubscribeStoreLive, FunctionServicesLive));
 
     return { fetch: Effect.provideContext(yield* makeUnsubscribeHandler, services) };
   }),

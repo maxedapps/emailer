@@ -1,15 +1,8 @@
+import { ListNotFound } from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
-import { Effect, Schema, Struct } from "effect";
+import { Effect } from "effect";
 
-import { corrupt } from "./Errors.ts";
-import {
-  attributeOf,
-  listingAttributes,
-  num,
-  recordVersion,
-  str,
-  StoredVersionAttribute,
-} from "./Items.ts";
+import { itemReader, itemWriter, listingAttributes, str } from "./Items.ts";
 
 import type {
   PagePrimitives,
@@ -23,14 +16,9 @@ const listKind = "list";
 
 export const listKey = (listId: string) => ({ pk: str(`LIST#${listId}`), sk: str("META") });
 
-const StoredList = Schema.Struct({
-  v: StoredVersionAttribute,
-  id: attributeOf(Schemas.EntityId),
-  name: attributeOf(Schemas.EntityName),
-  createdAt: attributeOf(Schemas.Timestamp),
-});
+const readList = itemReader(Schemas.ContactList);
 
-const decodeStoredList = Schema.decodeUnknownEffect(StoredList);
+const writeList = itemWriter(Schemas.ContactList);
 
 export const listOperations = (
   primitives: ReadPrimitives & WritePrimitives & UpdatePrimitives & PagePrimitives,
@@ -38,27 +26,22 @@ export const listOperations = (
   const { readEntityPage, readItem, recordOnce, updateIf } = primitives;
 
   // A fresh identifier as the key: an item already there is this request landing again.
-  const createList = Effect.fn("Storage.createList")((list: Schemas.ContactList) =>
-    recordOnce("createList", {
+  const createList = Effect.fn("Storage.createList")(function* (list: Schemas.ContactList) {
+    yield* recordOnce("createList", {
       ...listKey(list.id),
       ...listingAttributes(listKind, list.createdAt, list.id),
-      v: num(recordVersion),
-      id: str(list.id),
-      name: str(list.name),
-      createdAt: str(list.createdAt),
-    }),
-  );
+      ...(yield* writeList(list)),
+    });
+  });
 
   const getList = Effect.fn("Storage.getList")(function* (listId: string) {
     const response = yield* readItem("getList", listKey(listId));
 
     if (response.Item === undefined) {
-      return yield* new Schemas.NotFound({ entity: "list" });
+      return yield* new ListNotFound();
     }
 
-    const stored = yield* decodeStoredList(response.Item).pipe(Effect.mapError(corrupt("getList")));
-
-    return Struct.omit(stored, ["v"]);
+    return yield* readList("getList", response.Item);
   });
 
   const listLists = Effect.fn("Storage.listLists")(function* (
@@ -67,12 +50,7 @@ export const listOperations = (
   ) {
     const page = yield* readEntityPage("listLists", listKind, listKey, limit, cursor);
 
-    const lists = yield* Effect.forEach(page.items, (item) =>
-      decodeStoredList(item).pipe(
-        Effect.mapError(corrupt("listLists")),
-        Effect.map((stored) => Struct.omit(stored, ["v"])),
-      ),
-    );
+    const lists = yield* Effect.forEach(page.items, (item) => readList("listLists", item));
 
     return { ...page, items: lists } satisfies StoredPage<Schemas.ContactList, string>;
   });
@@ -83,24 +61,20 @@ export const listOperations = (
    * failed condition means the list is not there.
    */
   const renameList = Effect.fn("Storage.renameList")(function* (listId: string, name: string) {
-    const outcome = yield* updateIf("renameList", {
-      Key: listKey(listId),
-      UpdateExpression: "SET #name = :name",
-      ConditionExpression: "attribute_exists(pk)",
-      ExpressionAttributeNames: { "#name": "name" },
-      ExpressionAttributeValues: { ":name": str(name) },
-      ReturnValues: "ALL_NEW",
-    });
-
-    if (!outcome.applied) {
-      return yield* new Schemas.NotFound({ entity: "list" });
-    }
-
-    const stored = yield* decodeStoredList(outcome.attributes).pipe(
-      Effect.mapError(corrupt("renameList")),
+    const renamed = yield* updateIf(
+      "renameList",
+      {
+        Key: listKey(listId),
+        UpdateExpression: "SET #name = :name",
+        ConditionExpression: "attribute_exists(pk)",
+        ExpressionAttributeNames: { "#name": "name" },
+        ExpressionAttributeValues: { ":name": str(name) },
+        ReturnValues: "ALL_NEW",
+      },
+      () => new ListNotFound(),
     );
 
-    return Struct.omit(stored, ["v"]);
+    return yield* readList("renameList", renamed);
   });
 
   return { createList, getList, listLists, renameList } as const;

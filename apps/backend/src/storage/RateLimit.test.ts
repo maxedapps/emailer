@@ -21,9 +21,13 @@ const refillRate = Duration.millis(1000);
 
 const extend = 1000;
 
+/** The whole window item, as `ALL_NEW` returns it. */
 const windowAttributes = (count: number, expiresAt: number) =>
   Effect.succeed({
     Attributes: {
+      pk: { S: `RATELIMIT#${key}` },
+      sk: { S: "RATELIMIT" },
+      v: num(1),
       count: num(count),
       expiresAt: num(expiresAt),
     },
@@ -58,7 +62,7 @@ const commonPath = {
     ":extend": num(extend),
     ":version": num(1),
   },
-  ReturnValues: "UPDATED_NEW",
+  ReturnValues: "ALL_NEW",
 } as const;
 
 describe("fixedWindow", () => {
@@ -103,7 +107,7 @@ describe("fixedWindow", () => {
           ":now": num(now),
           ":nowPlusExtend": num(now + extend),
         },
-        ReturnValues: "UPDATED_NEW",
+        ReturnValues: "ALL_NEW",
       });
     }),
   );

@@ -1,17 +1,19 @@
-import * as Schemas from "@emailer/api/Schemas";
+import * as Errors from "@emailer/api/Errors";
 import { Effect, Struct } from "effect";
 import { describe, expect, it } from "@effect/vitest";
 
+import { CorruptItem } from "../Errors.ts";
 import { tableLogicalId } from "./Items.ts";
 import { contactOperations } from "./Contacts.ts";
+import { UnexpectedCondition } from "./Primitives.ts";
 import {
   cancelled,
   contactId,
   createdAt,
-  failureOf,
+  defectOf,
+  primitivesFor,
   scriptedTable,
   serverError,
-  primitivesFor,
 } from "./Testing.ts";
 
 import type { Table } from "./Testing.ts";
@@ -136,17 +138,19 @@ describe("createContact", () => {
         transactWriteItems: [cancelled("None", "ConditionalCheckFailed")],
       });
 
-      expect(yield* Effect.flip(run)).toStrictEqual(new Schemas.EmailAlreadyUsed({ email }));
+      expect(yield* Effect.flip(run)).toStrictEqual(new Errors.EmailAlreadyUsed({ email }));
     }),
   );
 
-  it.effect("keeps a colliding identifier on the failure channel, where it is not an answer", () =>
+  it.effect("dies on a colliding identifier, which a fresh identifier cannot be", () =>
     Effect.gen(function* () {
       const { run } = create({
         transactWriteItems: [cancelled("ConditionalCheckFailed", "None")],
       });
 
-      expect(failureOf(yield* Effect.result(run)).reason).toBe("unavailable");
+      expect(yield* defectOf(run)).toStrictEqual(
+        new UnexpectedCondition({ operation: "createContact" }),
+      );
     }),
   );
 
@@ -156,10 +160,10 @@ describe("createContact", () => {
 
       // Captured once: the stub serves replies by call order, so running the same effect twice
       // would take the default reply and report a success that never happened.
-      const attempt = yield* Effect.result(run);
+      const failure = yield* Effect.flip(run);
 
-      expect(failureOf(attempt).reason).toBe("unavailable");
-      expect(failureOf(attempt).operationId).toBe("createContact");
+      expect(failure).toBeInstanceOf(Errors.StorageUnavailable);
+      expect(failure).toMatchObject({ operation: "createContact" });
     }),
   );
 });
@@ -200,7 +204,7 @@ describe("getContact", () => {
       const storage = operationsFor(scriptedTable({}));
 
       expect(yield* Effect.flip(storage.getContact(contactId))).toStrictEqual(
-        new Schemas.NotFound({ entity: "contact" }),
+        new Errors.ContactNotFound(),
       );
     }),
   );
@@ -213,9 +217,9 @@ describe("getContact", () => {
 
       const storage = operationsFor(table);
 
-      const attempt = yield* Effect.result(storage.getContact(contactId));
+      const defect = yield* defectOf(storage.getContact(contactId));
 
-      expect(failureOf(attempt).reason).toBe("corrupt");
+      expect(defect).toStrictEqual(new CorruptItem({ operation: "getContact" }));
     }),
   );
 
@@ -227,7 +231,9 @@ describe("getContact", () => {
 
       const storage = operationsFor(table);
 
-      expect(failureOf(yield* Effect.result(storage.getContact(contactId))).reason).toBe("corrupt");
+      expect(yield* defectOf(storage.getContact(contactId))).toStrictEqual(
+        new CorruptItem({ operation: "getContact" }),
+      );
     }),
   );
 });
@@ -258,7 +264,7 @@ describe("getContactByEmail", () => {
       const table = scriptedTable({});
 
       expect(yield* Effect.flip(operationsFor(table).getContactByEmail(email))).toStrictEqual(
-        new Schemas.NotFound({ entity: "contact" }),
+        new Errors.ContactNotFound(),
       );
       expect(table.getItemRequests).toHaveLength(1);
     }),
@@ -271,7 +277,7 @@ describe("getContactByEmail", () => {
       });
 
       expect(yield* Effect.flip(operationsFor(table).getContactByEmail(email))).toStrictEqual(
-        new Schemas.NotFound({ entity: "contact" }),
+        new Errors.ContactNotFound(),
       );
     }),
   );
@@ -286,7 +292,7 @@ describe("getContactByEmail", () => {
       });
 
       expect(yield* Effect.flip(operationsFor(table).getContactByEmail(email))).toStrictEqual(
-        new Schemas.NotFound({ entity: "contact" }),
+        new Errors.ContactNotFound(),
       );
     }),
   );
@@ -297,9 +303,9 @@ describe("getContactByEmail", () => {
         getItem: [Effect.succeed({ Item: { pk: { S: `EMAIL#${email}` }, sk: { S: "META" } } })],
       });
 
-      const attempt = yield* Effect.result(operationsFor(table).getContactByEmail(email));
+      const defect = yield* defectOf(operationsFor(table).getContactByEmail(email));
 
-      expect(failureOf(attempt).reason).toBe("corrupt");
+      expect(defect).toStrictEqual(new CorruptItem({ operation: "getContactByEmail" }));
     }),
   );
 });
@@ -327,7 +333,7 @@ describe("updateContact", () => {
     Effect.gen(function* () {
       const { table, run } = update({}, { name: "Maxi" });
 
-      expect(yield* Effect.flip(run)).toStrictEqual(new Schemas.NotFound({ entity: "contact" }));
+      expect(yield* Effect.flip(run)).toStrictEqual(new Errors.ContactNotFound());
       expect(table.transactionRequests).toStrictEqual([]);
     }),
   );
@@ -457,8 +463,8 @@ describe("updateContact", () => {
               {
                 ConditionCheck: {
                   Table: tableLogicalId,
-                  Key: { pk: { S: `UNSUBSCRIBE#${email}` }, sk: { S: "UNSUBSCRIBE" } },
-                  ConditionExpression: "attribute_not_exists(pk)",
+                  Key: { pk: { S: `ADDRESS#${email}` }, sk: { S: "ADDRESS" } },
+                  ConditionExpression: "attribute_not_exists(unsubscribedAt)",
                 },
               },
               {
@@ -485,14 +491,34 @@ describe("updateContact", () => {
       }),
   );
 
-  it.effect("keeps an update that lost a race on the same mailbox on the failure channel", () =>
+  it.effect("retries an update that lost a race from a fresh read", () =>
     Effect.gen(function* () {
-      const { run } = update(
-        { ...found, transactWriteItems: [cancelled("ConditionalCheckFailed")] },
+      const { table, run } = update(
+        {
+          getItem: [Effect.succeed({ Item: contactItem }), Effect.succeed({ Item: contactItem })],
+          transactWriteItems: [cancelled("ConditionalCheckFailed")],
+        },
         { name: "Maxi" },
       );
 
-      expect(failureOf(yield* Effect.result(run)).reason).toBe("unavailable");
+      expect((yield* run).name).toBe("Maxi");
+      expect(table.getItemRequests).toHaveLength(2);
+      expect(table.transactionRequests).toHaveLength(2);
+    }),
+  );
+
+  it.effect("answers ContactChanged when the contact keeps changing", () =>
+    Effect.gen(function* () {
+      const read = Effect.succeed({ Item: contactItem });
+      const lost = cancelled("ConditionalCheckFailed");
+
+      const { table, run } = update(
+        { getItem: [read, read, read], transactWriteItems: [lost, lost, lost] },
+        { name: "Maxi" },
+      );
+
+      expect(yield* Effect.flip(run)).toStrictEqual(new Errors.ContactChanged());
+      expect(table.transactionRequests).toHaveLength(3);
     }),
   );
 
@@ -507,7 +533,7 @@ describe("updateContact", () => {
       );
 
       expect(yield* Effect.flip(run)).toStrictEqual(
-        new Schemas.EmailAlreadyUsed({ email: "new@example.com" }),
+        new Errors.EmailAlreadyUsed({ email: "new@example.com" }),
       );
     }),
   );
@@ -524,7 +550,7 @@ describe("updateContact", () => {
           { email: "new@example.com" },
         );
 
-        expect(yield* Effect.flip(run)).toStrictEqual(new Schemas.AddressOptedOut({ email }));
+        expect(yield* Effect.flip(run)).toStrictEqual(new Errors.AddressOptedOut({ email }));
       }),
   );
 
@@ -540,21 +566,21 @@ describe("updateContact", () => {
         { email: "new@example.com" },
       );
 
-      expect(yield* Effect.flip(run)).toStrictEqual(new Schemas.AddressOptedOut({ email }));
+      expect(yield* Effect.flip(run)).toStrictEqual(new Errors.AddressOptedOut({ email }));
     }),
   );
 
-  it.effect("keeps a contact changed underneath the read on the failure channel", () =>
+  it.effect("lets a lost race decide over the address checks computed from the stale read", () =>
     Effect.gen(function* () {
+      const read = Effect.succeed({ Item: contactItem });
+      const lost = cancelled("ConditionalCheckFailed", "ConditionalCheckFailed", "None", "None");
+
       const { run } = update(
-        {
-          ...found,
-          transactWriteItems: [cancelled("ConditionalCheckFailed", "None", "None", "None")],
-        },
+        { getItem: [read, read, read], transactWriteItems: [lost, lost, lost] },
         { email: "new@example.com" },
       );
 
-      expect(failureOf(yield* Effect.result(run)).reason).toBe("unavailable");
+      expect(yield* Effect.flip(run)).toStrictEqual(new Errors.ContactChanged());
     }),
   );
 });

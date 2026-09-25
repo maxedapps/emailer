@@ -3,9 +3,10 @@
 - Status: Accepted
 - Date: 2026-09-15
 - Accepted: 2026-09-15
-- Authority: The user asked on 2026-09-15 for the reputation lane as one plan covering both phases, "using Alchemy and Effect properly, according to their philosophies and best practices, using their full APIs", and chose five design points the same day: the dispatcher reads alarm state instead of an SES-side pause, a stack-owned alert topic per stage, the campaign breaker at AWS's review ratios with minimum samples, a transient-bounce window of three in thirty days, and delivery delays logged with their type rather than stored. Acceptance follows the live gate in [the plan](work/reputation.md).
+- Authority: The user asked on 2026-09-15 for the reputation lane as one plan covering both phases, "using Alchemy and Effect properly, according to their philosophies and best practices, using their full APIs", and chose five design points the same day: the dispatcher reads alarm state instead of an SES-side pause, a stack-owned alert topic per stage, the campaign breaker at AWS's review ratios with minimum samples, a transient-bounce window of three in thirty days, and delivery delays logged with their type rather than stored. Acceptance follows the live gate in the plan (`work/reputation.md`, in git history).
 - Supersedes in part: [ADR-0003](0003-feedback-events-through-eventbridge.md)'s "neither Lambda calls any SES suppression API"; [ADR-0008](0008-storage-capabilities-and-error-boundaries.md)'s capability rows for `FeedbackStore` and `AudienceStore`; [ADR-0011](0011-open-recipient-set-and-paced-dispatch.md)'s three pause reasons and its deferral of feedback counts to this lane.
 - Superseded in part: [ADR-0013](0013-repeat-safe-writes.md) for "Transaction conflicts are retried, lost responses are not" and its client-level opt-out.
+- Superseded in part: [ADR-0024](0024-typed-errors-and-cost-neutral-storage.md) for delivery delays, which are no longer published or logged, and for the transient-bounce window's own `SUPPRESSION#<mailbox>/TRANSIENT` item. The window is a field of the address item.
 
 ## Context
 
@@ -63,7 +64,7 @@ Observed 2026-09-15 on ephemeral stage `test-d`: SNS confirmation mail received 
 
 ## References
 
-- [Reputation plan](work/reputation.md)
+- Reputation plan (`work/reputation.md`, in git history)
 - [ADR-0003: Feedback events through EventBridge](0003-feedback-events-through-eventbridge.md)
 - [ADR-0008: Storage capabilities and error boundaries](0008-storage-capabilities-and-error-boundaries.md)
 - [ADR-0011: Open recipient set with a paced, resumable dispatcher](0011-open-recipient-set-and-paced-dispatch.md)

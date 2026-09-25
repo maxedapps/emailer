@@ -8,7 +8,7 @@
   - DMARC managed only on opt-in.
   - They welcomed a rewrite, on the condition that the running production deployment is migrated in place.
 
-  See [the plan](work/sending-dns.md).
+  See the plan (`work/sending-dns.md`, in git history).
 - Supersedes in part:
   - [ADR-0009](0009-account-level-sending-identity.md): "The three DKIM `CNAME` records are published **once**, operationally", and alternative 5.
   - [ADR-0010](0010-aligned-mail-from-spf-and-dmarc.md): the rule that the records are published by hand and never declared, and alternative 6.
@@ -89,7 +89,7 @@ Three facts from Alchemy 2.0.0-beta.77 and AWS shape the design:
 
 ## References
 
-- [Plan](work/sending-dns.md)
+- Plan (`work/sending-dns.md`, in git history)
 - [Amazon SES: Managing Easy DKIM](https://docs.aws.amazon.com/ses/latest/dg/send-email-authentication-dkim-easy-managing.html) — `SigningHostedZone`
 - [Amazon SES endpoints: DKIM domains](https://docs.aws.amazon.com/general/latest/gr/ses.html)
 - [Amazon SES: Using a custom MAIL FROM domain](https://docs.aws.amazon.com/ses/latest/dg/mail-from.html)

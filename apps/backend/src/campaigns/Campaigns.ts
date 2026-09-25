@@ -1,4 +1,5 @@
-import * as Schemas from "@emailer/api/Schemas";
+import { CampaignNotFound, CampaignStateConflict, SendAtNotInFuture } from "@emailer/api/Errors";
+import type * as Schemas from "@emailer/api/Schemas";
 import { Clock, Effect } from "effect";
 
 import { newIdentifier, nowIso } from "../Identifiers.ts";
@@ -6,7 +7,6 @@ import { CampaignWake } from "../sending/Dispatch.ts";
 import { CampaignSchedule } from "./CampaignSchedule.ts";
 import { AudienceStore } from "../storage/Audience.ts";
 import { CampaignStore } from "../storage/Campaigns.ts";
-import { corrupt } from "../storage/Errors.ts";
 
 import type { CampaignControl } from "../storage/Campaigns.ts";
 
@@ -27,14 +27,6 @@ export const create = Effect.fn("Campaigns.create")(function* (
   yield* campaigns.createCampaign(created);
 
   return created;
-});
-
-/** A draft write whose condition failed: the campaign left draft, or was deleted, meanwhile. */
-const draftConflict = Effect.fn("Campaigns.draftConflict")(function* (campaignId: string) {
-  const campaigns = yield* CampaignStore;
-  const control = yield* campaigns.getCampaignControl(campaignId);
-
-  return yield* new Schemas.CampaignStateConflict({ state: control.state });
 });
 
 /** Absent fields keep their value; null removes the HTML body or the filter. */
@@ -68,7 +60,7 @@ export const update = Effect.fn("Campaigns.update")(function* (
   const current = yield* campaigns.getCampaign(campaignId);
 
   if (current.submission.state !== "draft") {
-    return yield* new Schemas.CampaignStateConflict({ state: current.submission.state });
+    return yield* new CampaignStateConflict({ state: current.submission.state });
   }
 
   // Read only to answer NotFound for a list that does not exist.
@@ -78,9 +70,8 @@ export const update = Effect.fn("Campaigns.update")(function* (
 
   const next = edited(current, change);
 
-  if ((yield* campaigns.updateDraft(next)) === "conflict") {
-    return yield* draftConflict(campaignId);
-  }
+  // A campaign that left draft or was deleted meanwhile is refused, as found.
+  yield* campaigns.updateDraft(next);
 
   return next;
 });
@@ -95,21 +86,11 @@ export const remove = Effect.fn("Campaigns.remove")(function* (campaignId: strin
   const control = yield* campaigns.getCampaignControl(campaignId);
 
   if (control.state !== "draft") {
-    return yield* new Schemas.CampaignStateConflict({ state: control.state });
+    return yield* new CampaignStateConflict({ state: control.state });
   }
 
-  if ((yield* campaigns.deleteDraft(campaignId)) === "conflict") {
-    return yield* draftConflict(campaignId);
-  }
+  yield* campaigns.deleteDraft(campaignId);
 });
-
-const requireRunToken = (control: CampaignControl) => {
-  if (control.runToken === undefined) {
-    return corrupt("getCampaignControl")(`${control.state} campaign has no run token`);
-  }
-
-  return Effect.succeed(control.runToken);
-};
 
 /**
  * Re-sends the wake-up for a campaign that is already queued. Both `send` and `resume` reach this
@@ -119,11 +100,10 @@ const requireRunToken = (control: CampaignControl) => {
  */
 const wakeQueued = Effect.fn("Campaigns.wakeQueued")(function* (
   campaignId: string,
-  control: CampaignControl,
+  runToken: string,
 ) {
   const campaigns = yield* CampaignStore;
   const wake = yield* CampaignWake;
-  const runToken = yield* requireRunToken(control);
 
   yield* wake.enqueue(campaignId, runToken);
 
@@ -141,23 +121,25 @@ export const send = Effect.fn("Campaigns.send")(function* (campaignId: string) {
       const runToken = yield* newIdentifier;
       const now = yield* nowIso;
 
-      const outcome = yield* campaigns.newRun(
-        campaignId,
-        { state: control.state, runToken: control.runToken },
-        runToken,
-        "queued",
-        now,
-      );
-
-      if (outcome === "queued") {
-        yield* wake.enqueue(campaignId, runToken);
-      }
+      // A run another command started first is not woken again: the campaign answers as it is.
+      yield* campaigns
+        .newRun(
+          campaignId,
+          { state: control.state, runToken: control.runToken },
+          runToken,
+          "queued",
+          now,
+        )
+        .pipe(
+          Effect.andThen(wake.enqueue(campaignId, runToken)),
+          Effect.catchTag("CampaignChanged", () => Effect.void),
+        );
 
       return yield* campaigns.getCampaign(campaignId);
     }
 
     case "queued":
-      return yield* wakeQueued(campaignId, control);
+      return yield* wakeQueued(campaignId, control.runToken);
 
     default:
       return yield* campaigns.getCampaign(campaignId);
@@ -171,27 +153,27 @@ export const resume = Effect.fn("Campaigns.resume")(function* (campaignId: strin
 
   switch (control.state) {
     case "paused": {
-      const observed = yield* requireRunToken(control);
       const runToken = yield* newIdentifier;
       const now = yield* nowIso;
 
-      const outcome = yield* campaigns.newRun(
-        campaignId,
-        { state: "paused", runToken: observed },
-        runToken,
-        "queued",
-        now,
-      );
-
-      if (outcome === "queued") {
-        yield* wake.enqueue(campaignId, runToken);
-      }
+      yield* campaigns
+        .newRun(
+          campaignId,
+          { state: "paused", runToken: control.runToken },
+          runToken,
+          "queued",
+          now,
+        )
+        .pipe(
+          Effect.andThen(wake.enqueue(campaignId, runToken)),
+          Effect.catchTag("CampaignChanged", () => Effect.void),
+        );
 
       return yield* campaigns.getCampaign(campaignId);
     }
 
     case "queued":
-      return yield* wakeQueued(campaignId, control);
+      return yield* wakeQueued(campaignId, control.runToken);
 
     default:
       return yield* campaigns.getCampaign(campaignId);
@@ -207,7 +189,7 @@ export const schedule = Effect.fn("Campaigns.schedule")(function* (
   const control = yield* campaigns.getCampaignControl(campaignId);
 
   if (Date.parse(sendAt) <= (yield* Clock.currentTimeMillis)) {
-    return yield* new Schemas.SendAtNotInFuture({ sendAt });
+    return yield* new SendAtNotInFuture({ sendAt });
   }
 
   switch (control.state) {
@@ -215,19 +197,20 @@ export const schedule = Effect.fn("Campaigns.schedule")(function* (
     case "scheduled": {
       const runToken = yield* newIdentifier;
 
-      const outcome = yield* campaigns.newRun(
-        campaignId,
-        { state: control.state, runToken: control.runToken },
-        runToken,
-        "scheduled",
-        sendAt,
-      );
-
-      if (outcome === "scheduled") {
-        // Durable scheduled intent may precede a create failure. The predecessor's schedule, and
-        // this one if a cancel lands first, fire stale and delete themselves.
-        yield* schedules.create(campaignId, runToken, sendAt);
-      }
+      // Durable scheduled intent may precede a create failure. The predecessor's schedule, and
+      // this one if a cancel lands first, fire stale and delete themselves.
+      yield* campaigns
+        .newRun(
+          campaignId,
+          { state: control.state, runToken: control.runToken },
+          runToken,
+          "scheduled",
+          sendAt,
+        )
+        .pipe(
+          Effect.andThen(schedules.create(campaignId, runToken, sendAt)),
+          Effect.catchTag("CampaignChanged", () => Effect.void),
+        );
 
       return yield* campaigns.getCampaign(campaignId);
     }
@@ -237,7 +220,9 @@ export const schedule = Effect.fn("Campaigns.schedule")(function* (
   }
 });
 
-const cancellationReachedDestination = (source: CampaignControl, current: CampaignControl) => {
+type Pending = Extract<CampaignControl, { readonly state: "scheduled" | "queued" }>;
+
+const cancellationReachedDestination = (source: Pending, current: CampaignControl) => {
   if (current.runToken !== source.runToken) {
     return false;
   }
@@ -261,30 +246,34 @@ export const cancel = Effect.fn("Campaigns.cancel")(function* (campaignId: strin
 
     case "sending":
     case "completed":
-      return yield* new Schemas.CampaignStateConflict({ state: control.state });
+      return yield* new CampaignStateConflict({ state: control.state });
 
     case "scheduled":
     case "queued": {
-      const runToken = yield* requireRunToken(control);
-
       const source =
         control.state === "scheduled"
-          ? { state: "scheduled" as const, runToken }
+          ? { state: "scheduled" as const, runToken: control.runToken }
           : {
               state: "queued" as const,
-              runToken,
+              runToken: control.runToken,
               started: control.startedAt !== undefined,
             };
 
-      const outcome = yield* campaigns.cancelCampaign(campaignId, source);
+      // A refused cancel decides from the campaign as the refusal found it: a concurrent cancel of
+      // the same run already reached where this one was going, anything else is a conflict.
+      yield* campaigns.cancelCampaign(campaignId, source).pipe(
+        Effect.catchTag("CampaignChanged", ({ current }) =>
+          Effect.gen(function* () {
+            if (current === undefined) {
+              return yield* new CampaignNotFound();
+            }
 
-      if (outcome === "conflict") {
-        const current = yield* campaigns.getCampaignControl(campaignId);
-
-        if (!cancellationReachedDestination(control, current)) {
-          return yield* new Schemas.CampaignStateConflict({ state: current.state });
-        }
-      }
+            if (!cancellationReachedDestination(control, current)) {
+              return yield* new CampaignStateConflict({ state: current.state });
+            }
+          }),
+        ),
+      );
 
       return yield* campaigns.getCampaign(campaignId);
     }

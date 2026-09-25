@@ -1,15 +1,14 @@
 import { NodeServices } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
+import * as Errors from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
 import { Effect, Layer, Result } from "effect";
 
 import { CampaignSchedule } from "./CampaignSchedule.ts";
 import * as Campaigns from "./Campaigns.ts";
 import { CampaignWake } from "../sending/Dispatch.ts";
-import { publicly } from "../Diagnostics.ts";
 import { AudienceStore } from "../storage/Audience.ts";
-import { CampaignStore } from "../storage/Campaigns.ts";
-import { StorageFailure } from "../storage/Errors.ts";
+import { CampaignChanged, CampaignStore } from "../storage/Campaigns.ts";
 import { unusedAudience, unusedCampaigns } from "../storage/Testing.ts";
 
 import type { CampaignControl } from "../storage/Campaigns.ts";
@@ -53,6 +52,8 @@ interface World {
   readonly history: Map<string, RunHistory>;
   readonly control: Map<string, Array<CampaignControl>>;
   readonly order: Array<string>;
+  /** Every read of a campaign's control, in order. */
+  readonly controlReads: Array<string>;
   beforeWrite?: Effect.Effect<void>;
 }
 
@@ -64,6 +65,7 @@ const emptyWorld = (): World => ({
   history: new Map(),
   control: new Map(),
   order: [],
+  controlReads: [],
 });
 
 const draftCampaign: Schemas.Campaign = {
@@ -106,12 +108,40 @@ const startedAtOf = (world: World, campaign: Schemas.Campaign): string | undefin
   world.startedAt.get(campaign.id) ??
   ("startedAt" in campaign.submission ? campaign.submission.startedAt : undefined);
 
-const controlOfCampaign = (world: World, campaign: Schemas.Campaign): CampaignControl => ({
-  state: campaign.submission.state,
-  runToken: world.runTokens.get(campaign.id),
-  startedAt: startedAtOf(world, campaign),
-  pausedReason: campaign.submission.state === "paused" ? campaign.submission.reason : undefined,
-});
+/** The control snapshot the store would read for the world's campaign. */
+const controlOfCampaign = (world: World, campaign: Schemas.Campaign): CampaignControl => {
+  const submission = campaign.submission;
+  const observed = world.runTokens.get(campaign.id);
+
+  if (submission.state === "draft") {
+    return observed === undefined ? { state: "draft" } : { state: "draft", runToken: observed };
+  }
+
+  if (observed === undefined) {
+    throw new Error(`a ${submission.state} campaign in this world needs a run token`);
+  }
+
+  const startedAt = startedAtOf(world, campaign);
+
+  switch (submission.state) {
+    case "scheduled":
+      return { state: "scheduled", runToken: observed };
+    case "queued":
+      return startedAt === undefined
+        ? { state: "queued", runToken: observed }
+        : { state: "queued", runToken: observed, startedAt };
+    case "sending":
+    case "completed":
+      return { state: submission.state, runToken: observed, startedAt: submission.startedAt };
+    case "paused":
+      return {
+        state: "paused",
+        runToken: observed,
+        startedAt: submission.startedAt,
+        pausedReason: submission.reason,
+      };
+  }
+};
 
 const tokenMatches = (world: World, id: string, expected: string | undefined) =>
   world.runTokens.get(id) === expected;
@@ -135,23 +165,42 @@ const rememberHistory = (world: World, campaign: Schemas.Campaign) => {
 };
 
 /** A stored entity, or the store's answer for one that is not there. */
-const found = <A>(value: A | undefined, entity: Schemas.NotFound["entity"]) =>
-  value === undefined ? Effect.fail(new Schemas.NotFound({ entity })) : Effect.succeed(value);
+const found = <A, E>(value: A | undefined, missing: E) =>
+  value === undefined ? Effect.fail(missing) : Effect.succeed(value);
 
-const afterWrite = <A>(world: World, apply: () => A) =>
+const afterWrite = <E>(world: World, apply: () => Effect.Effect<void, E>) =>
   Effect.gen(function* () {
     if (world.beforeWrite !== undefined) {
       yield* world.beforeWrite;
     }
 
-    return apply();
+    return yield* apply();
   });
+
+/** A refused command's answer: the campaign as the world now holds it. */
+const changed = (world: World, id: string) => {
+  const campaign = world.campaigns.get(id);
+
+  return Effect.fail(
+    new CampaignChanged({
+      current: campaign === undefined ? undefined : controlOfCampaign(world, campaign),
+    }),
+  );
+};
+
+/** A refused draft write: the campaign is gone, or is no longer a draft. */
+const notADraft = (
+  campaign: Schemas.Campaign | undefined,
+): Effect.Effect<never, Errors.CampaignNotFound | Errors.CampaignStateConflict> =>
+  campaign === undefined
+    ? Effect.fail(new Errors.CampaignNotFound())
+    : Effect.fail(new Errors.CampaignStateConflict({ state: campaign.submission.state }));
 
 const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> =>
   Layer.mergeAll(
     Layer.succeed(AudienceStore)({
       ...unusedAudience,
-      getList: (id) => found(world.lists.get(id), "list"),
+      getList: (id) => found(world.lists.get(id), new Errors.ListNotFound()),
     }),
     Layer.succeed(CampaignStore)({
       ...unusedCampaigns,
@@ -159,16 +208,21 @@ const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> 
         Effect.sync(() => {
           world.campaigns.set(campaign.id, { ...campaign, submission: { state: "draft" } });
         }),
-      getCampaign: (id) => found(world.campaigns.get(id), "campaign"),
+      getCampaign: (id) => found(world.campaigns.get(id), new Errors.CampaignNotFound()),
       getCampaignControl: (id) =>
         Effect.gen(function* () {
+          world.controlReads.push(id);
+
           const scripted = world.control.get(id)?.shift();
 
           if (scripted !== undefined) {
             return scripted;
           }
 
-          return controlOfCampaign(world, yield* found(world.campaigns.get(id), "campaign"));
+          return controlOfCampaign(
+            world,
+            yield* found(world.campaigns.get(id), new Errors.CampaignNotFound()),
+          );
         }),
       newRun: (id, expected, newToken, target, at) =>
         afterWrite(world, () => {
@@ -179,7 +233,7 @@ const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> 
             campaign.submission.state !== expected.state ||
             !tokenMatches(world, id, expected.runToken)
           ) {
-            return "conflict" as const;
+            return changed(world, id);
           }
 
           world.order.push(`newRun:${target}`);
@@ -193,7 +247,7 @@ const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> 
           });
           world.runTokens.set(id, newToken);
 
-          return target;
+          return Effect.void;
         }),
       cancelCampaign: (id, source) =>
         afterWrite(world, () => {
@@ -202,40 +256,40 @@ const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> 
           world.order.push("cancelCampaign");
 
           if (campaign === undefined || !tokenMatches(world, id, source.runToken)) {
-            return "conflict" as const;
+            return changed(world, id);
           }
 
           if (source.state === "scheduled") {
             if (campaign.submission.state !== "scheduled") {
-              return "conflict" as const;
+              return changed(world, id);
             }
 
             world.campaigns.set(id, { ...campaign, submission: { state: "draft" } });
 
-            return "applied" as const;
+            return Effect.void;
           }
 
           if (campaign.submission.state !== "queued") {
-            return "conflict" as const;
+            return changed(world, id);
           }
 
           const started = startedAtOf(world, campaign) !== undefined;
 
           if (started !== source.started) {
-            return "conflict" as const;
+            return changed(world, id);
           }
 
           if (!started) {
             world.campaigns.set(id, { ...campaign, submission: { state: "draft" } });
 
-            return "applied" as const;
+            return Effect.void;
           }
 
           const history = world.history.get(id);
           const startedAt = startedAtOf(world, campaign);
 
           if (history === undefined || startedAt === undefined) {
-            return "conflict" as const;
+            return changed(world, id);
           }
 
           world.campaigns.set(id, {
@@ -250,29 +304,33 @@ const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> 
             },
           });
 
-          return "applied" as const;
+          return Effect.void;
         }),
       updateDraft: (campaign) =>
         afterWrite(world, () => {
-          if (world.campaigns.get(campaign.id)?.submission.state !== "draft") {
-            return "conflict" as const;
+          const current = world.campaigns.get(campaign.id);
+
+          if (current?.submission.state !== "draft") {
+            return notADraft(current);
           }
 
           world.order.push("updateDraft");
           world.campaigns.set(campaign.id, campaign);
 
-          return "updated" as const;
+          return Effect.void;
         }),
       deleteDraft: (id) =>
         afterWrite(world, () => {
-          if (world.campaigns.get(id)?.submission.state !== "draft") {
-            return "conflict" as const;
+          const current = world.campaigns.get(id);
+
+          if (current?.submission.state !== "draft") {
+            return notADraft(current);
           }
 
           world.order.push("deleteDraft");
           world.campaigns.delete(id);
 
-          return "deleted" as const;
+          return Effect.void;
         }),
     }),
   );
@@ -282,7 +340,7 @@ interface WakeDouble {
   readonly messages: Array<{ readonly campaignId: string; readonly runToken: string }>;
 }
 
-const wakeDouble = (world: World, failure?: StorageFailure): WakeDouble => {
+const wakeDouble = (world: World, failure?: Errors.QueueUnavailable): WakeDouble => {
   const messages: Array<{ readonly campaignId: string; readonly runToken: string }> = [];
 
   const layer = Layer.succeed(CampaignWake)({
@@ -309,7 +367,7 @@ interface ScheduleDouble {
   }>;
 }
 
-const scheduleDouble = (world: World, failure?: StorageFailure): ScheduleDouble => {
+const scheduleDouble = (world: World, failure?: Errors.SchedulerUnavailable): ScheduleDouble => {
   const created: Array<{
     readonly campaignId: string;
     readonly runToken: string;
@@ -336,8 +394,8 @@ interface Scenario {
   readonly runToken?: string;
   readonly startedAt?: string;
   readonly history?: RunHistory;
-  readonly wakeFailure?: StorageFailure;
-  readonly scheduleFailure?: StorageFailure;
+  readonly wakeFailure?: Errors.QueueUnavailable;
+  readonly scheduleFailure?: Errors.SchedulerUnavailable;
 }
 
 interface Fixture {
@@ -356,8 +414,12 @@ const fixture = (scenario: Scenario = {}): Fixture => {
   world.campaigns.set(campaignId, campaign);
   rememberHistory(world, campaign);
 
-  if (scenario.runToken !== undefined) {
-    world.runTokens.set(campaignId, scenario.runToken);
+  // Every state past draft holds its run's token; a draft holds one only if a test gives it.
+  const runToken =
+    scenario.runToken ?? (campaign.submission.state === "draft" ? undefined : existingRunToken);
+
+  if (runToken !== undefined) {
+    world.runTokens.set(campaignId, runToken);
   }
 
   if (scenario.startedAt !== undefined) {
@@ -382,9 +444,6 @@ const fixture = (scenario: Scenario = {}): Fixture => {
 const runWith = <A, E, R>(fix: Fixture, effect: Effect.Effect<A, E, R>) =>
   Effect.result(effect).pipe(Effect.provide(Layer.mergeAll(fix.layer, NodeServices.layer)));
 
-const runPublicly = <A, E, R>(fix: Fixture, effect: Effect.Effect<A, E, R>) =>
-  runWith(fix, publicly(effect));
-
 const storedCampaign = (fix: Fixture): Schemas.Campaign => {
   const campaign = fix.world.campaigns.get(campaignId);
 
@@ -394,6 +453,16 @@ const storedCampaign = (fix: Fixture): Schemas.Campaign => {
 
   return campaign;
 };
+
+const queueUnavailable = new Errors.QueueUnavailable({
+  operation: "dispatch",
+  failure: "ServiceUnavailable",
+});
+
+const schedulerUnavailable = new Errors.SchedulerUnavailable({
+  operation: "schedule",
+  failure: "ServiceUnavailable",
+});
 
 const failureOf = <A, E>(attempt: Result.Result<A, E>): E => {
   if (Result.isSuccess(attempt)) {
@@ -415,7 +484,7 @@ describe("create", () => {
         Campaigns.create({ listId, subject: "Hi", text: "There" }),
       );
 
-      expect(failureOf(attempt)).toBeInstanceOf(Schemas.NotFound);
+      expect(failureOf(attempt)).toStrictEqual(new Errors.ListNotFound());
     }),
   );
 
@@ -528,21 +597,13 @@ describe("send", () => {
     }),
   );
 
-  it.effect("fails StorageUnavailable when the wake fails after the queued write", () =>
+  it.effect("fails QueueUnavailable when the wake fails after the queued write", () =>
     Effect.gen(function* () {
-      const fix = fixture({
-        wakeFailure: new StorageFailure({
-          operationId: "dispatch",
-          reason: "unavailable",
-          cause: "lost",
-        }),
-      });
+      const fix = fixture({ wakeFailure: queueUnavailable });
 
-      const attempt = yield* runPublicly(fix, Campaigns.send(campaignId));
+      const attempt = yield* runWith(fix, Campaigns.send(campaignId));
 
-      expect(failureOf(attempt)).toStrictEqual(
-        new Schemas.StorageUnavailable({ operationId: "dispatch" }),
-      );
+      expect(failureOf(attempt)).toStrictEqual(queueUnavailable);
       expect(fix.wake.messages).toHaveLength(0);
       expect(storedCampaign(fix).submission.state).toBe("queued");
     }),
@@ -631,7 +692,7 @@ describe("update", () => {
 
       const missing = yield* runWith(fix, Campaigns.update(campaignId, { listId: otherList }));
 
-      expect(failureOf(missing)).toStrictEqual(new Schemas.NotFound({ entity: "list" }));
+      expect(failureOf(missing)).toStrictEqual(new Errors.ListNotFound());
       expect(fix.world.order).toHaveLength(0);
 
       fix.world.lists.set(otherList, {
@@ -654,7 +715,7 @@ describe("update", () => {
 
       const attempt = yield* runWith(fix, Campaigns.update(campaignId, { subject: "x" }));
 
-      expect(failureOf(attempt)).toStrictEqual(new Schemas.NotFound({ entity: "campaign" }));
+      expect(failureOf(attempt)).toStrictEqual(new Errors.CampaignNotFound());
     }),
   );
 
@@ -671,7 +732,7 @@ describe("update", () => {
       const attempt = yield* runWith(fix, Campaigns.update(campaignId, { subject: "x" }));
 
       expect(failureOf(attempt)).toStrictEqual(
-        new Schemas.CampaignStateConflict({ state: campaign.submission.state }),
+        new Errors.CampaignStateConflict({ state: campaign.submission.state }),
       );
       expect(storedCampaign(fix)).toStrictEqual(campaign);
     }),
@@ -683,12 +744,13 @@ describe("update", () => {
 
       fix.world.beforeWrite = Effect.sync(() => {
         fix.world.campaigns.set(campaignId, queuedCampaign);
+        fix.world.runTokens.set(campaignId, existingRunToken);
       });
 
       const attempt = yield* runWith(fix, Campaigns.update(campaignId, { subject: "x" }));
 
       expect(failureOf(attempt)).toStrictEqual(
-        new Schemas.CampaignStateConflict({ state: "queued" }),
+        new Errors.CampaignStateConflict({ state: "queued" }),
       );
       expect(storedCampaign(fix)).toStrictEqual(queuedCampaign);
     }),
@@ -720,7 +782,7 @@ describe("remove", () => {
       const attempt = yield* runWith(fix, Campaigns.remove(campaignId));
 
       expect(failureOf(attempt)).toStrictEqual(
-        new Schemas.CampaignStateConflict({ state: campaign.submission.state }),
+        new Errors.CampaignStateConflict({ state: campaign.submission.state }),
       );
       expect(storedCampaign(fix)).toStrictEqual(campaign);
     }),
@@ -736,7 +798,7 @@ describe("remove", () => {
 
       const attempt = yield* runWith(fix, Campaigns.remove(campaignId));
 
-      expect(failureOf(attempt)).toStrictEqual(new Schemas.NotFound({ entity: "campaign" }));
+      expect(failureOf(attempt)).toStrictEqual(new Errors.CampaignNotFound());
     }),
   );
 });
@@ -749,12 +811,7 @@ describe("queued wake repair", () => {
     resume: Campaigns.resume,
   } as const;
 
-  const queuedControl = (runToken: string | undefined): CampaignControl => ({
-    state: "queued",
-    runToken,
-    startedAt: undefined,
-    pausedReason: undefined,
-  });
+  const queuedControl = (runToken: string): CampaignControl => ({ state: "queued", runToken });
 
   it.effect.each(["send", "resume"] as const)(
     "%s re-wakes only the token observed with queued state",
@@ -777,12 +834,7 @@ describe("queued wake repair", () => {
 
         fix.world.control.set(campaignId, [
           queuedControl(existingRunToken),
-          {
-            state: "scheduled",
-            runToken: replacementToken,
-            startedAt: undefined,
-            pausedReason: undefined,
-          },
+          { state: "scheduled", runToken: replacementToken },
         ]);
 
         const attempt = yield* runWith(fix, queuedRepair[command](campaignId));
@@ -790,12 +842,7 @@ describe("queued wake repair", () => {
         expect(Result.isSuccess(attempt) && attempt.success).toStrictEqual(queuedCampaign);
         expect(fix.wake.messages).toStrictEqual([{ campaignId, runToken: existingRunToken }]);
         expect(fix.world.control.get(campaignId)).toStrictEqual([
-          {
-            state: "scheduled",
-            runToken: replacementToken,
-            startedAt: undefined,
-            pausedReason: undefined,
-          },
+          { state: "scheduled", runToken: replacementToken },
         ]);
       }),
   );
@@ -806,39 +853,12 @@ describe("queued wake repair", () => {
       Effect.gen(function* () {
         const fix = fixture({ campaign: queuedCampaign, runToken: existingRunToken });
 
-        fix.world.control.set(campaignId, [
-          queuedControl(existingRunToken),
-          {
-            state: "draft",
-            runToken: undefined,
-            startedAt: undefined,
-            pausedReason: undefined,
-          },
-        ]);
+        fix.world.control.set(campaignId, [queuedControl(existingRunToken), { state: "draft" }]);
 
         const attempt = yield* runWith(fix, queuedRepair[command](campaignId));
 
         expect(Result.isSuccess(attempt) && attempt.success).toStrictEqual(queuedCampaign);
         expect(fix.wake.messages).toStrictEqual([{ campaignId, runToken: existingRunToken }]);
-      }),
-  );
-
-  it.effect.each(["send", "resume"] as const)(
-    "%s reports corruption when control is still queued without a run token",
-    (command) =>
-      Effect.gen(function* () {
-        const fix = fixture({ campaign: queuedCampaign });
-
-        const attempt = yield* runWith(fix, queuedRepair[command](campaignId));
-
-        expect(failureOf(attempt)).toStrictEqual(
-          new StorageFailure({
-            operationId: "getCampaignControl",
-            reason: "corrupt",
-            cause: "queued campaign has no run token",
-          }),
-        );
-        expect(fix.wake.messages).toHaveLength(0);
       }),
   );
 });
@@ -951,7 +971,7 @@ describe("schedule", () => {
 
       const attempt = yield* runWith(fix, Campaigns.schedule(campaignId, queuedAt));
 
-      expect(failureOf(attempt)).toStrictEqual(new Schemas.SendAtNotInFuture({ sendAt: queuedAt }));
+      expect(failureOf(attempt)).toStrictEqual(new Errors.SendAtNotInFuture({ sendAt: queuedAt }));
       expect(fix.schedules.created).toHaveLength(0);
       expect(storedCampaign(fix)).toStrictEqual(draftCampaign);
       expect(fix.world.runTokens.has(campaignId)).toBe(false);
@@ -976,21 +996,13 @@ describe("schedule", () => {
     }),
   );
 
-  it.effect("fails StorageUnavailable when the schedule service fails after the write", () =>
+  it.effect("fails SchedulerUnavailable when the schedule service fails after the write", () =>
     Effect.gen(function* () {
-      const fix = fixture({
-        scheduleFailure: new StorageFailure({
-          operationId: "schedule",
-          reason: "unavailable",
-          cause: "lost",
-        }),
-      });
+      const fix = fixture({ scheduleFailure: schedulerUnavailable });
 
-      const attempt = yield* runPublicly(fix, Campaigns.schedule(campaignId, futureSendAt));
+      const attempt = yield* runWith(fix, Campaigns.schedule(campaignId, futureSendAt));
 
-      expect(failureOf(attempt)).toStrictEqual(
-        new Schemas.StorageUnavailable({ operationId: "schedule" }),
-      );
+      expect(failureOf(attempt)).toStrictEqual(schedulerUnavailable);
       expect(fix.schedules.created).toHaveLength(0);
       expect(storedCampaign(fix).submission).toStrictEqual({
         state: "scheduled",
@@ -1136,7 +1148,7 @@ describe("cancel", () => {
       const attempt = yield* runWith(fix, Campaigns.cancel(campaignId));
 
       expect(failureOf(attempt)).toStrictEqual(
-        new Schemas.CampaignStateConflict({ state: campaign.submission.state }),
+        new Errors.CampaignStateConflict({ state: campaign.submission.state }),
       );
       expect(storedCampaign(fix)).toStrictEqual(campaign);
       expect(fix.world.order).toHaveLength(0);
@@ -1160,10 +1172,12 @@ describe("cancel", () => {
       const attempt = yield* runWith(fix, Campaigns.cancel(campaignId));
 
       expect(failureOf(attempt)).toStrictEqual(
-        new Schemas.CampaignStateConflict({ state: replacement.submission.state }),
+        new Errors.CampaignStateConflict({ state: replacement.submission.state }),
       );
       expect(storedCampaign(fix)).toStrictEqual(replacement);
       expect(fix.world.runTokens.get(campaignId)).toBe(replacementToken);
+      // The refused write answered the campaign as it now is: no second read.
+      expect(fix.world.controlReads).toHaveLength(1);
     }),
   );
 
@@ -1231,7 +1245,7 @@ describe("cancel", () => {
         const attempt = yield* runWith(fix, Campaigns.cancel(campaignId));
 
         expect(failureOf(attempt)).toStrictEqual(
-          new Schemas.CampaignStateConflict({ state: "paused" }),
+          new Errors.CampaignStateConflict({ state: "paused" }),
         );
         expect(storedCampaign(fix).submission).toStrictEqual({
           state: "paused",
@@ -1270,7 +1284,7 @@ describe("cancel", () => {
         const attempt = yield* runWith(fix, Campaigns.cancel(campaignId));
 
         expect(failureOf(attempt)).toStrictEqual(
-          new Schemas.CampaignStateConflict({ state: "paused" }),
+          new Errors.CampaignStateConflict({ state: "paused" }),
         );
         expect(storedCampaign(fix).submission).toStrictEqual({
           state: "paused",
@@ -1301,7 +1315,7 @@ describe("cancel", () => {
       const attempt = yield* runWith(fix, Campaigns.cancel(campaignId));
 
       expect(failureOf(attempt)).toStrictEqual(
-        new Schemas.CampaignStateConflict({ state: "sending" }),
+        new Errors.CampaignStateConflict({ state: "sending" }),
       );
       expect(storedCampaign(fix).submission.state).toBe("sending");
     }),

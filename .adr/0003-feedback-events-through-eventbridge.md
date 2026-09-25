@@ -3,14 +3,14 @@
 - Status: Accepted
 - Date: 2026-09-11
 - Authority: The user asked for bounce and complaint handling with suppression, accepted that the SES suppression list is shared with another SES workload on the same account, and accepted this record on 2026-09-11. The transport was proposed here rather than chosen by the user.
-- Documentation corrected: 2026-09-15. Destination types and retry boundaries are corrected below; the original no-queue consequence is superseded by the failure destination implemented in the [cleanup plan](work/clean-codebase.md) and reflected in [ADR-0008](0008-storage-capabilities-and-error-boundaries.md). The EventBridge transport decision remains in effect.
+- Documentation corrected: 2026-09-15. Destination types and retry boundaries are corrected below; the original no-queue consequence is superseded by the failure destination implemented in the cleanup plan (`work/clean-codebase.md`, in git history) and reflected in [ADR-0008](0008-storage-capabilities-and-error-boundaries.md). The EventBridge transport decision remains in effect.
 - Clerical note: 2026-09-15. The live-confirmation refusal of a second campaign (`recipient-suppressed`) became a per-recipient skip under [ADR-0011](0011-open-recipient-set-and-paced-dispatch.md): the second campaign completes with skipped rows rather than `InvalidAudience`. The EventBridge transport decision is unchanged.
 - Superseded in part: [ADR-0012](0012-reputation-guardrails.md) for "neither Lambda calls any SES suppression API".
 - Amended: 2026-09-24, on the user's decision in the simplification plan (`work/simplify.md`): the rule now targets an SQS queue, `FeedbackEvents`, which the feedback Lambda consumes, and failures are recovered by the queue's redrive policy and a native SQS redrive. The Lambda `OnFailure` destination and the replay tool are gone. The EventBridge transport decision remains in effect.
 
 ## Context
 
-The [first slice](work/first-campaign-slice.md) could send but consumed nothing afterwards. Its configuration set was created bare, so SES emitted no events anywhere, no suppression state existed, and a hard-bounced address would have been mailed again forever. The [feedback and suppression slice](work/feedback-and-suppression.md) delivers the feedback half.
+The first slice (`work/first-campaign-slice.md`, in git history) could send but consumed nothing afterwards. Its configuration set was created bare, so SES emitted no events anywhere, no suppression state existed, and a hard-bounced address would have been mailed again forever. The feedback and suppression slice (`work/feedback-and-suppression.md`, in git history) delivers the feedback half.
 
 SES supports configuration-set destinations in SNS, EventBridge (the account's default bus only), CloudWatch, Amazon Data Firehose and Amazon Pinpoint. SNS and EventBridge were the relevant alternatives for this Lambda consumer in the same account and Region as the sender. [SES destinations](https://docs.aws.amazon.com/ses/latest/dg/event-publishing-add-event-destination.html).
 
@@ -45,13 +45,13 @@ EventBridge over SNS because the shapes are otherwise equivalent for one in-acco
 
 ## Confirmation
 
-`Feedback.test.ts` drives the real handler against realistic EventBridge envelopes: both echo paths suppress, `Transient` and `Undetermined` record without suppressing, `not-spam` and `auth-failure` do not suppress, a complaint with no feedback type does, a multi-recipient bounce suppresses each listed recipient, a redelivered event writes nothing new, and an event from a foreign configuration set, an undecodable payload and an unclassified event kind are all ignored without failing the invocation. The expected configuration-set name reaches the test through the same `Config` read the deployed function uses, so a hardcoded literal fails the test. Live confirmation is recorded in the [slice plan](work/feedback-and-suppression.md) under T7: both paths were driven through the deployed stack against the mailbox simulator, the feedback function recorded and suppressed each, the second campaign to each address was refused with `recipient-suppressed`, and the feedback role carried no SES action.
+`Feedback.test.ts` drives the real handler against realistic EventBridge envelopes: both echo paths suppress, `Transient` and `Undetermined` record without suppressing, `not-spam` and `auth-failure` do not suppress, a complaint with no feedback type does, a multi-recipient bounce suppresses each listed recipient, a redelivered event writes nothing new, and an event from a foreign configuration set, an undecodable payload and an unclassified event kind are all ignored without failing the invocation. The expected configuration-set name reaches the test through the same `Config` read the deployed function uses, so a hardcoded literal fails the test. Live confirmation is recorded in the slice plan (`work/feedback-and-suppression.md`, in git history) under T7: both paths were driven through the deployed stack against the mailbox simulator, the feedback function recorded and suppressed each, the second campaign to each address was refused with `recipient-suppressed`, and the feedback role carried no SES action.
 
 ## References
 
 - [ADR-0001: Resource-owning Effect services](0001-resource-owning-effect-services.md)
 - [ADR-0002: Domain sending identity with Easy DKIM](0002-domain-sending-identity.md)
-- [Feedback and suppression slice](work/feedback-and-suppression.md)
+- Feedback and suppression slice (`work/feedback-and-suppression.md`, in git history)
 - [SES event publishing destinations](https://docs.aws.amazon.com/ses/latest/dg/event-publishing-add-event-destination.html)
 - [Amazon SES events in EventBridge](https://docs.aws.amazon.com/ses/latest/dg/event-publishing-eventbridge.html)
 - [SES account-level suppression list](https://docs.aws.amazon.com/ses/latest/dg/sending-email-suppression-list.html)

@@ -1,12 +1,11 @@
 import type * as sesv2 from "@distilled.cloud/aws/sesv2";
-import * as Schemas from "@emailer/api/Schemas";
+import { EmailServiceUnavailable } from "@emailer/api/Errors";
+import type * as Schemas from "@emailer/api/Schemas";
 import * as AWS from "alchemy/AWS";
 import { Context, Effect, Layer, Option } from "effect";
 
+import { unavailable } from "../Errors.ts";
 import { AudienceStore } from "../storage/Audience.ts";
-import { unavailable } from "../storage/Errors.ts";
-
-import type { StorageFailure } from "../storage/Errors.ts";
 
 /**
  * Account-list lookup and delete. These are SES callables, not a storage capability; the Live
@@ -47,11 +46,20 @@ const accountReason = (
 
 const accountSuppressionOf = (
   destination: sesv2.SuppressedDestination,
-): Effect.Effect<NonNullable<Schemas.AddressRecord["accountSuppression"]>, StorageFailure> => {
+): Effect.Effect<
+  NonNullable<Schemas.AddressRecord["accountSuppression"]>,
+  EmailServiceUnavailable
+> => {
   const reason = accountReason(destination.Reason);
 
+  // A reason this code does not know is SES answering something it cannot report.
   if (reason === undefined) {
-    return Effect.fail(unavailable("getSuppressedDestination")(destination.Reason));
+    return Effect.fail(
+      new EmailServiceUnavailable({
+        operation: "getSuppressedDestination",
+        failure: "UnknownSuppressionReason",
+      }),
+    );
   }
 
   return Effect.succeed({
@@ -69,7 +77,7 @@ export const status = Effect.fn("Addresses.status")(function* (email: string) {
   const listed = yield* ses.getSuppressedDestination({ EmailAddress: email }).pipe(
     Effect.asSome,
     Effect.catchTag("NotFoundException", () => Effect.succeedNone),
-    Effect.mapError(unavailable("getSuppressedDestination")),
+    Effect.mapError(unavailable(EmailServiceUnavailable, "getSuppressedDestination")),
   );
 
   if (Option.isNone(listed)) {
@@ -92,7 +100,7 @@ export const unsuppress = Effect.fn("Addresses.unsuppress")(function* (email: st
 
   yield* ses.deleteSuppressedDestination({ EmailAddress: email }).pipe(
     Effect.catchTag("NotFoundException", () => Effect.void),
-    Effect.mapError(unavailable("deleteSuppressedDestination")),
+    Effect.mapError(unavailable(EmailServiceUnavailable, "deleteSuppressedDestination")),
   );
 
   yield* audience.unsuppress(email);

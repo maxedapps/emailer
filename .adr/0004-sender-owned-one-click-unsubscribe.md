@@ -5,12 +5,13 @@
 - Accepted: 2026-09-12
 - Superseded in part: [ADR-0007](0007-immutable-recipient-unsubscribe-links.md) replaces the `<contactId>.<HMAC>` token and its contact lookup with a signed canonical mailbox. Everything else recorded here — sender-owned headers, the separate public function, the GET/POST split, address-keyed opt-out as its own item type, and the pre-send refusal — remains in effect.
 - Superseded in part: [ADR-0011](0011-open-recipient-set-and-paced-dispatch.md) for the "acceptable while the recipient set is a configured allowlist" residual and for `Campaigns.send` refusing an unsubscribed address before SES. Sending moved to the dispatcher there. Since [ADR-0020](0020-drafts-previews-and-test-sends.md) each sender mints the recipient's link before it sends — the dispatcher for campaigns, the API for test sends — so both functions hold the signing key and the reference to the unsubscribe function's URL.
-- Amended: [campaign-html-bodies](work/campaign-html-bodies.md) — the same footer applies to an optional HTML part; operator HTML is sent verbatim
+- Amended: campaign-html-bodies (`work/campaign-html-bodies.md`, in git history) — the same footer applies to an optional HTML part; operator HTML is sent verbatim
 - Authority: The user asked for consent and unsubscribe handling as the slice preceding an open contact list, chose a separate unsubscribe Lambda over deriving a base URL from the request, declined both a `mailto:` entry and a `Reply-To` address on the evidence in [ADR-0002](0002-domain-sending-identity.md), deferred consent evidence and double opt-in (naming optional double opt-in as possible later work), and proposed `Alchemy.Random` for the signing key. The token construction, the GET/POST split and the storage shape are proposed here.
+- Superseded in part: [ADR-0024](0024-typed-errors-and-cost-neutral-storage.md) for unsubscribe as an item type separate from suppression. Both are now fields of one address item per mailbox. Unsubscribe is still not a suppression reason, `unsuppress` never clears it, and both stay keyed by the lowercased address.
 
 ## Context
 
-The service can send, and it can suppress an address that bounced or complained. It offers no way for a person to stop receiving mail. Google and Yahoo both require one-click unsubscribe of bulk senders, CAN-SPAM and GDPR require honouring opt-out regardless of volume, and the [feedback and suppression slice](work/feedback-and-suppression.md) recorded consent as the gate before the recipient allowlist may be replaced by a real contact list.
+The service can send, and it can suppress an address that bounced or complained. It offers no way for a person to stop receiving mail. Google and Yahoo both require one-click unsubscribe of bulk senders, CAN-SPAM and GDPR require honouring opt-out regardless of volume, and the feedback and suppression slice (`work/feedback-and-suppression.md`, in git history) recorded consent as the gate before the recipient allowlist may be replaced by a real contact list.
 
 SES offers a managed path — `ListManagementOptions` with a SES-owned contact list, an inserted footer placeholder and SES-generated headers. It also permits the sender to set `List-Unsubscribe` and `List-Unsubscribe-Post` directly through the `Headers` field of `Simple` content, independently of `ListManagementOptions`. When both are present SES overrides the supplied headers, so exactly one of the two may own them.
 
@@ -52,14 +53,14 @@ Unsubscribe is a **separate item type from suppression**, not a sixth suppressio
 
 ## Confirmation
 
-`Unsubscribe.test.ts` covers the token round trip and each way a token can be rejected, with the secret supplied through the same `Config` read the deployed function uses. `UnsubscribePage.test.ts` drives the composed router and covers the property that matters most — a `GET` writes nothing even for a token it accepts, so a scanner or link prefetcher cannot opt anyone out — plus a forged signature refused on `GET` as well as `POST`, plus idempotent repeat `POST`s and a rejected signature. `Storage.test.ts` pins the precedence of `"unsubscribed"` over `"suppressed"` and that a failed read never reports `"mailable"`. `Mailer.test.ts` asserts both headers and the footer on the built request. Live confirmation is recorded in the [slice plan](work/consent-and-unsubscribe.md) under T9, including the delivered message's `h=` tag.
+`Unsubscribe.test.ts` covers the token round trip and each way a token can be rejected, with the secret supplied through the same `Config` read the deployed function uses. `UnsubscribePage.test.ts` drives the composed router and covers the property that matters most — a `GET` writes nothing even for a token it accepts, so a scanner or link prefetcher cannot opt anyone out — plus a forged signature refused on `GET` as well as `POST`, plus idempotent repeat `POST`s and a rejected signature. `Storage.test.ts` pins the precedence of `"unsubscribed"` over `"suppressed"` and that a failed read never reports `"mailable"`. `Mailer.test.ts` asserts both headers and the footer on the built request. Live confirmation is recorded in the slice plan (`work/consent-and-unsubscribe.md`, in git history) under T9, including the delivered message's `h=` tag.
 
 ## References
 
 - [ADR-0001: Resource-owning Effect services](0001-resource-owning-effect-services.md)
 - [ADR-0002: Domain sending identity with Easy DKIM](0002-domain-sending-identity.md)
 - [ADR-0003: Feedback events through EventBridge](0003-feedback-events-through-eventbridge.md)
-- [Consent and unsubscribe slice](work/consent-and-unsubscribe.md)
+- Consent and unsubscribe slice (`work/consent-and-unsubscribe.md`, in git history)
 - [RFC 8058: one-click unsubscribe](https://www.rfc-editor.org/rfc/rfc8058.html)
 - [SES header fields](https://docs.aws.amazon.com/ses/latest/DeveloperGuide/header-fields.html)
 - [Using one-click unsubscribe with Amazon SES](https://aws.amazon.com/blogs/messaging-and-targeting/using-one-click-unsubscribe-with-amazon-ses/)

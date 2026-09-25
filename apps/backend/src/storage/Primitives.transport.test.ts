@@ -1,30 +1,38 @@
 import * as AWS from "alchemy/AWS";
 import { fromCredentials } from "alchemy/AWS/Credentials";
-import { Effect, Layer, Result } from "effect";
+import { Data, Effect, Layer, Result } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 import { describe, expect, it } from "@effect/vitest";
+import { StorageUnavailable } from "@emailer/api/Errors";
 
+import { FunctionServicesLive } from "../Lambda.ts";
 import { str } from "./Items.ts";
 import { transactionPrimitives, updatePrimitives } from "./Primitives.ts";
 import { tokensFor } from "./Testing.ts";
 
 /**
  * The scripted table sits above the AWS client, so it cannot see the client's own retries. These
- * tests run the two conditional primitives over a stubbed transport and prove the property the
- * store relies on: a transient answer is retried by the client with the identical request, token
- * included, while a conflict cancellation is retried by the store as a new call with a new token.
+ * tests run the two conditional primitives over a stubbed transport, under the services every
+ * function provides, and prove the properties the store relies on: a transient answer is retried by
+ * the client with the identical request, token included, and within the operation timeout; a
+ * conflict cancellation is retried by the store as a new call with a new token; and every reply is
+ * requested uncompressed.
  */
 
 interface Transport {
   readonly fetch: typeof globalThis.fetch;
   readonly attempts: Array<string>;
+  readonly encodings: Array<string | null>;
 }
 
 const transportReplying = (responses: ReadonlyArray<() => Response>): Transport => {
   const attempts: Array<string> = [];
+  const encodings: Array<string | null> = [];
 
   const fetchStub: typeof globalThis.fetch = (input, init) => {
     const request = new Request(input, init);
+
+    encodings.push(request.headers.get("accept-encoding"));
 
     return request.text().then((body) => {
       attempts.push(body);
@@ -39,13 +47,16 @@ const transportReplying = (responses: ReadonlyArray<() => Response>): Transport 
     });
   };
 
-  return { fetch: fetchStub, attempts };
+  return { fetch: fetchStub, attempts, encodings };
 };
 
 interface DynamoDBReply {
   readonly __type?: string;
   readonly message?: string;
-  readonly CancellationReasons?: ReadonlyArray<{ readonly Code: string }>;
+  readonly CancellationReasons?: ReadonlyArray<{
+    readonly Code: string;
+    readonly Item?: Readonly<Record<string, { readonly S: string }>>;
+  }>;
 }
 
 const json = (status: number, body: DynamoDBReply) =>
@@ -64,21 +75,38 @@ const conflictCancellation = () =>
     CancellationReasons: [{ Code: "TransactionConflict" }],
   });
 
+const conditionCancellation = () =>
+  json(400, {
+    __type: "com.amazonaws.dynamodb.v20120810#TransactionCanceledException",
+    message: "Transaction cancelled",
+    CancellationReasons: [
+      { Code: "ConditionalCheckFailed", Item: { pk: { S: "CAMPAIGN#x" }, state: { S: "paused" } } },
+    ],
+  });
+
 const ok = () => json(200, {});
+
+class Refused extends Data.TaggedError("Refused")<{ readonly current: unknown }> {}
 
 const credentials = fromCredentials(
   { accessKeyId: "AKIAEXAMPLEEXAMPLE00", secretAccessKey: "not-a-real-secret" },
   "eu-central-1",
 );
 
-const bindings = (transport: Transport) =>
-  Layer.provide(
-    Layer.merge(AWS.DynamoDB.UpdateItemHttp, AWS.DynamoDB.TransactWriteItemsHttp),
-    Layer.merge(
-      credentials,
-      Layer.provide(FetchHttpClient.layer, Layer.succeed(FetchHttpClient.Fetch, transport.fetch)),
-    ),
+const bindings = (transport: Transport) => {
+  const http = Layer.provide(
+    FetchHttpClient.layer,
+    Layer.succeed(FetchHttpClient.Fetch, transport.fetch),
   );
+
+  return Layer.merge(
+    Layer.provide(
+      Layer.merge(AWS.DynamoDB.UpdateItemHttp, AWS.DynamoDB.TransactWriteItemsHttp),
+      Layer.merge(credentials, http),
+    ),
+    Layer.provide(FunctionServicesLive, http),
+  );
+};
 
 interface ResourceStandIn {
   readonly LogicalId: string;
@@ -110,13 +138,17 @@ const runUpdateIf = (transport: Transport) =>
     const { updateIf } = updatePrimitives({ updateItem });
 
     return yield* Effect.result(
-      updateIf("checkpoint", {
-        Key: key,
-        UpdateExpression: "SET #state = :s",
-        ConditionExpression: "#state = :p",
-        ExpressionAttributeNames: { "#state": "state" },
-        ExpressionAttributeValues: { ":s": str("sending"), ":p": str("queued") },
-      }),
+      updateIf(
+        "checkpoint",
+        {
+          Key: key,
+          UpdateExpression: "SET #state = :s",
+          ConditionExpression: "#state = :p",
+          ExpressionAttributeNames: { "#state": "state" },
+          ExpressionAttributeValues: { ":s": str("sending"), ":p": str("queued") },
+        },
+        (current) => new Refused({ current }),
+      ),
     );
   }).pipe(Effect.provide(bindings(transport)));
 
@@ -124,23 +156,23 @@ const runTransaction = (transport: Transport) =>
   Effect.gen(function* () {
     const transactWriteItems = yield* AWS.DynamoDB.TransactWriteItems(table);
 
-    const { runTransaction } = transactionPrimitives(
+    const { transact } = transactionPrimitives(
       { transactWriteItems },
       tokensFor(transport.attempts),
     );
 
     return yield* Effect.result(
-      runTransaction("claimRecipient", {
-        TransactItems: [
-          {
-            Put: {
-              Table: table.LogicalId,
-              Item: key,
-              ConditionExpression: "attribute_not_exists(pk)",
-            },
+      transact("claimRecipient", [
+        {
+          Put: {
+            Table: table.LogicalId,
+            Item: key,
+            ConditionExpression: "attribute_not_exists(pk)",
+            ReturnValuesOnConditionCheckFailure: "ALL_OLD",
           },
-        ],
-      }),
+          refused: (current) => new Refused({ current }),
+        },
+      ]),
     );
   }).pipe(Effect.provide(bindings(transport)));
 
@@ -148,32 +180,30 @@ const runLifecycleTransaction = (transport: Transport) =>
   Effect.gen(function* () {
     const transactWriteItems = yield* AWS.DynamoDB.TransactWriteItems(table);
 
-    const { runTransaction } = transactionPrimitives(
+    const { transact } = transactionPrimitives(
       { transactWriteItems },
       tokensFor(transport.attempts),
     );
 
     return yield* Effect.result(
-      runTransaction("enqueueCampaign", {
-        TransactItems: [
-          {
-            Update: {
-              Table: table.LogicalId,
-              Key: key,
-              UpdateExpression:
-                "SET #state = :queued, queuedAt = :now, runToken = :run, runAccepted = accepted, runBounced = bounced, runComplained = complained",
-              ConditionExpression: "#state = :draft AND attribute_not_exists(runToken)",
-              ExpressionAttributeNames: { "#state": "state" },
-              ExpressionAttributeValues: {
-                ":queued": str("queued"),
-                ":now": str("2026-09-11T10:00:04.000Z"),
-                ":run": str("0195f0a0-1111-4222-8333-44444444e5d2"),
-                ":draft": str("draft"),
-              },
+      transact("enqueueCampaign", [
+        {
+          Update: {
+            Table: table.LogicalId,
+            Key: key,
+            UpdateExpression:
+              "SET #state = :queued, queuedAt = :now, runToken = :run, runAccepted = accepted, runBounced = bounced, runComplained = complained",
+            ConditionExpression: "#state = :draft AND attribute_not_exists(runToken)",
+            ExpressionAttributeNames: { "#state": "state" },
+            ExpressionAttributeValues: {
+              ":queued": str("queued"),
+              ":now": str("2026-09-11T10:00:04.000Z"),
+              ":run": str("0195f0a0-1111-4222-8333-44444444e5d2"),
+              ":draft": str("draft"),
             },
           },
-        ],
-      }),
+        },
+      ]),
     );
   }).pipe(Effect.provide(bindings(transport)));
 
@@ -184,39 +214,62 @@ describe("conditional primitives over the real client", () => {
 
       const outcome = yield* runUpdateIf(transport);
 
-      expect(Result.isSuccess(outcome) && outcome.success).toStrictEqual({
-        applied: true,
-        attributes: undefined,
-      });
+      expect(Result.isSuccess(outcome)).toBe(true);
       expect(transport.attempts).toHaveLength(2);
       expect(transport.attempts[1]).toBe(transport.attempts[0]);
     }),
   );
 
-  it.live("runTransaction lets the client retry a server error with the same token", () =>
+  // DynamoDB labels large error replies gzip without compressing them, which fetch cannot decode.
+  it.live("asks for every reply uncompressed, retries included", () =>
+    Effect.gen(function* () {
+      const transport = transportReplying([serverError, ok]);
+
+      yield* runTransaction(transport);
+
+      expect(transport.encodings).toStrictEqual(["identity", "identity"]);
+    }),
+  );
+
+  // Live: the client backs off on the real clock. Without the retry budget, its default policy
+  // would still be retrying when the operation timeout fired, and the store would report a timeout.
+  it.live(
+    "gives up on a persistent server error inside the timeout, with the service's error",
+    () =>
+      Effect.gen(function* () {
+        const transport = transportReplying([serverError]);
+
+        const outcome = yield* runUpdateIf(transport);
+
+        expect(Result.isFailure(outcome) && outcome.failure).toStrictEqual(
+          new StorageUnavailable({ operation: "checkpoint", failure: "InternalServerError" }),
+        );
+        expect(transport.attempts.length).toBeGreaterThan(1);
+      }),
+  );
+
+  it.live("transact lets the client retry a server error with the same token", () =>
     Effect.gen(function* () {
       const transport = transportReplying([serverError, ok]);
 
       const outcome = yield* runTransaction(transport);
 
-      expect(Result.isSuccess(outcome) && outcome.success).toStrictEqual({ committed: true });
+      expect(Result.isSuccess(outcome)).toBe(true);
       expect(transport.attempts).toHaveLength(2);
       expect(transport.attempts[1]).toBe(transport.attempts[0]);
       expect(tokenOf(transport.attempts[0] ?? "")).toBe("token-1");
     }),
   );
 
-  it.live(
-    "runTransaction retries a conflict cancellation itself, as a new call with a new token",
-    () =>
-      Effect.gen(function* () {
-        const transport = transportReplying([conflictCancellation, ok]);
+  it.live("transact retries a conflict cancellation itself, as a new call with a new token", () =>
+    Effect.gen(function* () {
+      const transport = transportReplying([conflictCancellation, ok]);
 
-        const outcome = yield* runTransaction(transport);
+      const outcome = yield* runTransaction(transport);
 
-        expect(Result.isSuccess(outcome) && outcome.success).toStrictEqual({ committed: true });
-        expect(transport.attempts.map(tokenOf)).toStrictEqual(["token-1", "token-2"]);
-      }),
+      expect(Result.isSuccess(outcome)).toBe(true);
+      expect(transport.attempts.map(tokenOf)).toStrictEqual(["token-1", "token-2"]);
+    }),
   );
 
   it.live(
@@ -227,7 +280,7 @@ describe("conditional primitives over the real client", () => {
 
         const outcome = yield* runLifecycleTransaction(transport);
 
-        expect(Result.isSuccess(outcome) && outcome.success).toStrictEqual({ committed: true });
+        expect(Result.isSuccess(outcome)).toBe(true);
         expect(transport.attempts).toHaveLength(2);
         expect(transport.attempts[1]).toBe(transport.attempts[0]);
         expect(tokenOf(transport.attempts[0] ?? "")).toBe("token-1");
@@ -236,13 +289,27 @@ describe("conditional primitives over the real client", () => {
       }),
   );
 
+  it.live("passes the item a failed condition returned to the refusal, as the SDK parsed it", () =>
+    Effect.gen(function* () {
+      const transport = transportReplying([conditionCancellation]);
+
+      const outcome = yield* runTransaction(transport);
+
+      expect(Result.isFailure(outcome) && outcome.failure).toStrictEqual(
+        new Refused({ current: { pk: { S: "CAMPAIGN#x" }, state: { S: "paused" } } }),
+      );
+      expect(transport.attempts).toHaveLength(1);
+      expect(transport.attempts[0]).toContain('"ReturnValuesOnConditionCheckFailure":"ALL_OLD"');
+    }),
+  );
+
   it.live("retries a lifecycle Update conflict cancellation as a new call with a new token", () =>
     Effect.gen(function* () {
       const transport = transportReplying([conflictCancellation, ok]);
 
       const outcome = yield* runLifecycleTransaction(transport);
 
-      expect(Result.isSuccess(outcome) && outcome.success).toStrictEqual({ committed: true });
+      expect(Result.isSuccess(outcome)).toBe(true);
       expect(transport.attempts.map(tokenOf)).toStrictEqual(["token-1", "token-2"]);
     }),
   );

@@ -4,7 +4,7 @@ import * as Schemas from "@emailer/api/Schemas";
 import * as AWS from "alchemy/AWS";
 import { Context, Data, Duration, Effect, Layer } from "effect";
 
-import { describeCause } from "../Diagnostics.ts";
+import { describeCause } from "../Errors.ts";
 import { sendingIdentity } from "../identity/SendingIdentity.ts";
 import { compose, fromHeader, senderSettings } from "./Message.ts";
 
@@ -30,21 +30,59 @@ export type SendPurpose =
   | { readonly kind: "campaign"; readonly campaignId: string; readonly sendId: string }
   | { readonly kind: "test" };
 
-class SubmissionUncertain extends Data.TaggedError("SubmissionUncertain")<{
-  readonly reason: "timeout" | "transport" | "malformed-response";
-  readonly cause: unknown;
+/** SES refused the message for good; the code is what a send row or a test report records. */
+export class SendRejected extends Data.TaggedError("SendRejected")<{
+  readonly code: Exclude<Schemas.RejectionCode, "rate-limited" | "sending-paused">;
 }> {}
 
-const rejectionCodes: Partial<Record<sesv2.SendEmailError["_tag"], Schemas.RejectionCode>> = {
-  MessageRejected: "message-rejected",
-  BadRequestException: "invalid-request",
-  MailFromDomainNotVerifiedException: "identity-not-verified",
-  NotFoundException: "identity-not-verified",
-  SendingPausedException: "sending-paused",
-  AccountSuspendedException: "sending-paused",
-  TooManyRequestsException: "rate-limited",
-  ThrottlingException: "rate-limited",
-  LimitExceededException: "rate-limited",
+/** SES is shedding load: the same message may be sent again shortly. */
+export class SendThrottled extends Data.TaggedError("SendThrottled") {}
+
+/** SES has stopped sending for the account or the configuration set. */
+export class SendingSuspended extends Data.TaggedError("SendingSuspended") {}
+
+/** Whether the message went out is unknown, so it must not be sent again. */
+export class SubmissionUncertain extends Data.TaggedError("SubmissionUncertain")<{
+  readonly reason: "timeout" | "transport" | "malformed-response";
+}> {}
+
+export type SendError = SendRejected | SendThrottled | SendingSuspended | SubmissionUncertain;
+
+/** The SES errors that are answers; any other means the outcome is unknown. */
+const refusals: Partial<
+  Record<sesv2.SendEmailError["_tag"], () => SendRejected | SendThrottled | SendingSuspended>
+> = {
+  MessageRejected: () => new SendRejected({ code: "message-rejected" }),
+  BadRequestException: () => new SendRejected({ code: "invalid-request" }),
+  MailFromDomainNotVerifiedException: () => new SendRejected({ code: "identity-not-verified" }),
+  NotFoundException: () => new SendRejected({ code: "identity-not-verified" }),
+  SendingPausedException: () => new SendingSuspended(),
+  AccountSuspendedException: () => new SendingSuspended(),
+  TooManyRequestsException: () => new SendThrottled(),
+  ThrottlingException: () => new SendThrottled(),
+  LimitExceededException: () => new SendThrottled(),
+};
+
+const rejected = (rejectionCode: Schemas.RejectionCode): SubmissionOutcome => ({
+  outcome: "rejected",
+  rejectionCode,
+});
+
+/** What a send row or a test report records for a message SES accepted. */
+export const accepted = (messageId: string): SubmissionOutcome => ({
+  outcome: "accepted",
+  messageId,
+});
+
+/**
+ * What a send row or a test report records for each send error, as `Effect.catchTags` handlers.
+ * Throttled and suspended are rejections too, under the codes that also pause a run.
+ */
+export const failureOutcomes = {
+  SendRejected: ({ code }: SendRejected) => Effect.succeed(rejected(code)),
+  SendThrottled: () => Effect.succeed(rejected("rate-limited")),
+  SendingSuspended: () => Effect.succeed(rejected("sending-paused")),
+  SubmissionUncertain: () => Effect.succeed<SubmissionOutcome>({ outcome: "uncertain" }),
 };
 
 export const feedbackPublishing = Effect.gen(function* () {
@@ -53,7 +91,7 @@ export const feedbackPublishing = Effect.gen(function* () {
 
   return yield* AWS.SES.ConfigurationSetEventDestination(eventDestinationLogicalId, {
     configurationSetName: mail.configurationSetName,
-    matchingEventTypes: ["BOUNCE", "COMPLAINT", "DELIVERY_DELAY"],
+    matchingEventTypes: ["BOUNCE", "COMPLAINT"],
     eventBridgeDestination: {
       eventBusArn: `arn:aws:events:${region}:${accountId}:event-bus/default`,
     },
@@ -78,7 +116,7 @@ export const makeSend =
     content: MessageContent,
     unsubscribeUrl: string,
     purpose: SendPurpose,
-  ): Effect.Effect<SubmissionOutcome> =>
+  ): Effect.Effect<string, SendError> =>
     Effect.gen(function* () {
       const message = compose(content, unsubscribeUrl, postal);
       const text = { Text: { Data: message.text, Charset: "UTF-8" } };
@@ -98,42 +136,33 @@ export const makeSend =
         },
       };
 
-      return yield* sendEmail(
+      // Callers learn only that the outcome is unknown; why is logged here, where it is
+      // classified, reduced so neither the recipient nor an SDK payload reaches the log.
+      const uncertain = (reason: SubmissionUncertain["reason"], cause: unknown) =>
+        Effect.logWarning("submission uncertain", {
+          ...purpose,
+          reason,
+          cause: describeCause(cause),
+        }).pipe(Effect.andThen(Effect.fail(new SubmissionUncertain({ reason }))));
+
+      const response = yield* sendEmail(
         purpose.kind === "campaign" ? { ...request, EmailTags: tagsFor(purpose) } : request,
       ).pipe(
         Retry.none,
-        Effect.matchEffect({
-          onFailure: (error): Effect.Effect<SubmissionOutcome, SubmissionUncertain> => {
-            const rejectionCode = rejectionCodes[error._tag];
+        Effect.catch((error): Effect.Effect<never, SendError> => {
+          const refusal = refusals[error._tag];
 
-            return rejectionCode === undefined
-              ? Effect.fail(new SubmissionUncertain({ reason: "transport", cause: error }))
-              : Effect.succeed({ outcome: "rejected", rejectionCode });
-          },
-          onSuccess: (response): Effect.Effect<SubmissionOutcome, SubmissionUncertain> => {
-            const messageId = response.MessageId;
-
-            return messageId === undefined || messageId.length === 0
-              ? Effect.fail(
-                  new SubmissionUncertain({ reason: "malformed-response", cause: response }),
-                )
-              : Effect.succeed({ outcome: "accepted", messageId });
-          },
+          return refusal === undefined ? uncertain("transport", error) : Effect.fail(refusal());
         }),
         Effect.timeout(submissionTimeout),
-        Effect.catchTag("TimeoutError", (cause) =>
-          Effect.fail(new SubmissionUncertain({ reason: "timeout", cause })),
-        ),
-        // Callers record only that the outcome is unknown; why is logged here, where it is
-        // classified, reduced so neither the recipient nor an SDK payload reaches the log.
-        Effect.catchTag("SubmissionUncertain", (uncertain) =>
-          Effect.logWarning("submission uncertain", {
-            ...purpose,
-            reason: uncertain.reason,
-            cause: describeCause(uncertain.cause),
-          }).pipe(Effect.as({ outcome: "uncertain" } as const)),
-        ),
+        Effect.catchTag("TimeoutError", (timeout) => uncertain("timeout", timeout)),
       );
+
+      if (response.MessageId === undefined || response.MessageId.length === 0) {
+        return yield* uncertain("malformed-response", response);
+      }
+
+      return response.MessageId;
     });
 
 export class Mailer extends Context.Service<Mailer>()("emailer/backend/Mailer", {

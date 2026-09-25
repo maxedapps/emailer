@@ -3,10 +3,10 @@ import { Stack } from "alchemy";
 import * as AWS from "alchemy/AWS";
 import { Config, Duration, Effect, Layer, Schema, Stream } from "effect";
 
-import { reportedAndFatal } from "../Diagnostics.ts";
 import { classify, decodeEmailEvent } from "./FeedbackClassification.ts";
 import { nowIso } from "../Identifiers.ts";
-import { lambdaBasics } from "../Lambda.ts";
+import { FunctionServicesLive, lambdaBasics } from "../Lambda.ts";
+import { failingInvocation } from "../Reporting.ts";
 import { configurationSet } from "../sending/Mailer.ts";
 import { FeedbackStore, FeedbackStoreLive } from "../storage/Feedback.ts";
 
@@ -58,7 +58,7 @@ const feedbackEvents = AWS.SQS.Queue(
 );
 
 /**
- * The default-bus rule that puts SES bounce, complaint and delivery-delay events on the queue, and
+ * The default-bus rule that puts SES bounce and complaint events on the queue, and
  * the queue policy that lets EventBridge send them. Deploy-time only, like `feedbackPublishing`:
  * `alchemy.run.ts` yields this and the function's constructor does not.
  *
@@ -78,7 +78,7 @@ export const feedbackRouting = Effect.gen(function* () {
     name: ruleName,
     eventPattern: {
       source: ["aws.ses"],
-      "detail-type": ["Email Bounced", "Email Complaint Received", "Email Delivery Delayed"],
+      "detail-type": ["Email Bounced", "Email Complaint Received"],
     },
     targets: [{ Id: "FeedbackEvents", Arn: queue.queueArn }],
   });
@@ -120,16 +120,6 @@ const record = (event: EmailEvent) =>
     const campaignId = event.mail.tags?.[campaignTag]?.[0];
     const messageId = event.mail.messageId;
 
-    if (classified.classification === "delay") {
-      return yield* Effect.logInfo("delivery delayed", {
-        delayType: classified.delayType,
-        recipients: classified.recipients.length,
-        campaignId,
-        messageId,
-        expirationTime: classified.expirationTime,
-      });
-    }
-
     const storage = yield* FeedbackStore;
     const receivedAt = yield* nowIso;
 
@@ -159,34 +149,34 @@ const record = (event: EmailEvent) =>
     }
 
     for (const recipient of classified.recipients) {
-      const outcome = yield* storage.recordFeedback(
-        {
-          campaignId,
-          kind: classified.kind,
-          feedbackId: classified.feedbackId,
-          recipient,
-          messageId,
-          outcome: classified.outcome,
-          receivedAt,
-          bounceType: classified.bounceType,
-          bounceSubType: classified.bounceSubType,
-          complaintFeedbackType: classified.complaintFeedbackType,
-          complaintSubType: classified.complaintSubType,
-        },
-        classified.write,
-      );
-
-      if (outcome === "unknown-campaign") {
-        yield* Effect.logWarning("feedback event for unknown campaign", {
-          campaignId,
-          kind: classified.kind,
-        });
-      } else if (outcome === "duplicate") {
-        yield* Effect.logDebug("duplicate feedback event", {
-          campaignId,
-          kind: classified.kind,
-        });
-      }
+      yield* storage
+        .recordFeedback(
+          {
+            campaignId,
+            kind: classified.kind,
+            feedbackId: classified.feedbackId,
+            recipient,
+            messageId,
+            outcome: classified.outcome,
+            receivedAt,
+            bounceType: classified.bounceType,
+            bounceSubType: classified.bounceSubType,
+            complaintFeedbackType: classified.complaintFeedbackType,
+            complaintSubType: classified.complaintSubType,
+          },
+          classified.write,
+        )
+        .pipe(
+          Effect.catchTags({
+            FeedbackAlreadyRecorded: () =>
+              Effect.logDebug("duplicate feedback event", { campaignId, kind: classified.kind }),
+            CampaignNotFound: () =>
+              Effect.logWarning("feedback event for unknown campaign", {
+                campaignId,
+                kind: classified.kind,
+              }),
+          }),
+        );
     }
 
     yield* Effect.logInfo("feedback recorded", {
@@ -252,7 +242,9 @@ const feedbackProps = Effect.gen(function* () {
 });
 
 /** Every service an event uses, bound once per instance. */
-const FeedbackLive = FeedbackStoreLive.pipe(Layer.provideMerge(NodeCrypto.layer));
+const FeedbackLive = Layer.mergeAll(FeedbackStoreLive, FunctionServicesLive).pipe(
+  Layer.provideMerge(NodeCrypto.layer),
+);
 
 export default class FeedbackFunction extends AWS.Lambda.Function<FeedbackFunction>()(
   "Feedback",
@@ -265,7 +257,7 @@ export default class FeedbackFunction extends AWS.Lambda.Function<FeedbackFuncti
         const expected = yield* expectedConfigurationSet;
 
         yield* Stream.runForEach(records, (message) => handleMessage(expected, message.body));
-      }).pipe(Effect.provideContext(services), reportedAndFatal),
+      }).pipe(failingInvocation, Effect.provideContext(services)),
     );
 
     return {};

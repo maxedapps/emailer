@@ -1,23 +1,30 @@
+import type * as dynamodb from "@distilled.cloud/aws/dynamodb";
+import * as Errors from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
-import { Effect } from "effect";
+import { Effect, Result } from "effect";
 import { afterEach, describe, expect, it } from "@effect/vitest";
 
-import { campaignOperations } from "./Campaigns.ts";
-import { str, strMap, tableLogicalId, withOptional } from "./Items.ts";
+import { CorruptItem } from "../Errors.ts";
+import {
+  CampaignChanged,
+  campaignOperations,
+  RunSuperseded,
+  SettlementNotApplied,
+} from "./Campaigns.ts";
+import { str, strMap, tableLogicalId } from "./Items.ts";
 import {
   campaignId,
   cancelled,
   conditionFailed,
   contactId,
   createdAt,
-  failureOf,
+  defectOf,
   listId,
   primitivesFor,
   scriptedTable,
   serverError,
+  withOptional,
 } from "./Testing.ts";
-
-import type { StorageFailure } from "./Errors.ts";
 
 import type { Table } from "./Testing.ts";
 
@@ -103,7 +110,7 @@ interface StoredCampaignFields {
   readonly filter?: Schemas.ContactAttributes;
 }
 
-const meta = (fields: StoredCampaignFields) => {
+const meta = (fields: StoredCampaignFields): dynamodb.AttributeMap => {
   const item = withOptional(
     {
       pk: { S: `CAMPAIGN#${campaignId}` },
@@ -130,7 +137,8 @@ const meta = (fields: StoredCampaignFields) => {
       ["finishedAt", fields.finishedAt],
       ["pausedReason", fields.pausedReason],
       ["cursor", fields.cursor],
-      ["runToken", fields.runToken],
+      // Every state past draft holds its run's token.
+      ["runToken", fields.runToken ?? (fields.state === "draft" ? undefined : runToken)],
     ],
   );
 
@@ -400,9 +408,9 @@ describe("campaign records", () => {
         ],
       });
 
-      const attempt = yield* Effect.result(storage.getCampaign(campaignId));
+      const defect = yield* defectOf(storage.getCampaign(campaignId));
 
-      expect(failureOf(attempt).reason).toBe("corrupt");
+      expect(defect).toStrictEqual(new CorruptItem({ operation: "getCampaign" }));
     }),
   );
 
@@ -459,10 +467,9 @@ describe("campaign records", () => {
         getItem: [Effect.succeed({ Item: meta({ state: "draft" }) }), Effect.succeed({})],
       });
 
-      const attempt = yield* Effect.result(storage.getCampaign(campaignId));
+      const defect = yield* defectOf(storage.getCampaign(campaignId));
 
-      expect(failureOf(attempt).reason).toBe("corrupt");
-      expect(failureOf(attempt).operationId).toBe("getCampaignBody");
+      expect(defect).toStrictEqual(new CorruptItem({ operation: "getCampaignBody" }));
     }),
   );
 });
@@ -502,7 +509,7 @@ describe("getCampaignControl", () => {
           ],
         });
 
-        expect(yield* storage.getCampaignControl(campaignId)).toStrictEqual({
+        expect(yield* storage.getCampaignControl(campaignId)).toMatchObject({
           state: "paused",
           runToken,
           startedAt,
@@ -523,12 +530,10 @@ describe("getCampaignControl", () => {
         getItem: [Effect.succeed({ Item: meta({ state: "draft" }) })],
       });
 
-      expect(yield* storage.getCampaignControl(campaignId)).toStrictEqual({
-        state: "draft",
-        runToken: undefined,
-        startedAt: undefined,
-        pausedReason: undefined,
-      });
+      const control = yield* storage.getCampaignControl(campaignId);
+
+      expect(control.state).toBe("draft");
+      expect(control).not.toHaveProperty("runToken");
     }),
   );
 
@@ -539,23 +544,21 @@ describe("getCampaignControl", () => {
       });
 
       expect(yield* Effect.flip(storage.getCampaignControl(campaignId))).toStrictEqual(
-        new Schemas.NotFound({ entity: "campaign" }),
+        new Errors.CampaignNotFound(),
       );
     }),
   );
 
-  it.effect("decodes a queued record without a run token rather than treating it as corrupt", () =>
+  it.effect("treats a queued campaign without a run token as corrupt", () =>
     Effect.gen(function* () {
-      const { storage } = withStorage({
-        getItem: [Effect.succeed({ Item: meta({ state: "queued", queuedAt }) })],
-      });
+      const item = meta({ state: "queued", queuedAt });
+      const { runToken: _missing, ...tokenless } = item;
 
-      expect(yield* storage.getCampaignControl(campaignId)).toStrictEqual({
-        state: "queued",
-        runToken: undefined,
-        startedAt: undefined,
-        pausedReason: undefined,
-      });
+      const { storage } = withStorage({ getItem: [Effect.succeed({ Item: tokenless })] });
+
+      expect(yield* defectOf(storage.getCampaignControl(campaignId))).toStrictEqual(
+        new CorruptItem({ operation: "getCampaignControl" }),
+      );
     }),
   );
 });
@@ -642,9 +645,7 @@ describe("updateDraft", () => {
     Effect.gen(function* () {
       const { table, storage } = withStorage({});
 
-      expect(
-        yield* storage.updateDraft({ ...draft, html: "<p>Body</p>", filter: { plan: "pro" } }),
-      ).toBe("updated");
+      yield* storage.updateDraft({ ...draft, html: "<p>Body</p>", filter: { plan: "pro" } });
       expect(table.transactionRequests).toHaveLength(1);
       expect(table.transactionRequests[0]?.TransactItems).toStrictEqual([
         {
@@ -653,6 +654,7 @@ describe("updateDraft", () => {
             Key: metaKey,
             ConditionExpression: "#state = :draft",
             ExpressionAttributeNames: { "#state": "state", "#filter": "filter" },
+            ReturnValuesOnConditionCheckFailure: "ALL_OLD",
             UpdateExpression: "SET subject = :subject, listId = :listId, #filter = :filter",
             ExpressionAttributeValues: {
               ":subject": { S: "Release" },
@@ -689,7 +691,7 @@ describe("deleteDraft", () => {
     Effect.gen(function* () {
       const { table, storage } = withStorage({});
 
-      expect(yield* storage.deleteDraft(campaignId)).toBe("deleted");
+      yield* storage.deleteDraft(campaignId);
       expect(table.transactionRequests[0]?.TransactItems).toStrictEqual([
         {
           Delete: {
@@ -698,6 +700,7 @@ describe("deleteDraft", () => {
             ConditionExpression: "#state = :draft",
             ExpressionAttributeNames: { "#state": "state" },
             ExpressionAttributeValues: { ":draft": { S: "draft" } },
+            ReturnValuesOnConditionCheckFailure: "ALL_OLD",
           },
         },
         {
@@ -787,9 +790,7 @@ describe("newRun", () => {
     Effect.gen(function* () {
       const { table, storage } = withStorage({});
 
-      expect(yield* storage.newRun(campaignId, observed("draft"), runToken, "queued", now)).toBe(
-        "queued",
-      );
+      yield* storage.newRun(campaignId, observed("draft"), runToken, "queued", now);
       expect(table.transactionRequests[0]?.ClientRequestToken).toBe("token-1");
       expect(lifecycleUpdate(table)).toStrictEqual({
         Table: tableLogicalId,
@@ -798,6 +799,7 @@ describe("newRun", () => {
           "SET #state = :target, queuedAt = :queuedAt, runToken = :run, runAccepted = accepted, runBounced = bounced, runComplained = complained REMOVE pausedReason",
         ConditionExpression: "#state = :expectedState AND attribute_not_exists(runToken)",
         ExpressionAttributeNames: { "#state": "state" },
+        ReturnValuesOnConditionCheckFailure: "ALL_OLD",
         ExpressionAttributeValues: {
           ":target": { S: "queued" },
           ":queuedAt": { S: now },
@@ -815,9 +817,7 @@ describe("newRun", () => {
       Effect.gen(function* () {
         const { table, storage } = withStorage({});
 
-        expect(
-          yield* storage.newRun(campaignId, observed("draft"), runToken, "scheduled", queuedAt),
-        ).toBe("scheduled");
+        yield* storage.newRun(campaignId, observed("draft"), runToken, "scheduled", queuedAt);
         expect(lifecycleUpdate(table)).toStrictEqual({
           Table: tableLogicalId,
           Key: { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } },
@@ -825,6 +825,7 @@ describe("newRun", () => {
             "SET #state = :target, queuedAt = :queuedAt, runToken = :run, runAccepted = accepted, runBounced = bounced, runComplained = complained REMOVE pausedReason",
           ConditionExpression: "#state = :expectedState AND attribute_not_exists(runToken)",
           ExpressionAttributeNames: { "#state": "state" },
+          ReturnValuesOnConditionCheckFailure: "ALL_OLD",
           ExpressionAttributeValues: {
             ":target": { S: "scheduled" },
             ":queuedAt": { S: queuedAt },
@@ -841,9 +842,7 @@ describe("newRun", () => {
       Effect.gen(function* () {
         const { table, storage } = withStorage({});
 
-        expect(
-          yield* storage.newRun(campaignId, observed("paused", runToken), nextToken, "queued", now),
-        ).toBe("queued");
+        yield* storage.newRun(campaignId, observed("paused", runToken), nextToken, "queued", now);
         expect(lifecycleUpdate(table)).toStrictEqual({
           Table: tableLogicalId,
           Key: { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } },
@@ -851,6 +850,7 @@ describe("newRun", () => {
             "SET #state = :target, queuedAt = :queuedAt, runToken = :run, runAccepted = accepted, runBounced = bounced, runComplained = complained REMOVE pausedReason",
           ConditionExpression: "#state = :expectedState AND runToken = :expected",
           ExpressionAttributeNames: { "#state": "state" },
+          ReturnValuesOnConditionCheckFailure: "ALL_OLD",
           ExpressionAttributeValues: {
             ":target": { S: "queued" },
             ":queuedAt": { S: now },
@@ -868,9 +868,7 @@ describe("newRun", () => {
       Effect.gen(function* () {
         const { table, storage } = withStorage({});
 
-        expect(
-          yield* storage.newRun(campaignId, observed("draft", runToken), nextToken, "queued", now),
-        ).toBe("queued");
+        yield* storage.newRun(campaignId, observed("draft", runToken), nextToken, "queued", now);
         expect(lifecycleUpdate(table)?.ConditionExpression).toBe(
           "#state = :expectedState AND runToken = :expected",
         );
@@ -888,15 +886,13 @@ describe("newRun", () => {
     Effect.gen(function* () {
       const { table, storage } = withStorage({});
 
-      expect(
-        yield* storage.newRun(
-          campaignId,
-          observed("scheduled", runToken),
-          nextToken,
-          "scheduled",
-          queuedAt,
-        ),
-      ).toBe("scheduled");
+      yield* storage.newRun(
+        campaignId,
+        observed("scheduled", runToken),
+        nextToken,
+        "scheduled",
+        queuedAt,
+      );
       expect(lifecycleUpdate(table)?.ConditionExpression).toBe(
         "#state = :expectedState AND runToken = :expected",
       );
@@ -922,12 +918,12 @@ describe("newRun", () => {
           transactWriteItems: [Effect.fail(serverError)],
         });
 
-        const attempt = yield* Effect.result(
+        const failure = yield* Effect.flip(
           storage.newRun(campaignId, observed(source, runToken), nextToken, target, now),
         );
 
-        expect(failureOf(attempt).reason).toBe("unavailable");
-        expect(failureOf(attempt).operationId).toBe(operationId);
+        expect(failure).toBeInstanceOf(Errors.StorageUnavailable);
+        expect(failure).toMatchObject({ operation: operationId });
       }),
   );
 });
@@ -937,9 +933,7 @@ describe("cancelCampaign", () => {
     Effect.gen(function* () {
       const { table, storage } = withStorage({});
 
-      expect(yield* storage.cancelCampaign(campaignId, { state: "scheduled", runToken })).toBe(
-        "applied",
-      );
+      yield* storage.cancelCampaign(campaignId, { state: "scheduled", runToken });
       expect(table.transactionRequests[0]?.ClientRequestToken).toBe("token-1");
       expect(lifecycleUpdate(table)).toStrictEqual({
         Table: tableLogicalId,
@@ -947,6 +941,7 @@ describe("cancelCampaign", () => {
         UpdateExpression: "SET #state = :draft REMOVE queuedAt",
         ConditionExpression: "#state = :scheduled AND runToken = :expected",
         ExpressionAttributeNames: { "#state": "state" },
+        ReturnValuesOnConditionCheckFailure: "ALL_OLD",
         ExpressionAttributeValues: {
           ":draft": { S: "draft" },
           ":scheduled": { S: "scheduled" },
@@ -963,13 +958,11 @@ describe("cancelCampaign", () => {
       Effect.gen(function* () {
         const { table, storage } = withStorage({});
 
-        expect(
-          yield* storage.cancelCampaign(campaignId, {
-            state: "queued",
-            runToken,
-            started: false,
-          }),
-        ).toBe("applied");
+        yield* storage.cancelCampaign(campaignId, {
+          state: "queued",
+          runToken,
+          started: false,
+        });
         expect(lifecycleUpdate(table)).toStrictEqual({
           Table: tableLogicalId,
           Key: { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } },
@@ -977,6 +970,7 @@ describe("cancelCampaign", () => {
           ConditionExpression:
             "#state = :queued AND runToken = :expected AND attribute_not_exists(startedAt)",
           ExpressionAttributeNames: { "#state": "state" },
+          ReturnValuesOnConditionCheckFailure: "ALL_OLD",
           ExpressionAttributeValues: {
             ":draft": { S: "draft" },
             ":queued": { S: "queued" },
@@ -990,13 +984,11 @@ describe("cancelCampaign", () => {
     Effect.gen(function* () {
       const { table, storage } = withStorage({});
 
-      expect(
-        yield* storage.cancelCampaign(campaignId, {
-          state: "queued",
-          runToken,
-          started: true,
-        }),
-      ).toBe("applied");
+      yield* storage.cancelCampaign(campaignId, {
+        state: "queued",
+        runToken,
+        started: true,
+      });
       expect(lifecycleUpdate(table)).toStrictEqual({
         Table: tableLogicalId,
         Key: { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } },
@@ -1004,6 +996,7 @@ describe("cancelCampaign", () => {
         ConditionExpression:
           "#state = :queued AND runToken = :expected AND attribute_exists(startedAt)",
         ExpressionAttributeNames: { "#state": "state" },
+        ReturnValuesOnConditionCheckFailure: "ALL_OLD",
         ExpressionAttributeValues: {
           ":paused": { S: "paused" },
           ":manual": { S: "manual" },
@@ -1031,14 +1024,11 @@ describe("beginRun", () => {
       });
 
       expect(yield* storage.beginRun(campaignId, runToken, now)).toStrictEqual({
-        outcome: "running",
-        campaign: {
-          listId,
-          subject: "Release",
-          cursor: contactId,
-          filter: undefined,
-          run: { accepted: 0, bounced: 0, complained: 0 },
-        },
+        listId,
+        subject: "Release",
+        cursor: contactId,
+        filter: undefined,
+        run: { accepted: 0, bounced: 0, complained: 0 },
       });
       expect(table.updateItemRequests[0]).toStrictEqual({
         Key: { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } },
@@ -1073,14 +1063,11 @@ describe("beginRun", () => {
       });
 
       expect(yield* storage.beginRun(campaignId, runToken, now)).toStrictEqual({
-        outcome: "running",
-        campaign: {
-          listId,
-          subject: "Release",
-          cursor: undefined,
-          filter: undefined,
-          run: { accepted: 0, bounced: 0, complained: 0 },
-        },
+        listId,
+        subject: "Release",
+        cursor: undefined,
+        filter: undefined,
+        run: { accepted: 0, bounced: 0, complained: 0 },
       });
     }),
   );
@@ -1107,14 +1094,11 @@ describe("beginRun", () => {
       });
 
       expect(yield* storage.beginRun(campaignId, runToken, now)).toStrictEqual({
-        outcome: "running",
-        campaign: {
-          listId,
-          subject: "Release",
-          cursor: undefined,
-          filter: undefined,
-          run: { accepted: 7, bounced: 3, complained: 2 },
-        },
+        listId,
+        subject: "Release",
+        cursor: undefined,
+        filter: undefined,
+        run: { accepted: 7, bounced: 3, complained: 2 },
       });
     }),
   );
@@ -1136,14 +1120,11 @@ describe("beginRun", () => {
       });
 
       expect(yield* storage.beginRun(campaignId, runToken, now)).toStrictEqual({
-        outcome: "running",
-        campaign: {
-          listId,
-          subject: "Release",
-          cursor: undefined,
-          filter: { plan: "pro" },
-          run: { accepted: 0, bounced: 0, complained: 0 },
-        },
+        listId,
+        subject: "Release",
+        cursor: undefined,
+        filter: { plan: "pro" },
+        run: { accepted: 0, bounced: 0, complained: 0 },
       });
     }),
   );
@@ -1191,11 +1172,11 @@ describe("claimRecipient", () => {
         transactWriteItems: [Effect.fail(serverError)],
       });
 
-      const attempt = yield* Effect.result(
+      const failure = yield* Effect.flip(
         storage.claimRecipient(campaignId, runToken, contactId, recipient, sendId, now),
       );
 
-      expect(failureOf(attempt).reason).toBe("unavailable");
+      expect(failure).toBeInstanceOf(Errors.StorageUnavailable);
     }),
   );
 });
@@ -1252,18 +1233,16 @@ describe("settleRecipient", () => {
     Effect.gen(function* () {
       const { table, storage } = withStorage({});
 
-      expect(
-        yield* storage.settleRecipient(
-          campaignId,
-          sendId,
-          contactId,
-          {
-            outcome: "accepted",
-            messageId: "0100019",
-          },
-          now,
-        ),
-      ).toBe("settled");
+      yield* storage.settleRecipient(
+        campaignId,
+        sendId,
+        contactId,
+        {
+          outcome: "accepted",
+          messageId: "0100019",
+        },
+        now,
+      );
 
       const items = table.transactionRequests[0]?.TransactItems ?? [];
 
@@ -1342,9 +1321,7 @@ describe("checkpoint", () => {
     Effect.gen(function* () {
       const { table, storage } = withStorage({});
 
-      expect(yield* storage.checkpoint(campaignId, runToken, sliceId, undefined, contactId)).toBe(
-        "updated",
-      );
+      yield* storage.checkpoint(campaignId, runToken, sliceId, undefined, contactId);
       expect(table.updateItemRequests[0]).toStrictEqual({
         Key: { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } },
         UpdateExpression: "SET #cursor = :next, sliceId = :slice",
@@ -1365,9 +1342,7 @@ describe("checkpoint", () => {
     Effect.gen(function* () {
       const { table, storage } = withStorage({});
 
-      expect(
-        yield* storage.checkpoint(campaignId, runToken, sliceId, contactId, nextContactId),
-      ).toBe("updated");
+      yield* storage.checkpoint(campaignId, runToken, sliceId, contactId, nextContactId);
       expect(table.updateItemRequests[0]?.ConditionExpression).toBe(
         "#state = :sending AND runToken = :run AND (#cursor = :previous OR (#cursor = :next AND sliceId = :slice))",
       );
@@ -1387,7 +1362,7 @@ describe("completeRun", () => {
     Effect.gen(function* () {
       const { table, storage } = withStorage({});
 
-      expect(yield* storage.completeRun(campaignId, runToken, now)).toBe("completed");
+      yield* storage.completeRun(campaignId, runToken, now);
       expect(table.updateItemRequests[0]).toStrictEqual({
         Key: { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } },
         UpdateExpression: "SET #state = :completed, finishedAt = :now REMOVE #cursor, sliceId",
@@ -1409,9 +1384,7 @@ describe("pauseRun", () => {
     Effect.gen(function* () {
       const { table, storage } = withStorage({});
 
-      expect(yield* storage.pauseRun(campaignId, runToken, "daily-quota", contactId)).toBe(
-        "paused",
-      );
+      yield* storage.pauseRun(campaignId, runToken, "daily-quota", contactId);
       expect(table.updateItemRequests[0]).toStrictEqual({
         Key: { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } },
         UpdateExpression: "SET #state = :paused, pausedReason = :reason, #cursor = :cursor",
@@ -1432,9 +1405,7 @@ describe("pauseRun", () => {
     Effect.gen(function* () {
       const { table, storage } = withStorage({});
 
-      expect(yield* storage.pauseRun(campaignId, runToken, "sending-paused", undefined)).toBe(
-        "paused",
-      );
+      yield* storage.pauseRun(campaignId, runToken, "sending-paused", undefined);
       expect(table.updateItemRequests[0]?.UpdateExpression).toBe(
         "SET #state = :paused, pausedReason = :reason REMOVE #cursor",
       );
@@ -1443,79 +1414,98 @@ describe("pauseRun", () => {
   );
 });
 
+type Refusal =
+  | Errors.CampaignNotFound
+  | Errors.CampaignStateConflict
+  | CampaignChanged
+  | RunSuperseded
+  | SettlementNotApplied;
+
 describe("condition failures", () => {
+  const sending = meta({ state: "sending", queuedAt, startedAt });
+
   it.effect.each<
     readonly [
       string,
       ScriptedReplies,
-      (storage: CampaignStorage) => Effect.Effect<string | object, StorageFailure>,
-      string,
+      (storage: CampaignStorage) => Effect.Effect<unknown, Refusal | Errors.StorageUnavailable>,
+      Result.Result<unknown, Refusal>,
     ]
   >([
     [
-      "updateDraft reports conflict when the campaign is no longer a draft",
+      "updateDraft answers CampaignNotFound when the campaign is gone",
       { transactWriteItems: [cancelled("ConditionalCheckFailed", "None")] },
       (storage) => storage.updateDraft(draft),
-      "conflict",
+      Result.fail(new Errors.CampaignNotFound()),
     ],
     [
-      "deleteDraft reports conflict when the campaign is no longer a draft",
+      "updateDraft answers the state a campaign that left draft is in",
+      {
+        transactWriteItems: [cancelled({ Code: "ConditionalCheckFailed", Item: sending }, "None")],
+      },
+      (storage) => storage.updateDraft(draft),
+      Result.fail(new Errors.CampaignStateConflict({ state: "sending" })),
+    ],
+    [
+      "deleteDraft answers CampaignNotFound when the campaign is gone",
       { transactWriteItems: [cancelled("ConditionalCheckFailed", "None")] },
       (storage) => storage.deleteDraft(campaignId),
-      "conflict",
+      Result.fail(new Errors.CampaignNotFound()),
     ],
     [
-      "newRun reports conflict when the observed source no longer holds",
+      "deleteDraft answers the state a campaign that left draft is in",
+      {
+        transactWriteItems: [cancelled({ Code: "ConditionalCheckFailed", Item: sending }, "None")],
+      },
+      (storage) => storage.deleteDraft(campaignId),
+      Result.fail(new Errors.CampaignStateConflict({ state: "sending" })),
+    ],
+    [
+      "newRun answers CampaignChanged without a campaign when it is gone",
       { transactWriteItems: [cancelled("ConditionalCheckFailed")] },
       (storage) => storage.newRun(campaignId, observed("draft"), runToken, "queued", now),
-      "conflict",
+      Result.fail(new CampaignChanged({ current: undefined })),
     ],
     [
-      "cancelCampaign reports conflict when the expected source no longer holds",
-      { transactWriteItems: [cancelled("ConditionalCheckFailed")] },
-      (storage) => storage.cancelCampaign(campaignId, { state: "scheduled", runToken }),
-      "conflict",
-    ],
-    [
-      "beginRun reports a stale run token as stale, not unavailable",
+      "beginRun answers RunSuperseded for a run token that is no longer current",
       { updateItem: [conditionFailed] },
       (storage) => storage.beginRun(campaignId, runToken, now),
-      "stale",
+      Result.fail(new RunSuperseded()),
     ],
     [
-      "claimRecipient reports a stale run when the meta condition fails",
+      "claimRecipient answers RunSuperseded when the meta condition fails",
       { transactWriteItems: [cancelled("ConditionalCheckFailed", "None")] },
       (storage) => storage.claimRecipient(campaignId, runToken, contactId, recipient, sendId, now),
-      "stale",
+      Result.fail(new RunSuperseded()),
     ],
     [
       "claimRecipient reports an existing row as already claimed",
       { transactWriteItems: [cancelled("None", "ConditionalCheckFailed")] },
       (storage) => storage.claimRecipient(campaignId, runToken, contactId, recipient, sendId, now),
-      "already-claimed",
+      Result.succeed("already-claimed"),
     ],
     [
-      "claimRecipient prefers stale when both conditions fail",
+      "claimRecipient answers RunSuperseded when both conditions fail",
       { transactWriteItems: [cancelled("ConditionalCheckFailed", "ConditionalCheckFailed")] },
       (storage) => storage.claimRecipient(campaignId, runToken, contactId, recipient, sendId, now),
-      "stale",
+      Result.fail(new RunSuperseded()),
     ],
     [
       "skipRecipient reports an existing row as already claimed",
       { transactWriteItems: [cancelled("ConditionalCheckFailed", "None")] },
       (storage) =>
         storage.skipRecipient(campaignId, runToken, contactId, recipient, "suppressed", now),
-      "already-claimed",
+      Result.succeed("already-claimed"),
     ],
     [
-      "skipRecipient reports a stale run when the meta condition fails",
+      "skipRecipient answers RunSuperseded when the meta condition fails",
       { transactWriteItems: [cancelled("None", "ConditionalCheckFailed")] },
       (storage) =>
         storage.skipRecipient(campaignId, runToken, contactId, recipient, "suppressed", now),
-      "stale",
+      Result.fail(new RunSuperseded()),
     ],
     [
-      "settleRecipient reports that the row is no longer the current attempt",
+      "settleRecipient answers SettlementNotApplied when the row is not this attempt's",
       { transactWriteItems: [cancelled("ConditionalCheckFailed", "None")] },
       (storage) =>
         storage.settleRecipient(
@@ -1525,31 +1515,58 @@ describe("condition failures", () => {
           { outcome: "accepted", messageId: "0100019" },
           now,
         ),
-      "not-current",
+      Result.fail(new SettlementNotApplied()),
     ],
     [
-      "checkpoint reports a lost checkpoint as condition-failed, not unavailable",
+      "checkpoint answers RunSuperseded when it lost the page",
       { updateItem: [conditionFailed] },
       (storage) => storage.checkpoint(campaignId, runToken, sliceId, undefined, contactId),
-      "condition-failed",
+      Result.fail(new RunSuperseded()),
     ],
     [
-      "completeRun reports a stale run as stale, not unavailable",
+      "completeRun answers RunSuperseded for a stale run",
       { updateItem: [conditionFailed] },
       (storage) => storage.completeRun(campaignId, runToken, now),
-      "stale",
+      Result.fail(new RunSuperseded()),
     ],
     [
-      "pauseRun reports a stale run as stale, not unavailable",
+      "pauseRun answers RunSuperseded for a stale run",
       { updateItem: [conditionFailed] },
       (storage) => storage.pauseRun(campaignId, runToken, "rate-limited", contactId),
-      "stale",
+      Result.fail(new RunSuperseded()),
     ],
   ])("%s", ([_name, replies, run, expected]) =>
     Effect.gen(function* () {
       const { storage } = withStorage(replies);
 
-      expect(yield* run(storage)).toBe(expected);
+      expect(yield* Effect.result(run(storage))).toStrictEqual(expected);
+    }),
+  );
+
+  it.effect.each([
+    [
+      "newRun",
+      (storage: CampaignStorage) =>
+        storage.newRun(campaignId, observed("draft"), runToken, "queued", now),
+    ],
+    [
+      "cancelCampaign",
+      (storage: CampaignStorage) =>
+        storage.cancelCampaign(campaignId, { state: "scheduled", runToken }),
+    ],
+  ] as const)("%s answers the campaign as its refused condition found it", ([_name, run]) =>
+    Effect.gen(function* () {
+      const { table, storage } = withStorage({
+        transactWriteItems: [cancelled({ Code: "ConditionalCheckFailed", Item: sending })],
+      });
+
+      const failure = yield* Effect.flip(run(storage));
+
+      expect(failure).toBeInstanceOf(CampaignChanged);
+      expect(failure).toMatchObject({ current: { state: "sending", runToken, startedAt } });
+      expect(
+        table.transactionRequests[0]?.TransactItems[0]?.Update?.ReturnValuesOnConditionCheckFailure,
+      ).toBe("ALL_OLD");
     }),
   );
 });

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as Errors from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
 import { Clock, ConfigProvider, Effect, Layer, Option, Redacted, Scope } from "effect";
 import { HttpEffect } from "effect/unstable/http";
@@ -62,7 +63,7 @@ const pageFor = (stored: Schemas.Campaign | undefined, token: string, sender = s
             reads.push(id);
 
             if (stored === undefined) {
-              return yield* new Schemas.NotFound({ entity: "campaign" });
+              return yield* new Errors.CampaignNotFound();
             }
 
             return stored;
@@ -158,6 +159,15 @@ describe("GET /previews/:token", () => {
       expect(response.status).toBe(404);
       expect(body).toContain("This preview link is not valid or has expired.");
       expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(reads).toHaveLength(0);
+    }),
+  );
+
+  it.live("keeps the router's 404 for a path it does not serve", () =>
+    Effect.gen(function* () {
+      const { response, reads } = yield* pageFor(campaign, "not/a-token");
+
+      expect(response.status).toBe(404);
       expect(reads).toHaveLength(0);
     }),
   );

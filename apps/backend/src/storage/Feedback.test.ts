@@ -1,7 +1,8 @@
+import * as Errors from "@emailer/api/Errors";
 import { Effect } from "effect";
 import { describe, expect, it } from "@effect/vitest";
 
-import { feedbackWrites } from "./Feedback.ts";
+import { FeedbackAlreadyRecorded, feedbackWrites } from "./Feedback.ts";
 import { tableLogicalId } from "./Items.ts";
 import { campaignId, cancelled, createdAt, primitivesFor, scriptedTable } from "./Testing.ts";
 
@@ -86,11 +87,13 @@ const counterUpdate = (counter: "bounced" | "complained") => ({
 const transientUpdate = {
   Update: {
     Table: tableLogicalId,
-    Key: { pk: { S: `SUPPRESSION#${mailbox}` }, sk: { S: "TRANSIENT" } },
-    UpdateExpression: "SET v = if_not_exists(v, :v) ADD occurrences :set",
+    Key: { pk: { S: `ADDRESS#${mailbox}` }, sk: { S: "ADDRESS" } },
+    UpdateExpression:
+      "SET v = if_not_exists(v, :v), email = if_not_exists(email, :email) ADD transientBounces :bounce",
     ExpressionAttributeValues: {
       ":v": { N: "1" },
-      ":set": { SS: [`${createdAt}#${feedbackId}`] },
+      ":email": { S: mailbox },
+      ":bounce": { SS: [`${createdAt}#${feedbackId}`] },
     },
   },
 };
@@ -100,9 +103,7 @@ describe("recordFeedback", () => {
     Effect.gen(function* () {
       const table = scriptedTable({});
 
-      expect(yield* operationsFor(table).recordFeedback(bounceRow, count("bounced"))).toBe(
-        "committed",
-      );
+      yield* operationsFor(table).recordFeedback(bounceRow, count("bounced"));
 
       expect(table.transactionRequests[0]?.TransactItems).toStrictEqual([
         historyPut("bounce", "suppressed", {
@@ -118,9 +119,7 @@ describe("recordFeedback", () => {
     Effect.gen(function* () {
       const table = scriptedTable({});
 
-      expect(yield* operationsFor(table).recordFeedback(complaintRow, count("complained"))).toBe(
-        "committed",
-      );
+      yield* operationsFor(table).recordFeedback(complaintRow, count("complained"));
 
       expect(table.transactionRequests[0]?.TransactItems).toStrictEqual([
         historyPut("complaint", "suppressed", { complaintFeedbackType: { S: "abuse" } }),
@@ -135,17 +134,15 @@ describe("recordFeedback", () => {
       Effect.gen(function* () {
         const table = scriptedTable({});
 
-        expect(
-          yield* operationsFor(table).recordFeedback(
-            {
-              ...complaintRow,
-              outcome: "recorded",
-              complaintFeedbackType: "not-spam",
-              complaintSubType: "OnAccountSuppressionList",
-            },
-            history,
-          ),
-        ).toBe("committed");
+        yield* operationsFor(table).recordFeedback(
+          {
+            ...complaintRow,
+            outcome: "recorded",
+            complaintFeedbackType: "not-spam",
+            complaintSubType: "OnAccountSuppressionList",
+          },
+          history,
+        );
 
         expect(table.transactionRequests[0]?.TransactItems).toStrictEqual([
           historyPut("complaint", "recorded", {
@@ -156,25 +153,25 @@ describe("recordFeedback", () => {
       }),
   );
 
-  it.effect("sets v, adds a string-set occurrence and touches no META for a transient write", () =>
-    Effect.gen(function* () {
-      const table = scriptedTable({});
+  it.effect(
+    "adds the bounce to the address item, stamping version and mailbox, and touches no META",
+    () =>
+      Effect.gen(function* () {
+        const table = scriptedTable({});
 
-      expect(
         yield* operationsFor(table).recordFeedback(
           { ...bounceRow, outcome: "recorded", bounceType: "Transient" },
           transient,
-        ),
-      ).toBe("committed");
+        );
 
-      expect(table.transactionRequests[0]?.TransactItems).toStrictEqual([
-        historyPut("bounce", "recorded", {
-          bounceType: { S: "Transient" },
-          bounceSubType: { S: "General" },
-        }),
-        transientUpdate,
-      ]);
-    }),
+        expect(table.transactionRequests[0]?.TransactItems).toStrictEqual([
+          historyPut("bounce", "recorded", {
+            bounceType: { S: "Transient" },
+            bounceSubType: { S: "General" },
+          }),
+          transientUpdate,
+        ]);
+      }),
   );
 
   it.effect("omits every provider field that is undefined", () =>
@@ -192,37 +189,41 @@ describe("recordFeedback", () => {
     }),
   );
 
-  it.effect("reports a duplicate from a condition failure on the history row", () =>
+  it.effect("answers FeedbackAlreadyRecorded from a condition failure on the history row", () =>
     Effect.gen(function* () {
       const table = scriptedTable({
         transactWriteItems: [cancelled("ConditionalCheckFailed", "None")],
       });
 
-      expect(yield* operationsFor(table).recordFeedback(bounceRow, count("bounced"))).toBe(
-        "duplicate",
-      );
+      expect(
+        yield* Effect.flip(operationsFor(table).recordFeedback(bounceRow, count("bounced"))),
+      ).toStrictEqual(new FeedbackAlreadyRecorded());
     }),
   );
 
-  it.effect("reports a duplicate for a history write whose only item already exists", () =>
-    Effect.gen(function* () {
-      const table = scriptedTable({
-        transactWriteItems: [cancelled("ConditionalCheckFailed")],
-      });
+  it.effect(
+    "answers FeedbackAlreadyRecorded for a history write whose only item already exists",
+    () =>
+      Effect.gen(function* () {
+        const table = scriptedTable({
+          transactWriteItems: [cancelled("ConditionalCheckFailed")],
+        });
 
-      expect(yield* operationsFor(table).recordFeedback(bounceRow, history)).toBe("duplicate");
-    }),
+        expect(
+          yield* Effect.flip(operationsFor(table).recordFeedback(bounceRow, history)),
+        ).toStrictEqual(new FeedbackAlreadyRecorded());
+      }),
   );
 
-  it.effect("reports an unknown campaign from a condition failure on META", () =>
+  it.effect("answers CampaignNotFound from a condition failure on META", () =>
     Effect.gen(function* () {
       const table = scriptedTable({
         transactWriteItems: [cancelled("None", "ConditionalCheckFailed")],
       });
 
-      expect(yield* operationsFor(table).recordFeedback(complaintRow, count("complained"))).toBe(
-        "unknown-campaign",
-      );
+      expect(
+        yield* Effect.flip(operationsFor(table).recordFeedback(complaintRow, count("complained"))),
+      ).toStrictEqual(new Errors.CampaignNotFound());
     }),
   );
 });

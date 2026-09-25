@@ -1,14 +1,16 @@
 import { describe, expect, it } from "@effect/vitest";
+import { CampaignNotFound, StorageUnavailable } from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
 import type * as AWS from "alchemy/AWS";
 import { ConfigProvider, Effect, Layer, Logger, References, Result } from "effect";
 
 import { expectedConfigurationSet, handleMessage } from "./Feedback.ts";
-import { StorageFailure } from "../storage/Errors.ts";
-import { FeedbackStore } from "../storage/Feedback.ts";
+import { FeedbackAlreadyRecorded, FeedbackStore } from "../storage/Feedback.ts";
 
 import type { AddressSuppression } from "../storage/Addresses.ts";
-import type { FeedbackRow, FeedbackWrite, FeedbackWriteOutcome } from "../storage/Feedback.ts";
+import type { FeedbackRow, FeedbackWrite } from "../storage/Feedback.ts";
+
+type WriteOutcome = "committed" | "duplicate" | "unknown-campaign";
 
 const configurationSetName = "emailer-test-mail";
 
@@ -32,7 +34,7 @@ interface World {
   readonly suppressions: Map<string, AddressSuppression>;
   readonly writes: Array<RecordedWrite>;
   readonly historyKeys: Set<string>;
-  readonly writeOutcomes: Array<FeedbackWriteOutcome>;
+  readonly writeOutcomes: Array<WriteOutcome>;
   readonly repeated: Array<string>;
   readonly logs: Array<LogEntry>;
 }
@@ -40,19 +42,20 @@ interface World {
 const historyKey = (row: FeedbackRow) =>
   `${row.campaignId}#${row.kind}#${row.feedbackId}#${Schemas.mailboxKey(row.recipient)}`;
 
-const rememberWrite = (world: World, key: string): FeedbackWriteOutcome => {
-  if (world.historyKeys.has(key)) {
-    world.repeated.push(key);
-    world.writeOutcomes.push("duplicate");
+const rememberWrite = (world: World, key: string) =>
+  Effect.suspend(() => {
+    if (world.historyKeys.has(key)) {
+      world.repeated.push(key);
+      world.writeOutcomes.push("duplicate");
 
-    return "duplicate";
-  }
+      return Effect.fail(new FeedbackAlreadyRecorded());
+    }
 
-  world.historyKeys.add(key);
-  world.writeOutcomes.push("committed");
+    world.historyKeys.add(key);
+    world.writeOutcomes.push("committed");
 
-  return "committed";
-};
+    return Effect.void;
+  });
 
 const storageOperations = (world: World): FeedbackStore["Service"] => ({
   suppressAddress: (suppression) =>
@@ -68,7 +71,7 @@ const storageOperations = (world: World): FeedbackStore["Service"] => ({
       world.suppressions.set(key, suppression);
     }),
   recordFeedback: (row, write) =>
-    Effect.sync(() => {
+    Effect.suspend(() => {
       world.writes.push({ row, write });
 
       return rememberWrite(world, historyKey(row));
@@ -149,31 +152,6 @@ const complaintEvent = (
     timestamp: "2026-09-11T10:00:00.000Z",
   },
 });
-
-const delayEvent = (
-  delayType: string,
-  recipients: ReadonlyArray<string> = ["late@example.com", "later@example.com"],
-  expirationTime?: string,
-  messageTags: Record<string, Array<string>> = tags(),
-): AWS.SES.EmailEventDetail => {
-  const delayedRecipients = recipients.map((emailAddress) => ({ emailAddress }));
-  const mail = { messageId, destination: [...recipients], tags: { ...messageTags } };
-  const timestamp = "2026-09-11T10:00:00.000Z";
-
-  if (expirationTime === undefined) {
-    return {
-      eventType: "DeliveryDelay",
-      mail,
-      deliveryDelay: { delayType, delayedRecipients, timestamp },
-    };
-  }
-
-  return {
-    eventType: "DeliveryDelay",
-    mail,
-    deliveryDelay: { delayType, delayedRecipients, expirationTime, timestamp },
-  };
-};
 
 /** The queue message the rule delivers: the whole EventBridge event, with SES's event as `detail`. */
 const envelope = (detail: AWS.SES.EmailEventDetail, envelopeId = "envelope-1") =>
@@ -397,10 +375,9 @@ describe("idempotence and the campaign tag", () => {
         ...storageOperations(world),
         suppressAddress: () =>
           Effect.fail(
-            new StorageFailure({
-              operationId: "suppressAddress",
-              reason: "unavailable",
-              cause: "boom",
+            new StorageUnavailable({
+              operation: "suppressAddress",
+              failure: "InternalServerError",
             }),
           ),
       });
@@ -446,10 +423,9 @@ describe("idempotence and the campaign tag", () => {
           recordFeedback: (row, write) =>
             historyFails
               ? Effect.fail(
-                  new StorageFailure({
-                    operationId: "recordFeedback",
-                    reason: "unavailable",
-                    cause: "boom",
+                  new StorageUnavailable({
+                    operation: "recordFeedback",
+                    failure: "InternalServerError",
                   }),
                 )
               : storageOperations(world).recordFeedback(row, write),
@@ -479,78 +455,6 @@ describe("idempotence and the campaign tag", () => {
   );
 });
 
-describe("delivery delays", () => {
-  it.effect("logs a delivery delay once for two recipients and writes nothing", () =>
-    Effect.gen(function* () {
-      const world = yield* run(
-        delayEvent(
-          "SpamDetected",
-          ["late@example.com", "later@example.com"],
-          "2026-09-11T12:00:00.000Z",
-        ),
-      );
-
-      expect(world.suppressions.size).toBe(0);
-      expect(world.writes).toHaveLength(0);
-
-      const delayed = logsNamed(world, "delivery delayed");
-
-      expect(delayed).toHaveLength(1);
-      expect(delayed[0]?.level).toBe("Info");
-      expect(delayed[0]?.message).toStrictEqual([
-        "delivery delayed",
-        {
-          delayType: "SpamDetected",
-          recipients: 2,
-          campaignId,
-          messageId,
-          expirationTime: "2026-09-11T12:00:00.000Z",
-        },
-      ]);
-    }),
-  );
-
-  it.effect("logs a delivery delay without an expirationTime", () =>
-    Effect.gen(function* () {
-      const world = yield* run(delayEvent("MailboxFull"));
-
-      expect(world.writes).toHaveLength(0);
-      expect(logsNamed(world, "delivery delayed")[0]?.message).toEqual([
-        "delivery delayed",
-        expect.objectContaining({
-          delayType: "MailboxFull",
-          recipients: 2,
-          expirationTime: undefined,
-        }),
-      ]);
-    }),
-  );
-
-  it.effect(
-    "still logs a delivery delay when the event carries no campaign tag, and writes nothing",
-    () =>
-      Effect.gen(function* () {
-        const world = yield* run(
-          delayEvent("IPFailure", ["late@example.com"], "2026-09-11T12:00:00.000Z", {
-            "ses:configuration-set": [configurationSetName],
-          }),
-        );
-
-        expect(world.suppressions.size).toBe(0);
-        expect(world.writes).toHaveLength(0);
-        expect(logsNamed(world, "feedback without a campaign tag (a test send)")).toHaveLength(0);
-        expect(logsNamed(world, "delivery delayed")[0]?.message).toEqual([
-          "delivery delayed",
-          expect.objectContaining({
-            delayType: "IPFailure",
-            recipients: 1,
-            campaignId: undefined,
-          }),
-        ]);
-      }),
-  );
-});
-
 describe("write outcomes and summary", () => {
   it.effect("logs a warning when the campaign is unknown", () =>
     Effect.gen(function* () {
@@ -559,11 +463,11 @@ describe("write outcomes and summary", () => {
       const unknown = Layer.succeed(FeedbackStore)({
         ...storageOperations(world),
         recordFeedback: (row, write) =>
-          Effect.sync(() => {
+          Effect.suspend(() => {
             world.writes.push({ row, write });
             world.writeOutcomes.push("unknown-campaign");
 
-            return "unknown-campaign";
+            return Effect.fail(new CampaignNotFound());
           }),
       });
 

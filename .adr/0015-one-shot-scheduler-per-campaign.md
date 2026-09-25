@@ -4,7 +4,7 @@
 - Date: 2026-09-17
 - Accepted: 2026-09-17
 - Confirmed: 2026-09-17. Live gate on ephemeral stage `test-sched` passed (26 integration cases including fire and cancel); the stage was destroyed.
-- Authority: The user decided on 2026-09-17 that scheduling gets a dedicated `POST /campaigns/:id/schedule` with a `sendAt` instant plus a cancel, that `send` stays "now", that the run token is minted when scheduling, and that a schedule group per stage is mandatory. Accepted by the user on 2026-09-17 after independent review and re-review of [the plan](work/campaign-scheduling.md); the plan's live gate confirms the implementation.
+- Authority: The user decided on 2026-09-17 that scheduling gets a dedicated `POST /campaigns/:id/schedule` with a `sendAt` instant plus a cancel, that `send` stays "now", that the run token is minted when scheduling, and that a schedule group per stage is mandatory. Accepted by the user on 2026-09-17 after independent review and re-review of the plan (`work/campaign-scheduling.md`, in git history); the plan's live gate confirms the implementation.
 - Extends: [ADR-0011](0011-open-recipient-set-and-paced-dispatch.md) (the dispatcher and its wake-up are unchanged; a fire is a wake-up), [ADR-0013](0013-repeat-safe-writes.md) (the three new or changed transitions follow its repeat-safe forms), [ADR-0014](0014-campaign-body-item-and-summaries.md) (the schedule intent lives on `META`).
 - Superseded in part: [ADR-0016](0016-cancelling-pending-campaign-runs.md), for schedule naming and cancellation: a schedule is named by its run token, cancel keeps the token, and a replacement deletes only its own generation's schedule.
 - Amended: 2026-09-24, on the user's decision in the simplification plan (`work/simplify.md` T5) — no command deletes a schedule. Cancel, send now and a reschedule change only the campaign; the outdated schedule fires once at its original time, its wake-up is discarded as stale, and it deletes itself. The API function no longer holds `scheduler:DeleteSchedule`.
@@ -22,7 +22,7 @@ The clock has to survive Lambda invocations and must not fire on a torn-down sta
 - **The fire is the same transition a `send` takes.** `beginRun` admits `scheduled` beside `queued` and `sending` under the same token check; its update is unchanged. A fire whose token the item no longer holds is `stale` and dropped; that is what makes cancel, send-now and duplicate fires safe.
 - **Table first, Scheduler second.** Schedule writes `scheduled` under a fresh run token, then creates that generation's schedule. Cancel and send now change only the campaign; send now then sends the wake-up. No command deletes a schedule: an outdated one fires once at its original time, its wake-up is discarded as stale, and it deletes itself. A crash between the write and the create leaves a `scheduled` campaign with no schedule; the operator repeats `schedule` or uses `send`.
 - **A stage-owned schedule group and execution role.** Every schedule is created in the stack's `ScheduleGroup`; destroying the stage deletes the group, and AWS deletes the group's schedules with it. The execution role trusts `scheduler.amazonaws.com` and may only send to the dispatch queue; the API function's role gains `scheduler:CreateSchedule` on that group and `iam:PassRole` on that role through the binding.
-- **`sendAt` must be after now**, a contract rule (`send` is the verb for "now") checked in the domain against the clock and answered with a typed 409, independent of what Scheduler does with a past `at()`. Calendar validity is checked first by the shared `Timestamp` schema and malformed input returns 400; see the [validation decision](work/campaign-scheduling-input-validation.md). Scheduler fires with 60-second precision and documents the window only for whole-minute instants; queue and dispatcher processing can add delay.
+- **`sendAt` must be after now**, a contract rule (`send` is the verb for "now") checked in the domain against the clock and answered with a typed 409, independent of what Scheduler does with a past `at()`. Calendar validity is checked first by the shared `Timestamp` schema and malformed input returns 400; see the validation decision (`work/campaign-scheduling-input-validation.md`, in git history). Scheduler fires with 60-second precision and documents the window only for whole-minute instants; queue and dispatcher processing can add delay.
 - **No Scheduler retry policy or dead-letter queue.** A fire Scheduler could not deliver leaves the campaign `scheduled`; the recovery is `campaigns send`. An elapsed wall-clock minute alone does not prove delivery failure.
 
 ## Alternatives considered
@@ -60,7 +60,7 @@ A cancelled campaign returned to `draft`, its schedule disappeared from the grou
 
 ## References
 
-- [Plan](work/campaign-scheduling.md)
+- Plan (`work/campaign-scheduling.md`, in git history)
 - [ADR-0011](0011-open-recipient-set-and-paced-dispatch.md), [ADR-0013](0013-repeat-safe-writes.md), [ADR-0014](0014-campaign-body-item-and-summaries.md)
 - [EventBridge Scheduler: schedule types](https://docs.aws.amazon.com/scheduler/latest/UserGuide/schedule-types.html) (60-second precision, `at()` syntax)
 - [EventBridge Scheduler: CreateSchedule](https://docs.aws.amazon.com/scheduler/latest/APIReference/API_CreateSchedule.html) (`ClientToken`, `ActionAfterCompletion`)

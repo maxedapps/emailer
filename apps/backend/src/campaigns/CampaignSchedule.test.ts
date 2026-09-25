@@ -1,11 +1,11 @@
 import * as scheduler from "@distilled.cloud/aws/scheduler";
 import { describe, expect, it } from "@effect/vitest";
 import type * as AWS from "alchemy/AWS";
+import { SchedulerUnavailable } from "@emailer/api/Errors";
 import { Effect, Result } from "effect";
 
 import { campaignSchedule } from "./CampaignSchedule.ts";
 import { decodeDispatchMessage, encodeDispatchMessage } from "../sending/Dispatch.ts";
-import { StorageFailure } from "../storage/Errors.ts";
 
 const campaignId = "0195f0a0-1111-4222-8333-4444444ca409";
 
@@ -75,7 +75,7 @@ describe("campaignSchedule", () => {
     }),
   );
 
-  it.effect("surfaces a create error as schedule unavailable", () =>
+  it.effect("surfaces a create error as SchedulerUnavailable, naming only the failure", () =>
     Effect.gen(function* () {
       const aws = awsDouble();
       const schedules = adapterFor(aws);
@@ -86,11 +86,7 @@ describe("campaignSchedule", () => {
       const attempt = yield* Effect.result(schedules.create(campaignId, runToken, sendAt));
 
       expect(Result.isFailure(attempt) ? attempt.failure : undefined).toStrictEqual(
-        new StorageFailure({
-          operationId: "schedule",
-          reason: "unavailable",
-          cause: conflict,
-        }),
+        new SchedulerUnavailable({ operation: "schedule", failure: "ConflictException" }),
       );
       expect(aws.created).toHaveLength(1);
     }),

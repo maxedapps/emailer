@@ -1,19 +1,25 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as Errors from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
 import { ConfigProvider, Duration, Effect, Layer, Result } from "effect";
 
 import { sendTest } from "./TestSends.ts";
 import { unsubscribeLink } from "../consent/Unsubscribe.ts";
-import { Mailer } from "../sending/Mailer.ts";
+import {
+  Mailer,
+  SendingSuspended,
+  SendRejected,
+  SendThrottled,
+  SubmissionUncertain,
+} from "../sending/Mailer.ts";
 import { SendGuard } from "../sending/SendGuard.ts";
 import { AudienceStore } from "../storage/Audience.ts";
 import { CampaignStore } from "../storage/Campaigns.ts";
 import { unusedAudience, unusedCampaigns } from "../storage/Testing.ts";
 
-import type { SendPurpose } from "../sending/Mailer.ts";
+import type { SendError, SendPurpose } from "../sending/Mailer.ts";
 import type { MessageContent } from "../sending/Message.ts";
 import type { SendAllowance } from "../sending/SendGuard.ts";
-import type { SubmissionOutcome } from "../storage/Campaigns.ts";
 import type { AddressStatus } from "@emailer/api/Schemas";
 
 const campaignId = "0195f0a0-1111-4222-8333-4444444ca409";
@@ -48,7 +54,8 @@ const member = (n: number): Schemas.Contact => ({
 interface Scenario {
   readonly allowance?: SendAllowance;
   readonly statuses?: ReadonlyArray<readonly [string, AddressStatus]>;
-  readonly outcomes?: ReadonlyArray<SubmissionOutcome>;
+  /** How SES answers each send in turn: an error, or acceptance once they run out. */
+  readonly failures?: ReadonlyArray<SendError>;
   readonly members?: ReadonlyArray<Schemas.Contact>;
   readonly nextCursor?: string;
   readonly listMissing?: boolean;
@@ -65,7 +72,7 @@ const fixture = (scenario: Scenario = {}) => {
   const sent: Array<Sent> = [];
   const slots: Array<number> = [];
   const pageRequests: Array<number> = [];
-  const outcomes = [...(scenario.outcomes ?? [])];
+  const failures = [...(scenario.failures ?? [])];
   const statuses = new Map(scenario.statuses ?? []);
 
   const layer = Layer.mergeAll(
@@ -77,7 +84,7 @@ const fixture = (scenario: Scenario = {}) => {
           pageRequests.push(limit);
 
           if (scenario.listMissing === true) {
-            return yield* new Schemas.NotFound({ entity: "list" });
+            return yield* new Errors.ListNotFound();
           }
 
           const items = [...(scenario.members ?? [])];
@@ -91,21 +98,18 @@ const fixture = (scenario: Scenario = {}) => {
     Layer.succeed(CampaignStore)({
       ...unusedCampaigns,
       getCampaign: (id) =>
-        id === campaignId
-          ? Effect.succeed(campaign)
-          : Effect.fail(new Schemas.NotFound({ entity: "campaign" })),
+        id === campaignId ? Effect.succeed(campaign) : Effect.fail(new Errors.CampaignNotFound()),
     }),
     Layer.succeed(Mailer)({
       send: (recipient, content, unsubscribeUrl, purpose) =>
-        Effect.sync(() => {
+        Effect.suspend(() => {
           sent.push({ recipient, content, unsubscribeUrl, purpose });
 
-          return (
-            outcomes.shift() ?? {
-              outcome: "accepted" as const,
-              messageId: `message-${sent.length}`,
-            }
-          );
+          const failure = failures.shift();
+
+          return failure === undefined
+            ? Effect.succeed(`message-${sent.length}`)
+            : Effect.fail(failure);
         }),
     }),
     Layer.succeed(SendGuard)({
@@ -190,25 +194,30 @@ describe("sendTest", () => {
     }),
   );
 
-  it.effect("reports a rejection and an uncertain submission per recipient and carries on", () =>
+  it.effect("reports each send error as its outcome, per recipient, and carries on", () =>
     Effect.gen(function* () {
       const fix = fixture({
-        outcomes: [
-          { outcome: "rejected", rejectionCode: "rate-limited" },
-          { outcome: "uncertain" },
+        failures: [
+          new SendRejected({ code: "message-rejected" }),
+          new SendThrottled(),
+          new SendingSuspended(),
+          new SubmissionUncertain({ reason: "transport" }),
         ],
       });
 
       const attempt = yield* run(fix, {
-        to: ["a@example.com", "b@example.com", "c@example.com"],
+        to: ["a@example.com", "b@example.com", "c@example.com", "d@example.com", "e@example.com"],
       });
 
       expect(Result.isSuccess(attempt) && attempt.success.recipients).toStrictEqual([
-        { email: "a@example.com", outcome: "rejected", rejectionCode: "rate-limited" },
-        { email: "b@example.com", outcome: "uncertain" },
-        { email: "c@example.com", outcome: "accepted", messageId: "message-3" },
+        { email: "a@example.com", outcome: "rejected", rejectionCode: "message-rejected" },
+        { email: "b@example.com", outcome: "rejected", rejectionCode: "rate-limited" },
+        { email: "c@example.com", outcome: "rejected", rejectionCode: "sending-paused" },
+        { email: "d@example.com", outcome: "uncertain" },
+        { email: "e@example.com", outcome: "accepted", messageId: "message-5" },
       ]);
-      expect(fix.sent).toHaveLength(3);
+      // One attempt each: a test is repeated by the operator, not retried by the API.
+      expect(fix.sent).toHaveLength(5);
     }),
   );
 
@@ -236,7 +245,7 @@ describe("sendTest", () => {
       const attempt = yield* run(fix, { listId });
 
       expect(failureOf(attempt)).toStrictEqual(
-        new Schemas.TestAudienceTooLarge({ limit: Schemas.maxTestRecipients }),
+        new Errors.TestAudienceTooLarge({ limit: Schemas.maxTestRecipients }),
       );
       expect(fix.sent).toHaveLength(0);
     }),
@@ -246,15 +255,13 @@ describe("sendTest", () => {
     Effect.gen(function* () {
       const fix = fixture({ listMissing: true });
 
-      expect(failureOf(yield* run(fix, { listId }))).toStrictEqual(
-        new Schemas.NotFound({ entity: "list" }),
-      );
+      expect(failureOf(yield* run(fix, { listId }))).toStrictEqual(new Errors.ListNotFound());
 
       const missing = yield* Effect.result(
         sendTest("0195f0a0-1111-4222-8333-4444444ca40a", { to: ["a@example.com"] }),
       ).pipe(Effect.provide(fix.layer));
 
-      expect(failureOf(missing)).toStrictEqual(new Schemas.NotFound({ entity: "campaign" }));
+      expect(failureOf(missing)).toStrictEqual(new Errors.CampaignNotFound());
       expect(fix.sent).toHaveLength(0);
     }),
   );
@@ -268,7 +275,7 @@ describe("sendTest", () => {
 
       const attempt = yield* run(fix, { to: ["a@example.com"] });
 
-      expect(failureOf(attempt)).toStrictEqual(new Schemas.SendingPaused({ reason }));
+      expect(failureOf(attempt)).toStrictEqual(new Errors.SendingPaused({ reason }));
       expect(fix.sent).toHaveLength(0);
       expect(fix.slots).toHaveLength(0);
     }),

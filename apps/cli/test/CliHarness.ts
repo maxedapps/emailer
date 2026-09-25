@@ -1,5 +1,6 @@
 import { NodeHttpServer, NodeServices } from "@effect/platform-node";
-import { Authorization, EmailerApi, Unauthorized } from "@emailer/api/Api";
+import { Authorization, EmailerApi } from "@emailer/api/Api";
+import * as Errors from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
 import { Effect, FileSystem, Layer, PlatformError, Redacted, Schema, Stream } from "effect";
 import { HttpRouter, HttpServer } from "effect/unstable/http";
@@ -46,7 +47,7 @@ export const pausedSubmission: Schemas.CampaignSubmission = {
 
 export const inMemoryService = (
   accepted: string,
-  options: { readonly dispatchUnavailable?: boolean } = {},
+  options: { readonly queueUnavailable?: boolean } = {},
 ): Service => {
   const authorizations: Array<string> = [];
   const updates: Array<Schemas.ContactAttributes> = [];
@@ -65,7 +66,7 @@ export const inMemoryService = (
 
         authorizations.push(credential);
 
-        return credential === accepted ? httpEffect : Effect.fail(new Unauthorized());
+        return credential === accepted ? httpEffect : Effect.fail(new Errors.Unauthorized());
       },
     }),
   );
@@ -85,7 +86,7 @@ export const inMemoryService = (
           const found = contacts.get(request.params.id);
 
           return found === undefined
-            ? Effect.fail(new Schemas.NotFound({ entity: "contact" }))
+            ? Effect.fail(new Errors.ContactNotFound())
             : Effect.succeed(found);
         }),
       getByEmail: (request) =>
@@ -96,7 +97,7 @@ export const inMemoryService = (
             }
           }
 
-          return Effect.fail(new Schemas.NotFound({ entity: "contact" }));
+          return Effect.fail(new Errors.ContactNotFound());
         }),
       list: () => Effect.sync(() => ({ items: [...contacts.values()] })),
       update: (request) =>
@@ -104,7 +105,7 @@ export const inMemoryService = (
           const found = contacts.get(request.params.id);
 
           if (found === undefined) {
-            return Effect.fail(new Schemas.NotFound({ entity: "contact" }));
+            return Effect.fail(new Errors.ContactNotFound());
           }
 
           if (request.payload.attributes !== undefined && request.payload.attributes !== null) {
@@ -123,7 +124,7 @@ export const inMemoryService = (
       remove: (request) =>
         Effect.suspend(() => {
           if (!contacts.delete(request.params.id)) {
-            return Effect.fail(new Schemas.NotFound({ entity: "contact" }));
+            return Effect.fail(new Errors.ContactNotFound());
           }
 
           return Effect.void;
@@ -146,13 +147,13 @@ export const inMemoryService = (
           const found = lists.get(request.params.id);
 
           return found === undefined
-            ? Effect.fail(new Schemas.NotFound({ entity: "list" }))
+            ? Effect.fail(new Errors.ListNotFound())
             : Effect.succeed(found);
         }),
       addContact: (request) =>
         Effect.suspend(() => {
           if (!contacts.has(request.params.contactId)) {
-            return Effect.fail(new Schemas.NotFound({ entity: "contact" }));
+            return Effect.fail(new Errors.ContactNotFound());
           }
 
           const current = members.get(request.params.listId) ?? [];
@@ -167,7 +168,7 @@ export const inMemoryService = (
           const found = lists.get(request.params.id);
 
           if (found === undefined) {
-            return Effect.fail(new Schemas.NotFound({ entity: "list" }));
+            return Effect.fail(new Errors.ListNotFound());
           }
 
           const renamed: Schemas.ContactList = { ...found, name: request.payload.name };
@@ -179,7 +180,7 @@ export const inMemoryService = (
       remove: (request) =>
         Effect.suspend(() => {
           if (!lists.delete(request.params.id)) {
-            return Effect.fail(new Schemas.NotFound({ entity: "list" }));
+            return Effect.fail(new Errors.ListNotFound());
           }
 
           members.delete(request.params.id);
@@ -189,7 +190,7 @@ export const inMemoryService = (
       listMembers: (request) =>
         Effect.suspend(() => {
           if (!lists.has(request.params.listId)) {
-            return Effect.fail(new Schemas.NotFound({ entity: "list" }));
+            return Effect.fail(new Errors.ListNotFound());
           }
 
           const joined: Array<Schemas.Contact> = [];
@@ -216,7 +217,7 @@ export const inMemoryService = (
       removeContact: (request) =>
         Effect.suspend(() => {
           if (!lists.has(request.params.listId)) {
-            return Effect.fail(new Schemas.NotFound({ entity: "list" }));
+            return Effect.fail(new Errors.ListNotFound());
           }
 
           const current = members.get(request.params.listId) ?? [];
@@ -231,7 +232,7 @@ export const inMemoryService = (
       import: (request) =>
         Effect.suspend(() => {
           if (!lists.has(request.params.listId)) {
-            return Effect.fail(new Schemas.NotFound({ entity: "list" }));
+            return Effect.fail(new Errors.ListNotFound());
           }
 
           const imported = request.payload.contacts.map((entry, index) => {
@@ -285,7 +286,7 @@ export const inMemoryService = (
           const found = campaigns.get(request.params.id);
 
           return found === undefined
-            ? Effect.fail(new Schemas.NotFound({ entity: "campaign" }))
+            ? Effect.fail(new Errors.CampaignNotFound())
             : Effect.succeed(found);
         }),
       update: (request) =>
@@ -293,11 +294,11 @@ export const inMemoryService = (
           const found = campaigns.get(request.params.id);
 
           if (found === undefined) {
-            return yield* new Schemas.NotFound({ entity: "campaign" });
+            return yield* new Errors.CampaignNotFound();
           }
 
           if (found.submission.state !== "draft") {
-            return yield* new Schemas.CampaignStateConflict({ state: found.submission.state });
+            return yield* new Errors.CampaignStateConflict({ state: found.submission.state });
           }
 
           campaignUpdates.push(request.payload);
@@ -328,11 +329,11 @@ export const inMemoryService = (
           const found = campaigns.get(request.params.id);
 
           if (found === undefined) {
-            return yield* new Schemas.NotFound({ entity: "campaign" });
+            return yield* new Errors.CampaignNotFound();
           }
 
           if (found.submission.state !== "draft") {
-            return yield* new Schemas.CampaignStateConflict({ state: found.submission.state });
+            return yield* new Errors.CampaignStateConflict({ state: found.submission.state });
           }
 
           campaigns.delete(found.id);
@@ -344,12 +345,12 @@ export const inMemoryService = (
                 url: `https://preview.example/previews/${request.params.id}`,
                 expiresAt: "2026-09-12T10:00:00.000Z",
               })
-            : Effect.fail(new Schemas.NotFound({ entity: "campaign" })),
+            : Effect.fail(new Errors.CampaignNotFound()),
         ),
       test: (request) =>
         Effect.gen(function* () {
           if (!campaigns.has(request.params.id)) {
-            return yield* new Schemas.NotFound({ entity: "campaign" });
+            return yield* new Errors.CampaignNotFound();
           }
 
           testSends.push(request.payload);
@@ -376,11 +377,14 @@ export const inMemoryService = (
           const found = campaigns.get(request.params.id);
 
           if (found === undefined) {
-            return yield* new Schemas.NotFound({ entity: "campaign" });
+            return yield* new Errors.CampaignNotFound();
           }
 
-          if (options.dispatchUnavailable === true) {
-            return yield* new Schemas.StorageUnavailable({ operationId: "dispatch" });
+          if (options.queueUnavailable === true) {
+            return yield* new Errors.QueueUnavailable({
+              operation: "dispatch",
+              failure: "ServiceUnavailable",
+            });
           }
 
           if (found.submission.state !== "draft") {
@@ -398,11 +402,14 @@ export const inMemoryService = (
           const found = campaigns.get(request.params.id);
 
           if (found === undefined) {
-            return yield* new Schemas.NotFound({ entity: "campaign" });
+            return yield* new Errors.CampaignNotFound();
           }
 
-          if (options.dispatchUnavailable === true) {
-            return yield* new Schemas.StorageUnavailable({ operationId: "dispatch" });
+          if (options.queueUnavailable === true) {
+            return yield* new Errors.QueueUnavailable({
+              operation: "dispatch",
+              failure: "ServiceUnavailable",
+            });
           }
 
           if (found.submission.state !== "paused") {
@@ -420,7 +427,7 @@ export const inMemoryService = (
           const found = campaigns.get(request.params.id);
 
           if (found === undefined) {
-            return yield* new Schemas.NotFound({ entity: "campaign" });
+            return yield* new Errors.CampaignNotFound();
           }
 
           const scheduled: Schemas.Campaign = {
@@ -437,13 +444,13 @@ export const inMemoryService = (
           const found = campaigns.get(request.params.id);
 
           if (found === undefined) {
-            return yield* new Schemas.NotFound({ entity: "campaign" });
+            return yield* new Errors.CampaignNotFound();
           }
 
           switch (found.submission.state) {
             case "sending":
             case "completed":
-              return yield* new Schemas.CampaignStateConflict({
+              return yield* new Errors.CampaignStateConflict({
                 state: found.submission.state,
               });
             case "draft":

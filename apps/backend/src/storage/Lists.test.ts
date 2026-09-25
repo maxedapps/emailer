@@ -1,4 +1,4 @@
-import * as Schemas from "@emailer/api/Schemas";
+import * as Errors from "@emailer/api/Errors";
 import { Effect } from "effect";
 import { describe, expect, it } from "@effect/vitest";
 
@@ -124,7 +124,7 @@ describe("renameList", () => {
       const { operations } = withTable({ updateItem: [conditionFailed] });
 
       expect(yield* Effect.flip(operations.renameList(listId, "Members"))).toStrictEqual(
-        new Schemas.NotFound({ entity: "list" }),
+        new Errors.ListNotFound(),
       );
     }),
   );

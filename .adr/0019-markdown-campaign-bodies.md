@@ -4,9 +4,9 @@
 - Date: 2026-09-23
 - Accepted: 2026-09-23
 - Confirmed: 2026-09-23. On the ephemeral stage `test`, a draft created from the reference newsletter rendered to about 5 KB of HTML. Its preview showed every element styled, the image at full card width, and the footer below the card, at desktop and at 390px width. A `[Test]` copy delivered to the operator's test inbox kept every inline style, and its text part carried no Markdown syntax. The stage was destroyed.
-- Amended: [review-fixes](work/review-fixes.md) — the plain-text part keeps a heading's own case (and its link's URL), reduces raw HTML to its text, decodes the basic entities, renders task items as `[x]`/`[ ]`, and indents a list item's further lines and nested lists under its marker.
+- Amended: review-fixes (`work/review-fixes.md`, in git history) — the plain-text part keeps a heading's own case (and its link's URL), reduces raw HTML to its text, decodes the basic entities, renders task items as `[x]`/`[ ]`, and indents a list item's further lines and nested lists under its marker.
 - Amended: 2026-09-24, on the user's decision after reviewing PR #4. Raw HTML in the plain-text part reads as the HTML part shows it. A raw link keeps its URL as `label (url)`. `<br>`, block tags and table cells end a line; a `<br>` at the end of a source line ends only that line. `<style>`/`<script>` contents are dropped. Before, a raw link lost its URL and words on either side of those tags ran together.
-- Authority: On 2026-09-23 the user asked for Markdown authoring with email-conformant HTML output, and asked for MJML and other tools to be evaluated. After seeing the research, they followed the recommendation to use `marked` alone, in the CLI. See [the plan](work/drafting-and-preview.md).
+- Authority: On 2026-09-23 the user asked for Markdown authoring with email-conformant HTML output, and asked for MJML and other tools to be evaluated. After seeing the research, they followed the recommendation to use `marked` alone, in the CLI. See the plan (`work/drafting-and-preview.md`, in git history).
 
 ## Context
 
@@ -67,7 +67,7 @@
 
 ## References
 
-- [Plan](work/drafting-and-preview.md)
+- Plan (`work/drafting-and-preview.md`, in git history)
 - [ADR-0004: Sender-owned one-click unsubscribe](0004-sender-owned-one-click-unsubscribe.md)
 - [marked](https://marked.js.org/) 18.0.14 — [renderer overrides](https://marked.js.org/using_pro#renderer)
 - [MJML 5 release](https://github.com/mjmlio/mjml/releases/tag/v5.0.0)

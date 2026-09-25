@@ -3,7 +3,7 @@
 - Status: Accepted
 - Date: 2026-09-23
 - Accepted: 2026-09-23
-- Authority: On 2026-09-23 a whole-codebase review found that a mistyped request field is dropped silently. The user approved rejecting unknown fields as part of [the cleanup plan](work/codebase-cleanup.md).
+- Authority: On 2026-09-23 a whole-codebase review found that a mistyped request field is dropped silently. The user approved rejecting unknown fields as part of the cleanup plan (`work/codebase-cleanup.md`, in git history).
 
 ## Context
 
@@ -57,4 +57,4 @@ Since Effect RC113, schema-level `parseOptions` annotations are ignored. RC116 a
 ## References
 
 - [Effect `HttpApi.ParseOptions` (RC117)](https://unpkg.com/effect@4.0.0-rc.117/src/unstable/httpapi/HttpApi.ts), [effect#8423](https://github.com/Effect-TS/effect/pull/8423)
-- [Codebase cleanup plan](work/codebase-cleanup.md)
+- Codebase cleanup plan (`work/codebase-cleanup.md`, in git history)

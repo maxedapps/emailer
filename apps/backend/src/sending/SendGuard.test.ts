@@ -1,18 +1,38 @@
+import type * as cloudwatch from "@distilled.cloud/aws/cloudwatch";
+import type * as sesv2 from "@distilled.cloud/aws/sesv2";
 import { describe, expect, it } from "@effect/vitest";
 import { Duration, Effect } from "effect";
 import { RateLimiter } from "effect/unstable/persistence";
 
 import { makeSlot, sendGuard } from "./SendGuard.ts";
 
-import type { SendQuota } from "./SendGuard.ts";
+const account = (
+  quota: sesv2.SendQuota | undefined,
+  enforcement?: string,
+): sesv2.GetAccountResponse => {
+  const response: sesv2.GetAccountResponse = {};
 
-const account = (quota: SendQuota | undefined, enforcement?: string) => ({
-  SendQuota: quota,
-  EnforcementStatus: enforcement,
-});
+  if (quota !== undefined) {
+    response.SendQuota = quota;
+  }
 
-const described = (states: ReadonlyArray<string>) => ({
-  MetricAlarms: states.map((StateValue) => ({ StateValue })),
+  if (enforcement !== undefined) {
+    response.EnforcementStatus = enforcement;
+  }
+
+  return response;
+};
+
+const described = (
+  states: ReadonlyArray<cloudwatch.StateValue>,
+): cloudwatch.DescribeAlarmsOutput => ({
+  // The SDK's output type makes these three required on every alarm; only the state matters here.
+  MetricAlarms: states.map((StateValue) => ({
+    StateValue,
+    Dimensions: [],
+    Metrics: [],
+    WarmUpConfiguration: { WarmUpPeriodDurationInMinutes: 0 },
+  })),
 });
 
 const silent = described([]);

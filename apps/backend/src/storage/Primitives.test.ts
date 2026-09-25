@@ -1,20 +1,15 @@
-import { Effect, Fiber } from "effect";
+import * as Errors from "@emailer/api/Errors";
+import { Data, Effect, Fiber } from "effect";
 import { TestClock } from "effect/testing";
 import { describe, expect, it } from "@effect/vitest";
 
 import * as dynamodb from "@distilled.cloud/aws/dynamodb";
 
 import { str, tableLogicalId } from "./Items.ts";
-import { allPrimitives } from "./Primitives.ts";
-import {
-  cancelled,
-  conditionFailed,
-  failureOf,
-  scriptedTable,
-  tokensFor,
-  serverError,
-} from "./Testing.ts";
+import { allPrimitives, UnexpectedCondition } from "./Primitives.ts";
+import { cancelled, defectOf, scriptedTable, tokensFor, serverError } from "./Testing.ts";
 
+import type { StoredItem } from "./Primitives.ts";
 import type { ScriptedReplies } from "./Testing.ts";
 
 /**
@@ -160,10 +155,10 @@ describe("readItems", () => {
 
       yield* TestClock.adjust(pastEveryDelay);
 
-      const attempt = yield* Effect.result(Fiber.join(running));
+      const failure = yield* Effect.flip(Fiber.join(running));
 
-      expect(failureOf(attempt).operationId).toBe("listContacts");
-      expect(failureOf(attempt).reason).toBe("unavailable");
+      expect(failure).toBeInstanceOf(Errors.StorageUnavailable);
+      expect(failure).toMatchObject({ operation: "listContacts" });
       expect(table.batchGetItemRequests).toHaveLength(4);
     }),
   );
@@ -186,9 +181,9 @@ describe("readItems", () => {
 
       yield* TestClock.adjust(pastEveryDelay);
 
-      const attempt = yield* Effect.result(Fiber.join(running));
+      const failure = yield* Effect.flip(Fiber.join(running));
 
-      expect(failureOf(attempt).reason).toBe("unavailable");
+      expect(failure).toBeInstanceOf(Errors.StorageUnavailable);
       expect(table.batchGetItemRequests.length).toBeLessThan(4);
     }),
   );
@@ -396,6 +391,10 @@ describe("updateIf", () => {
     ReturnValues: "ALL_NEW" as const,
   };
 
+  class Refused extends Data.TaggedError("Refused")<{ readonly current: StoredItem }> {}
+
+  const refused = (current: StoredItem) => new Refused({ current });
+
   it.effect("returns the new attributes when ReturnValues is ALL_NEW", () =>
     Effect.gen(function* () {
       const attributes = { ...contactKey(contactId), state: str("sending") };
@@ -404,19 +403,26 @@ describe("updateIf", () => {
         updateItem: [Effect.succeed({ Attributes: attributes })],
       });
 
-      expect(yield* primitives.updateIf("beginRun", request)).toStrictEqual({
-        applied: true,
-        attributes,
-      });
+      expect(yield* primitives.updateIf("beginRun", request, refused)).toStrictEqual(attributes);
       expect(table.updateItemRequests[0]?.ReturnValues).toBe("ALL_NEW");
     }),
   );
 
-  it.effect("reports a failed condition as not applied rather than unavailable", () =>
+  it.effect("fails a failed condition with the refusal, given the item it found", () =>
     Effect.gen(function* () {
-      const { primitives } = withTable({ updateItem: [conditionFailed] });
+      const found = { ...contactKey(contactId), state: str("paused") };
 
-      expect(yield* primitives.updateIf("beginRun", request)).toStrictEqual({ applied: false });
+      const { primitives } = withTable({
+        updateItem: [
+          Effect.fail(
+            new dynamodb.ConditionalCheckFailedException({ message: "refused", Item: found }),
+          ),
+        ],
+      });
+
+      expect(yield* Effect.flip(primitives.updateIf("beginRun", request, refused))).toStrictEqual(
+        new Refused({ current: found }),
+      );
     }),
   );
 
@@ -424,10 +430,10 @@ describe("updateIf", () => {
     Effect.gen(function* () {
       const { primitives } = withTable({ updateItem: [Effect.fail(serverError)] });
 
-      const attempt = yield* Effect.result(primitives.updateIf("beginRun", request));
+      const failure = yield* Effect.flip(primitives.updateIf("beginRun", request, refused));
 
-      expect(failureOf(attempt).reason).toBe("unavailable");
-      expect(failureOf(attempt).operationId).toBe("beginRun");
+      expect(failure).toBeInstanceOf(Errors.StorageUnavailable);
+      expect(failure).toMatchObject({ operation: "beginRun" });
     }),
   );
 
@@ -439,50 +445,56 @@ describe("updateIf", () => {
         ],
       });
 
-      const attempt = yield* Effect.result(primitives.updateIf("beginRun", request));
+      const failure = yield* Effect.flip(primitives.updateIf("beginRun", request, refused));
 
       // The scripted table sits above the client, whose default policy retries this class;
       // the primitive itself sends once and reports what came back.
-      expect(failureOf(attempt).reason).toBe("unavailable");
+      expect(failure).toBeInstanceOf(Errors.StorageUnavailable);
       expect(table.updateItemRequests).toHaveLength(1);
     }),
   );
 });
 
-describe("runTransaction", () => {
-  const request = {
-    TransactItems: [
-      {
-        Put: {
-          Table: tableLogicalId,
-          Item: contactKey(contactId),
-          ConditionExpression: "attribute_not_exists(pk)",
-        },
-      },
-      {
-        Update: {
-          Table: tableLogicalId,
-          Key: contactKey(otherContactId),
-          UpdateExpression: "ADD skipped :one",
-          ConditionExpression: "attribute_exists(pk)",
-          ExpressionAttributeValues: { ":one": str("1") },
-        },
-      },
-    ],
+describe("transact", () => {
+  class First extends Data.TaggedError("First")<{ readonly current: StoredItem }> {}
+
+  class Second extends Data.TaggedError("Second") {}
+
+  const put = {
+    Put: {
+      Table: tableLogicalId,
+      Item: contactKey(contactId),
+      ConditionExpression: "attribute_not_exists(pk)",
+    },
   };
 
-  it.effect("sends one idempotency token per logical call, generated by the primitive", () =>
+  const update = {
+    Update: {
+      Table: tableLogicalId,
+      Key: contactKey(otherContactId),
+      UpdateExpression: "ADD skipped :one",
+      ConditionExpression: "attribute_exists(pk)",
+      ExpressionAttributeValues: { ":one": str("1") },
+    },
+  };
+
+  const actions = [
+    { ...put, refused: (current: StoredItem) => new First({ current }) },
+    { ...update, refused: () => new Second() },
+  ] as const;
+
+  it.effect("sends one idempotency token per logical call, and no refusal", () =>
     Effect.gen(function* () {
       const { table, primitives } = withTable({});
 
-      yield* primitives.runTransaction("claimRecipient", request);
-      yield* primitives.runTransaction("claimRecipient", request);
+      yield* primitives.transact("claimRecipient", actions);
+      yield* primitives.transact("claimRecipient", actions);
 
       expect(table.transactionRequests.map((sent) => sent.ClientRequestToken)).toStrictEqual([
         "token-1",
         "token-2",
       ]);
-      expect(table.transactionRequests[0]?.TransactItems).toStrictEqual(request.TransactItems);
+      expect(table.transactionRequests[0]?.TransactItems).toStrictEqual([put, update]);
     }),
   );
 
@@ -492,11 +504,12 @@ describe("runTransaction", () => {
         transactWriteItems: [cancelled("TransactionConflict", "None"), Effect.succeed({})],
       });
 
-      const running = yield* Effect.forkChild(primitives.runTransaction("claimRecipient", request));
+      const running = yield* Effect.forkChild(primitives.transact("claimRecipient", actions));
 
       yield* TestClock.adjust(pastEveryDelay);
 
-      expect(yield* Fiber.join(running)).toStrictEqual({ committed: true });
+      yield* Fiber.join(running);
+
       expect(table.transactionRequests.map((sent) => sent.ClientRequestToken)).toStrictEqual([
         "token-1",
         "token-2",
@@ -504,17 +517,68 @@ describe("runTransaction", () => {
     }),
   );
 
-  it.effect("does not retry a condition-only cancellation", () =>
+  it.effect("fails a condition-only cancellation with the refusal, without retrying it", () =>
     Effect.gen(function* () {
       const { table, primitives } = withTable({
+        transactWriteItems: [cancelled("None", "ConditionalCheckFailed")],
+      });
+
+      expect(yield* Effect.flip(primitives.transact("claimRecipient", actions))).toStrictEqual(
+        new Second(),
+      );
+      expect(table.transactionRequests).toHaveLength(1);
+    }),
+  );
+
+  it.effect("lets the first refused action in declaration order decide", () =>
+    Effect.gen(function* () {
+      const { primitives } = withTable({
+        transactWriteItems: [cancelled("ConditionalCheckFailed", "ConditionalCheckFailed")],
+      });
+
+      expect(yield* Effect.flip(primitives.transact("claimRecipient", actions))).toStrictEqual(
+        new First({ current: undefined }),
+      );
+    }),
+  );
+
+  it.effect("passes the item the failed condition returned to its refusal", () =>
+    Effect.gen(function* () {
+      const found = { ...contactKey(contactId), state: str("paused") };
+
+      const { primitives } = withTable({
+        transactWriteItems: [cancelled({ Code: "ConditionalCheckFailed", Item: found }, "None")],
+      });
+
+      expect(yield* Effect.flip(primitives.transact("claimRecipient", actions))).toStrictEqual(
+        new First({ current: found }),
+      );
+    }),
+  );
+
+  it.effect("skips a failed action that declares no refusal for one that does", () =>
+    Effect.gen(function* () {
+      const { primitives } = withTable({
+        transactWriteItems: [cancelled("ConditionalCheckFailed", "ConditionalCheckFailed")],
+      });
+
+      const failure = yield* Effect.flip(
+        primitives.transact("claimRecipient", [put, { ...update, refused: () => new Second() }]),
+      );
+
+      expect(failure).toStrictEqual(new Second());
+    }),
+  );
+
+  it.effect("dies when only an action without a refusal failed", () =>
+    Effect.gen(function* () {
+      const { primitives } = withTable({
         transactWriteItems: [cancelled("ConditionalCheckFailed", "None")],
       });
 
-      expect(yield* primitives.runTransaction("claimRecipient", request)).toStrictEqual({
-        committed: false,
-        conditionFailures: new Set([0]),
-      });
-      expect(table.transactionRequests).toHaveLength(1);
+      expect(yield* defectOf(primitives.transact("createContact", [put, update]))).toStrictEqual(
+        new UnexpectedCondition({ operation: "createContact" }),
+      );
     }),
   );
 
@@ -524,9 +588,9 @@ describe("runTransaction", () => {
         transactWriteItems: [cancelled("ConditionalCheckFailed", "TransactionConflict")],
       });
 
-      const attempt = yield* Effect.result(primitives.runTransaction("claimRecipient", request));
+      const failure = yield* Effect.flip(primitives.transact("claimRecipient", actions));
 
-      expect(failureOf(attempt).reason).toBe("unavailable");
+      expect(failure).toBeInstanceOf(Errors.StorageUnavailable);
       expect(table.transactionRequests).toHaveLength(1);
     }),
   );
@@ -537,13 +601,13 @@ describe("runTransaction", () => {
 
       const { table, primitives } = withTable({ transactWriteItems: conflicts });
 
-      const running = yield* Effect.forkChild(primitives.runTransaction("claimRecipient", request));
+      const running = yield* Effect.forkChild(primitives.transact("claimRecipient", actions));
 
       yield* TestClock.adjust(pastEveryDelay);
 
-      const attempt = yield* Effect.result(Fiber.join(running));
+      const failure = yield* Effect.flip(Fiber.join(running));
 
-      expect(failureOf(attempt).reason).toBe("unavailable");
+      expect(failure).toBeInstanceOf(Errors.StorageUnavailable);
       expect(table.transactionRequests).toHaveLength(7);
     }),
   );

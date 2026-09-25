@@ -1,4 +1,5 @@
 import type * as scheduler from "@distilled.cloud/aws/scheduler";
+import { SchedulerUnavailable } from "@emailer/api/Errors";
 import * as AWS from "alchemy/AWS";
 import { Context, Effect, Layer } from "effect";
 
@@ -8,7 +9,7 @@ import {
   scheduleGroup,
   schedulerRole,
 } from "../sending/Dispatch.ts";
-import { unavailable } from "../storage/Errors.ts";
+import { unavailable } from "../Errors.ts";
 
 export const campaignSchedule = (
   createSchedule: (
@@ -33,7 +34,7 @@ export const campaignSchedule = (
             }),
           ),
         ),
-        Effect.mapError(unavailable("schedule")),
+        Effect.mapError(unavailable(SchedulerUnavailable, "schedule")),
         Effect.asVoid,
       ),
   }) as const;

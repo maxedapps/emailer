@@ -35,18 +35,12 @@ import {
 import { FetchHttpClient } from "effect/unstable/http";
 
 import { newIdentifier, nowIso } from "../src/Identifiers.ts";
-import {
-  attributeOf,
-  campaignKey,
-  NumberAttribute,
-  str,
-  tableLogicalId,
-} from "../src/storage/Items.ts";
+import { campaignKey, itemReader, str, tableLogicalId } from "../src/storage/Items.ts";
 import { suppressionWrites, unsubscribeWrites } from "../src/storage/Addresses.ts";
 import { audienceOperations } from "../src/storage/Audience.ts";
 import { campaignStoreOperations } from "../src/storage/Campaigns.ts";
 import { feedbackWrites } from "../src/storage/Feedback.ts";
-import { transactionPrimitives, writePrimitives } from "../src/storage/Primitives.ts";
+import { transactionPrimitives, updatePrimitives } from "../src/storage/Primitives.ts";
 import { unsubscribeSigningKey } from "../src/consent/Unsubscribe.ts";
 import { feedbackRedelivery } from "../src/feedback/Feedback.ts";
 import { encodeDispatchMessage } from "../src/sending/Dispatch.ts";
@@ -79,24 +73,19 @@ const pollerQuietWindow = Duration.seconds(25);
 
 const mappingUpdateRetry = Schedule.max([Schedule.recurs(20), Schedule.spaced("5 seconds")]);
 
-const StoredSendRow = Schema.Struct({
-  contactId: attributeOf(Schemas.EntityId),
-  recipient: attributeOf(Schema.String),
-  state: attributeOf(
-    Schema.Literals(["unconfirmed", "accepted", "rejected", "uncertain", "skipped"]),
-  ),
-  finishedAt: Schema.optionalKey(attributeOf(Schemas.Timestamp)),
-  skipReason: Schema.optionalKey(attributeOf(Schema.String)),
-});
+const readSendRow = itemReader(
+  Schema.Struct({
+    contactId: Schemas.EntityId,
+    recipient: Schema.String,
+    state: Schema.Literals(["unconfirmed", "accepted", "rejected", "uncertain", "skipped"]),
+    finishedAt: Schema.optionalKey(Schemas.Timestamp),
+    skipReason: Schema.optionalKey(Schema.String),
+  }),
+);
 
-const decodeStoredSendRow = Schema.decodeUnknownEffect(StoredSendRow);
+const RateLimitWindow = Schema.Struct({ count: Schema.Int, expiresAt: Schema.Finite });
 
-const RateLimitWindow = Schema.Struct({
-  count: NumberAttribute,
-  expiresAt: NumberAttribute,
-});
-
-const decodeRateLimitWindow = Schema.decodeUnknownEffect(RateLimitWindow);
+const readRateLimitWindow = itemReader(RateLimitWindow);
 
 export type SimulatorKind = "success" | "bounce" | "complaint";
 
@@ -257,14 +246,14 @@ export const liveStorage = (
     // operations over it rather than any one function's service.
     const crypto = yield* Crypto.Crypto;
     const tokens = Effect.orDie(crypto.randomUUIDv4);
-    const writes = writePrimitives(operations);
+    const updates = updatePrimitives(operations);
     const transactions = transactionPrimitives(operations, tokens);
 
     return {
       ...audienceOperations(operations, tokens),
       ...campaignStoreOperations(operations, tokens),
-      ...suppressionWrites(writes),
-      ...unsubscribeWrites(writes),
+      ...suppressionWrites(updates),
+      ...unsubscribeWrites(updates),
       ...feedbackWrites(transactions),
     } as const;
   });
@@ -514,7 +503,7 @@ export const sendRows = (campaignId: string) =>
         ConsistentRead: true,
       })
       .pipe(
-        Stream.mapEffect((item) => decodeStoredSendRow(item)),
+        Stream.mapEffect((item) => readSendRow("sendRows", item)),
         Stream.runCollect,
       );
   });
@@ -727,7 +716,7 @@ export const rateLimitItem = Effect.gen(function* () {
     throw new Error("RATELIMIT#ses-send is missing");
   }
 
-  return yield* decodeRateLimitWindow(response.Item);
+  return yield* readRateLimitWindow("rateLimitItem", response.Item);
 });
 
 export const dispatchFailureCount = Effect.gen(function* () {

@@ -4,6 +4,7 @@ import { Clock, DateTime, Effect } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { newIdentifier, nowIso } from "../Identifiers.ts";
+import { CampaignChanged, RunSuperseded } from "../storage/Campaigns.ts";
 
 import {
   accountSendQuota,
@@ -89,15 +90,13 @@ const enqueueDraft = (storage: LiveStorage, campaignId: string) =>
   Effect.gen(function* () {
     const token = yield* newIdentifier;
 
-    expect(
-      yield* storage.newRun(
-        campaignId,
-        { state: "draft", runToken: undefined },
-        token,
-        "queued",
-        yield* nowIso,
-      ),
-    ).toBe("queued");
+    yield* storage.newRun(
+      campaignId,
+      { state: "draft", runToken: undefined },
+      token,
+      "queued",
+      yield* nowIso,
+    );
 
     return token;
   });
@@ -118,29 +117,29 @@ describe("queued campaign cancellation", () => {
           once(
             Effect.orDie(
               Effect.gen(function* () {
-                const begun = yield* ordinary.beginRun(campaign.id, token, yield* nowIso);
-
-                if (begun === "stale") {
-                  throw new Error("beginRun in the cancel hook was stale");
-                }
+                yield* ordinary.beginRun(campaign.id, token, yield* nowIso);
               }),
             ),
           ),
         );
 
-        expect(
-          yield* interleaved.cancelCampaign(campaign.id, {
+        const refused = yield* Effect.flip(
+          interleaved.cancelCampaign(campaign.id, {
             state: "queued",
             runToken: token,
             started: false,
           }),
-        ).toBe("conflict");
+        );
+
+        // The refused condition returned the campaign as DynamoDB held it: already sending.
+        expect(refused).toBeInstanceOf(CampaignChanged);
+        expect(refused).toMatchObject({ current: { state: "sending", runToken: token } });
 
         const control = yield* ordinary.getCampaignControl(campaign.id);
 
         expect(control.state).toBe("sending");
         expect(control.runToken).toBe(token);
-        expect(control.startedAt).toBeDefined();
+        expect(control).toHaveProperty("startedAt");
         expect(yield* sendRows(campaign.id)).toHaveLength(0);
       }),
     ));
@@ -155,21 +154,21 @@ describe("queued campaign cancellation", () => {
         const { campaign } = yield* createSimulatorCampaign(client, runId, "cancel-wins");
         const token = yield* enqueueDraft(storage, campaign.id);
 
-        expect(
-          yield* storage.cancelCampaign(campaign.id, {
-            state: "queued",
-            runToken: token,
-            started: false,
-          }),
-        ).toBe("applied");
+        yield* storage.cancelCampaign(campaign.id, {
+          state: "queued",
+          runToken: token,
+          started: false,
+        });
 
-        expect(yield* storage.beginRun(campaign.id, token, yield* nowIso)).toBe("stale");
+        expect(
+          yield* Effect.flip(storage.beginRun(campaign.id, token, yield* nowIso)),
+        ).toStrictEqual(new RunSuperseded());
 
         const control = yield* storage.getCampaignControl(campaign.id);
 
         expect(control.state).toBe("draft");
         expect(control.runToken).toBe(token);
-        expect(control.startedAt).toBeUndefined();
+        expect(control).not.toHaveProperty("startedAt");
         expect(yield* sendRows(campaign.id)).toHaveLength(0);
       }),
     ));
@@ -196,11 +195,7 @@ describe("queued campaign cancellation", () => {
           }
 
           const seedToken = yield* enqueueDraft(storage, campaign.id);
-          const begun = yield* storage.beginRun(campaign.id, seedToken, yield* nowIso);
-
-          if (begun === "stale") {
-            throw new Error("seed beginRun was stale");
-          }
+          yield* storage.beginRun(campaign.id, seedToken, yield* nowIso);
 
           const sendId = yield* newIdentifier;
           const claimedAt = yield* nowIso;
@@ -215,30 +210,27 @@ describe("queued campaign cancellation", () => {
               claimedAt,
             ),
           ).toBe("claimed");
-          expect(
-            yield* storage.settleRecipient(
-              campaign.id,
-              sendId,
-              historic.id,
-              { outcome: "accepted", messageId: "seeded-not-ses" },
-              claimedAt,
-            ),
-          ).toBe("settled");
+          yield* storage.settleRecipient(
+            campaign.id,
+            sendId,
+            historic.id,
+            { outcome: "accepted", messageId: "seeded-not-ses" },
+            claimedAt,
+          );
 
           const sliceId = yield* newIdentifier;
 
-          expect(
-            yield* storage.checkpoint(campaign.id, seedToken, sliceId, undefined, historic.id),
-          ).toBe("updated");
-          expect(yield* storage.pauseRun(campaign.id, seedToken, "daily-quota", historic.id)).toBe(
-            "paused",
-          );
+          yield* storage.checkpoint(campaign.id, seedToken, sliceId, undefined, historic.id);
+          yield* storage.pauseRun(campaign.id, seedToken, "daily-quota", historic.id);
 
           const seededMeta = yield* campaignMeta(campaign.id);
           const seededRows = yield* sendRows(campaign.id);
           const seeded = yield* storage.getCampaignControl(campaign.id);
 
-          expect(seeded.state).toBe("paused");
+          if (seeded.state !== "paused") {
+            throw new Error(`campaign ${campaign.id} was not seeded paused`);
+          }
+
           expect(seeded.pausedReason).toBe("daily-quota");
           expect(seededRows).toHaveLength(1);
           expect(seededRows[0]).toMatchObject({
@@ -248,15 +240,13 @@ describe("queued campaign cancellation", () => {
 
           const resumeToken = yield* newIdentifier;
 
-          expect(
-            yield* storage.newRun(
-              campaign.id,
-              { state: "paused", runToken: seedToken },
-              resumeToken,
-              "queued",
-              yield* nowIso,
-            ),
-          ).toBe("queued");
+          yield* storage.newRun(
+            campaign.id,
+            { state: "paused", runToken: seedToken },
+            resumeToken,
+            "queued",
+            yield* nowIso,
+          );
 
           const cancelled = yield* client.campaigns.cancel({ params: { id: campaign.id } });
 
@@ -321,44 +311,46 @@ describe("queued campaign cancellation", () => {
           DateTime.makeUnsafe((yield* Clock.currentTimeMillis) + 3_600_000),
         );
 
-        expect(
-          yield* storage.newRun(
-            campaign.id,
-            { state: "draft", runToken: undefined },
-            token,
-            "scheduled",
-            sendAt,
-          ),
-        ).toBe("scheduled");
-        expect(
-          yield* storage.cancelCampaign(campaign.id, { state: "scheduled", runToken: token }),
-        ).toBe("applied");
+        yield* storage.newRun(
+          campaign.id,
+          { state: "draft", runToken: undefined },
+          token,
+          "scheduled",
+          sendAt,
+        );
+        yield* storage.cancelCampaign(campaign.id, { state: "scheduled", runToken: token });
 
         expect(
-          yield* storage.newRun(
-            campaign.id,
-            { state: "draft", runToken: undefined },
-            yield* newIdentifier,
-            "queued",
-            yield* nowIso,
+          yield* Effect.flip(
+            storage.newRun(
+              campaign.id,
+              { state: "draft", runToken: undefined },
+              yield* newIdentifier,
+              "queued",
+              yield* nowIso,
+            ),
           ),
-        ).toBe("conflict");
+        ).toBeInstanceOf(CampaignChanged);
         expect(
-          yield* storage.newRun(
-            campaign.id,
-            { state: "draft", runToken: undefined },
-            yield* newIdentifier,
-            "scheduled",
-            sendAt,
+          yield* Effect.flip(
+            storage.newRun(
+              campaign.id,
+              { state: "draft", runToken: undefined },
+              yield* newIdentifier,
+              "scheduled",
+              sendAt,
+            ),
           ),
-        ).toBe("conflict");
-        expect(yield* storage.beginRun(campaign.id, token, yield* nowIso)).toBe("stale");
+        ).toBeInstanceOf(CampaignChanged);
+        expect(
+          yield* Effect.flip(storage.beginRun(campaign.id, token, yield* nowIso)),
+        ).toStrictEqual(new RunSuperseded());
 
         const control = yield* storage.getCampaignControl(campaign.id);
 
         expect(control.state).toBe("draft");
         expect(control.runToken).toBe(token);
-        expect(control.startedAt).toBeUndefined();
+        expect(control).not.toHaveProperty("startedAt");
         expect((yield* campaignMeta(campaign.id)).queuedAt).toBeUndefined();
         expect(yield* sendRows(campaign.id)).toHaveLength(0);
       }),
@@ -376,25 +368,21 @@ describe("queued campaign cancellation", () => {
         const { campaign } = yield* createSimulatorCampaign(client, runId, "enqueue-replay");
         const token = yield* newIdentifier;
 
-        expect(
-          yield* capturing.newRun(
-            campaign.id,
-            { state: "draft", runToken: undefined },
-            token,
-            "queued",
-            yield* nowIso,
-          ),
-        ).toBe("queued");
+        yield* capturing.newRun(
+          campaign.id,
+          { state: "draft", runToken: undefined },
+          token,
+          "queued",
+          yield* nowIso,
+        );
 
         const enqueueRequest = requireCapturedRequest(capture);
 
-        expect(
-          yield* ordinary.cancelCampaign(campaign.id, {
-            state: "queued",
-            runToken: token,
-            started: false,
-          }),
-        ).toBe("applied");
+        yield* ordinary.cancelCampaign(campaign.id, {
+          state: "queued",
+          runToken: token,
+          started: false,
+        });
 
         yield* replayTransactWrite(enqueueRequest);
 
@@ -402,7 +390,7 @@ describe("queued campaign cancellation", () => {
 
         expect(control.state).toBe("draft");
         expect(control.runToken).toBe(token);
-        expect(control.startedAt).toBeUndefined();
+        expect(control).not.toHaveProperty("startedAt");
         expect(yield* sendRows(campaign.id)).toHaveLength(0);
       }),
     ));
@@ -419,26 +407,22 @@ describe("queued campaign cancellation", () => {
         const { campaign } = yield* createSimulatorCampaign(client, runId, "cancel-replay");
         const cancelledToken = yield* enqueueDraft(ordinary, campaign.id);
 
-        expect(
-          yield* capturing.cancelCampaign(campaign.id, {
-            state: "queued",
-            runToken: cancelledToken,
-            started: false,
-          }),
-        ).toBe("applied");
+        yield* capturing.cancelCampaign(campaign.id, {
+          state: "queued",
+          runToken: cancelledToken,
+          started: false,
+        });
 
         const cancelRequest = requireCapturedRequest(capture);
         const replacement = yield* newIdentifier;
 
-        expect(
-          yield* ordinary.newRun(
-            campaign.id,
-            { state: "draft", runToken: cancelledToken },
-            replacement,
-            "queued",
-            yield* nowIso,
-          ),
-        ).toBe("queued");
+        yield* ordinary.newRun(
+          campaign.id,
+          { state: "draft", runToken: cancelledToken },
+          replacement,
+          "queued",
+          yield* nowIso,
+        );
 
         yield* replayTransactWrite(cancelRequest);
 
@@ -446,7 +430,7 @@ describe("queued campaign cancellation", () => {
 
         expect(control.state).toBe("queued");
         expect(control.runToken).toBe(replacement);
-        expect(control.startedAt).toBeUndefined();
+        expect(control).not.toHaveProperty("startedAt");
       }),
     ));
 
@@ -475,11 +459,7 @@ describe("queued campaign cancellation", () => {
         }
 
         const seedToken = yield* enqueueDraft(ordinary, campaign.id);
-        const begun = yield* ordinary.beginRun(campaign.id, seedToken, yield* nowIso);
-
-        if (begun === "stale") {
-          throw new Error("seed beginRun was stale");
-        }
+        yield* ordinary.beginRun(campaign.id, seedToken, yield* nowIso);
 
         const sendId = yield* newIdentifier;
         const claimedAt = yield* nowIso;
@@ -494,49 +474,41 @@ describe("queued campaign cancellation", () => {
             claimedAt,
           ),
         ).toBe("claimed");
-        expect(
-          yield* ordinary.settleRecipient(
-            campaign.id,
-            sendId,
-            historic.id,
-            { outcome: "accepted", messageId: "seeded-not-ses" },
-            claimedAt,
-          ),
-        ).toBe("settled");
-        expect(yield* ordinary.pauseRun(campaign.id, seedToken, "daily-quota", historic.id)).toBe(
-          "paused",
+        yield* ordinary.settleRecipient(
+          campaign.id,
+          sendId,
+          historic.id,
+          { outcome: "accepted", messageId: "seeded-not-ses" },
+          claimedAt,
         );
+        yield* ordinary.pauseRun(campaign.id, seedToken, "daily-quota", historic.id);
 
         const resumeToken = yield* newIdentifier;
 
-        expect(
-          yield* capturing.newRun(
-            campaign.id,
-            { state: "paused", runToken: seedToken },
-            resumeToken,
-            "queued",
-            yield* nowIso,
-          ),
-        ).toBe("queued");
+        yield* capturing.newRun(
+          campaign.id,
+          { state: "paused", runToken: seedToken },
+          resumeToken,
+          "queued",
+          yield* nowIso,
+        );
 
         const resumeRequest = requireCapturedRequest(capture);
 
-        expect(
-          yield* ordinary.recordFeedback(
-            {
-              campaignId: campaign.id,
-              kind: "bounce",
-              feedbackId: yield* newIdentifier,
-              recipient: historic.email,
-              messageId: "seeded-feedback-not-ses",
-              outcome: "recorded",
-              receivedAt: yield* nowIso,
-              bounceType: "Permanent",
-              bounceSubType: "General",
-            },
-            { effect: "count", counter: "bounced" },
-          ),
-        ).toBe("committed");
+        yield* ordinary.recordFeedback(
+          {
+            campaignId: campaign.id,
+            kind: "bounce",
+            feedbackId: yield* newIdentifier,
+            recipient: historic.email,
+            messageId: "seeded-feedback-not-ses",
+            outcome: "recorded",
+            receivedAt: yield* nowIso,
+            bounceType: "Permanent",
+            bounceSubType: "General",
+          },
+          { effect: "count", counter: "bounced" },
+        );
 
         yield* replayTransactWrite(resumeRequest);
 
@@ -573,7 +545,7 @@ describe("queued campaign cancellation", () => {
               const control = yield* storage.getCampaignControl(campaign.id);
 
               expect(control.state).toBe("queued");
-              expect(control.startedAt).toBeUndefined();
+              expect(control).not.toHaveProperty("startedAt");
 
               if (control.runToken === undefined) {
                 throw new Error(`queued campaign ${campaign.id} has no run token`);
@@ -595,7 +567,7 @@ describe("queued campaign cancellation", () => {
 
           expect(control.state).toBe("draft");
           expect(control.runToken).toBe(token);
-          expect(control.startedAt).toBeUndefined();
+          expect(control).not.toHaveProperty("startedAt");
           expect(yield* sendRows(campaign.id)).toHaveLength(0);
           expect(yield* dispatchFailureCount).toBe(0);
         }),

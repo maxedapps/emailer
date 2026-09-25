@@ -3,7 +3,7 @@
 - Status: Accepted
 - Date: 2026-09-23
 - Accepted: 2026-09-23
-- Authority: On 2026-09-23 a whole-codebase review found that nothing reads the list's `membershipVersion` any more. The user approved removing it as part of [the cleanup plan](work/codebase-cleanup.md).
+- Authority: On 2026-09-23 a whole-codebase review found that nothing reads the list's `membershipVersion` any more. The user approved removing it as part of the cleanup plan (`work/codebase-cleanup.md`, in git history).
 - Supersedes in part: [ADR-0005](0005-contact-identity-and-membership-access-paths.md):
   - the version bump in the contact and list cascades, with the contact cascade's bump-free fallback and the list cascade's last-page special case;
   - the unconditional bump on bulk import;
@@ -52,5 +52,5 @@ ADR-0005 gave every list a `membershipVersion`. Every membership write increment
 ## References
 
 - [ADR-0005](0005-contact-identity-and-membership-access-paths.md), [ADR-0011](0011-open-recipient-set-and-paced-dispatch.md)
-- [Codebase cleanup plan](work/codebase-cleanup.md)
+- Codebase cleanup plan (`work/codebase-cleanup.md`, in git history)
 - [Amazon DynamoDB: TransactWriteItems](https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_TransactWriteItems.html)

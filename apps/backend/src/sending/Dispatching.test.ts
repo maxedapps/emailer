@@ -1,5 +1,6 @@
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
+import * as Errors from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
 import {
   Clock,
@@ -11,6 +12,7 @@ import {
   Fiber,
   Layer,
   Logger,
+  Predicate,
   Result,
 } from "effect";
 import { TestClock } from "effect/testing";
@@ -18,14 +20,20 @@ import { TestClock } from "effect/testing";
 import { unsubscribeLink } from "../consent/Unsubscribe.ts";
 import { memberPageSize, runSlice, SliceOverrun } from "./Dispatching.ts";
 import { CampaignWake } from "./Dispatch.ts";
-import { Mailer } from "./Mailer.ts";
+import {
+  Mailer,
+  SendingSuspended,
+  SendRejected,
+  SendThrottled,
+  SubmissionUncertain,
+} from "./Mailer.ts";
 import { SendGuard } from "./SendGuard.ts";
 import { AudienceStore } from "../storage/Audience.ts";
-import { CampaignStore } from "../storage/Campaigns.ts";
+import { CampaignStore, RunSuperseded, SettlementNotApplied } from "../storage/Campaigns.ts";
 import { unusedAudience, unusedCampaigns } from "../storage/Testing.ts";
 
 import type { AddressStatus, PauseReason, SkipReason } from "@emailer/api/Schemas";
-import type { SendPurpose } from "./Mailer.ts";
+import type { SendError, SendPurpose } from "./Mailer.ts";
 import type { MessageContent } from "./Message.ts";
 import type { SendAllowance } from "./SendGuard.ts";
 import type { SubmissionOutcome } from "../storage/Campaigns.ts";
@@ -134,7 +142,7 @@ const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> 
           world.listCalls.push({ listId: id, limit, cursor });
 
           if (world.listMissing) {
-            return yield* new Schemas.NotFound({ entity: "list" });
+            return yield* new Errors.ListNotFound();
           }
 
           const items = [...world.members];
@@ -155,30 +163,23 @@ const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> 
       getCampaignBody: () =>
         Effect.succeed(world.html === undefined ? { text } : { text, html: world.html }),
       beginRun: (_id, token) =>
-        Effect.sync(() => {
-          if (world.beginOutcome === "stale" || token !== world.runToken) {
-            return "stale" as const;
-          }
-
-          return {
-            outcome: "running" as const,
-            campaign: {
+        world.beginOutcome === "stale" || token !== world.runToken
+          ? Effect.fail(new RunSuperseded())
+          : Effect.succeed({
               listId,
               subject,
               cursor: world.cursor,
               filter: world.filter,
               run: world.run,
-            },
-          };
-        }),
+            }),
       claimRecipient: (_id, token, contactId, recipient, sendId) =>
-        Effect.sync(() => {
+        Effect.suspend(() => {
           if (token !== world.runToken) {
-            return "stale" as const;
+            return Effect.fail(new RunSuperseded());
           }
 
           if (world.rows.has(contactId)) {
-            return "already-claimed" as const;
+            return Effect.succeed("already-claimed" as const);
           }
 
           world.rows.set(contactId, {
@@ -189,16 +190,16 @@ const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> 
           });
           world.claims.push(contactId);
 
-          return "claimed" as const;
+          return Effect.succeed("claimed" as const);
         }),
       skipRecipient: (_id, token, contactId, recipient, reason) =>
-        Effect.sync(() => {
+        Effect.suspend(() => {
           if (token !== world.runToken) {
-            return "stale" as const;
+            return Effect.fail(new RunSuperseded());
           }
 
           if (world.rows.has(contactId)) {
-            return "already-claimed" as const;
+            return Effect.succeed("already-claimed" as const);
           }
 
           world.rows.set(contactId, {
@@ -210,14 +211,14 @@ const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> 
           world.skips.push({ contactId, reason });
           world.counters.skipped += 1;
 
-          return "skipped" as const;
+          return Effect.succeed("skipped" as const);
         }),
       settleRecipient: (_id, sendId, contactId, settlement) =>
-        Effect.sync(() => {
+        Effect.suspend(() => {
           const row = world.rows.get(contactId);
 
           if (row === undefined || row.sendId !== sendId || row.state !== "unconfirmed") {
-            return "not-current" as const;
+            return Effect.fail(new SettlementNotApplied());
           }
 
           const settled: RecipientRow = {
@@ -238,43 +239,43 @@ const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> 
           world.settlements.push({ contactId, settlement });
           world.counters[settlement.outcome] += 1;
 
-          return "settled" as const;
+          return Effect.void;
         }),
       checkpoint: (_id, token, sliceId, previous, next) =>
-        Effect.sync(() => {
+        Effect.suspend(() => {
           if (token !== world.runToken) {
-            return "condition-failed" as const;
+            return Effect.fail(new RunSuperseded());
           }
 
           world.checkpoints.push({ sliceId, previous, next });
 
           if (world.checkpointOutcome === "condition-failed") {
-            return "condition-failed" as const;
+            return Effect.fail(new RunSuperseded());
           }
 
           world.cursor = next;
 
-          return "updated" as const;
+          return Effect.void;
         }),
       completeRun: (_id, token) =>
-        Effect.sync(() => {
+        Effect.suspend(() => {
           if (token !== world.runToken) {
-            return "stale" as const;
+            return Effect.fail(new RunSuperseded());
           }
 
           world.completed += 1;
 
-          return "completed" as const;
+          return Effect.void;
         }),
       pauseRun: (_id, token, reason, cursor) =>
-        Effect.sync(() => {
+        Effect.suspend(() => {
           if (token !== world.runToken) {
-            return "stale" as const;
+            return Effect.fail(new RunSuperseded());
           }
 
           world.paused.push({ reason, cursor });
 
-          return "paused" as const;
+          return Effect.void;
         }),
     }),
   );
@@ -316,16 +317,21 @@ interface MailerDouble {
   readonly sent: Array<SentMessage>;
 }
 
-const mailerDouble = (outcomes: ReadonlyArray<SubmissionOutcome> = []): MailerDouble => {
+/** SES's answer to a send: the message ID it accepted under, or the error it failed with. */
+type Answer = string | SendError;
+
+const mailerDouble = (answers: ReadonlyArray<Answer> = []): MailerDouble => {
   const sent: Array<SentMessage> = [];
-  const remaining = [...outcomes];
+  const remaining = [...answers];
 
   const layer = Layer.succeed(Mailer)({
     send: (recipient, content, unsubscribeUrl, purpose) =>
-      Effect.sync(() => {
+      Effect.suspend(() => {
         sent.push({ recipient, ...content, unsubscribeUrl, purpose });
 
-        return remaining.shift() ?? { outcome: "accepted" as const, messageId: "ses-message" };
+        const answer = remaining.shift() ?? "ses-message";
+
+        return Predicate.isString(answer) ? Effect.succeed(answer) : Effect.fail(answer);
       }),
   });
 
@@ -366,7 +372,7 @@ interface Scenario {
   readonly guard?: SendAllowance;
   readonly run?: RunFeedback;
   readonly delays?: ReadonlyArray<Duration.Duration>;
-  readonly outcomes?: ReadonlyArray<SubmissionOutcome>;
+  readonly answers?: ReadonlyArray<Answer>;
 }
 
 interface Fixture {
@@ -415,7 +421,7 @@ const fixture = (scenario: Scenario = {}): Fixture => {
   };
 
   const wake = wakeDouble();
-  const mailer = mailerDouble(scenario.outcomes);
+  const mailer = mailerDouble(scenario.answers);
   const guard = guardDouble(scenario.guard ?? defaultGuard, scenario.delays);
 
   return {
@@ -441,6 +447,42 @@ const runSliceNow = (fix: Fixture, extraDeadline = sliceTimeout) =>
     return yield* Effect.result(
       runSlice({ campaignId, runToken }, now + Duration.toMillis(extraDeadline)),
     ).pipe(Effect.provide(fix.layer));
+  });
+
+interface LogEntry {
+  readonly level: string;
+  readonly message: unknown;
+}
+
+/** A slice run with its log lines kept, and the lines a message names. */
+const runSliceLogged = (
+  fix: Fixture,
+  replaced: Layer.Layer<never> | Layer.Layer<Mailer> = Layer.empty,
+) =>
+  Effect.gen(function* () {
+    const entries: Array<LogEntry> = [];
+
+    const logger = Logger.layer([
+      Logger.make((options) => {
+        entries.push({ level: options.logLevel, message: options.message });
+      }),
+    ]);
+
+    const now = yield* Clock.currentTimeMillis;
+
+    const attempt = yield* Effect.result(
+      runSlice({ campaignId, runToken }, now + Duration.toMillis(sliceTimeout)),
+    ).pipe(Effect.provide(Layer.mergeAll(fix.layer, replaced, logger)));
+
+    const named = (name: string) =>
+      entries.filter((entry) => {
+        // SAFETY: Effect.logInfo(message, data) reaches a logger as [message, data].
+        const recorded = entry.message as ReadonlyArray<unknown> | string | undefined;
+
+        return Array.isArray(recorded) ? recorded[0] === name : recorded === name;
+      });
+
+    return { attempt, named };
   });
 
 const successOf = <A, E>(attempt: Result.Result<A, E>): A => {
@@ -567,47 +609,20 @@ describe("runSlice", () => {
   it.effect("submits nothing when the run token is stale", () =>
     Effect.gen(function* () {
       const fix = fixture({ beginOutcome: "stale" });
-      const entries: Array<{ readonly level: string; readonly message: unknown }> = [];
-      const now = yield* Clock.currentTimeMillis;
-
-      const attempt = yield* Effect.result(
-        runSlice({ campaignId, runToken }, now + Duration.toMillis(sliceTimeout)),
-      ).pipe(
-        Effect.provide(
-          Layer.mergeAll(
-            fix.layer,
-            Logger.layer([
-              Logger.make((options) => {
-                entries.push({ level: options.logLevel, message: options.message });
-              }),
-            ]),
-          ),
-        ),
-      );
+      const { attempt, named } = yield* runSliceLogged(fix);
 
       successOf(attempt);
-
       expect(fix.world.claims).toHaveLength(0);
       expect(fix.mailer.sent).toHaveLength(0);
       expect(fix.world.listCalls).toHaveLength(0);
       expect(fix.world.settlements).toHaveLength(0);
       expect(fix.world.completed).toBe(0);
       expect(fix.wake.messages).toHaveLength(0);
-
-      const stale = entries.filter((entry) => {
-        // SAFETY: Effect.logInfo(message, data) reaches a logger as [message, data].
-        const recorded = entry.message as ReadonlyArray<unknown> | string | undefined;
-
-        return Array.isArray(recorded)
-          ? recorded[0] === "stale wake discarded"
-          : recorded === "stale wake discarded";
-      });
-
-      expect(stale).toHaveLength(1);
-      expect(stale[0]?.level).toBe("Info");
-      expect(stale[0]?.message).toStrictEqual([
-        "stale wake discarded",
-        { campaignId, runToken, disposition: "stale" },
+      expect(named("stale wake discarded")).toStrictEqual([
+        {
+          level: "Info",
+          message: ["stale wake discarded", { campaignId, runToken, disposition: "stale" }],
+        },
       ]);
     }),
   );
@@ -679,7 +694,7 @@ describe("runSlice", () => {
     }),
   );
 
-  it.effect("enqueues nothing when a checkpoint is lost", () =>
+  it.effect("ends the slice as stale, enqueueing nothing, when its checkpoint is lost", () =>
     Effect.gen(function* () {
       const fix = fixture({
         members: [memberA],
@@ -687,23 +702,53 @@ describe("runSlice", () => {
         checkpointOutcome: "condition-failed",
       });
 
-      successOf(yield* runSliceNow(fix));
+      const { attempt, named } = yield* runSliceLogged(fix);
 
+      successOf(attempt);
       expect(fix.world.counters.accepted).toBe(1);
       expect(fix.world.checkpoints).toHaveLength(1);
       expect(fix.wake.messages).toHaveLength(0);
       expect(fix.world.completed).toBe(0);
+      expect(named("stale wake discarded")).toHaveLength(1);
     }),
   );
 
-  it.effect("retries rate-limited submissions with 1s, 2s, 4s backoff then pauses", () =>
+  it.effect("logs a settlement another attempt already applied, and carries on", () =>
+    Effect.gen(function* () {
+      const fix = fixture({ members: [memberA, memberB] });
+
+      // Another attempt settles memberA's row while this one's submission is in flight.
+      const racing = Layer.succeed(Mailer)({
+        send: (recipient) =>
+          Effect.sync(() => {
+            const row = fix.world.rows.get(memberA.id);
+
+            if (recipient === memberA.email && row !== undefined) {
+              fix.world.rows.set(memberA.id, { ...row, sendId: "another-attempt" });
+            }
+
+            return `message-${recipient}`;
+          }),
+      });
+
+      const { attempt, named } = yield* runSliceLogged(fix, racing);
+
+      successOf(attempt);
+      expect(named("settlement not applied")).toHaveLength(1);
+      expect(named("settlement not applied")[0]?.level).toBe("Warn");
+      expect(fix.world.settlements.map((settled) => settled.contactId)).toStrictEqual([memberB.id]);
+      expect(fix.world.completed).toBe(1);
+    }),
+  );
+
+  it.effect("retries throttled submissions with 1s, 2s, 4s backoff then pauses", () =>
     Effect.gen(function* () {
       const fix = fixture({
-        outcomes: [
-          { outcome: "rejected", rejectionCode: "rate-limited" },
-          { outcome: "rejected", rejectionCode: "rate-limited" },
-          { outcome: "rejected", rejectionCode: "rate-limited" },
-          { outcome: "rejected", rejectionCode: "rate-limited" },
+        answers: [
+          new SendThrottled(),
+          new SendThrottled(),
+          new SendThrottled(),
+          new SendThrottled(),
         ],
       });
 
@@ -727,18 +772,19 @@ describe("runSlice", () => {
     }),
   );
 
-  it.effect("recovers from one rate-limited submission after a 1s backoff", () =>
+  it.effect("backs a throttled submission off 1s, then reserves a slot and sends again", () =>
     Effect.gen(function* () {
-      const fix = fixture({
-        outcomes: [
-          { outcome: "rejected", rejectionCode: "rate-limited" },
-          { outcome: "accepted", messageId: "second" },
-        ],
-      });
+      const fix = fixture({ answers: [new SendThrottled(), "second"] });
 
       const fiber = yield* Effect.forkChild(runSliceNow(fix));
 
-      yield* TestClock.adjust("1 second");
+      yield* TestClock.adjust("999 millis");
+
+      // Sent once, and the retry has not yet reserved its slot: it backs off first.
+      expect(fix.mailer.sent).toHaveLength(1);
+      expect(fix.guard.slots).toHaveLength(1);
+
+      yield* TestClock.adjust("1 millis");
 
       successOf(yield* Fiber.join(fiber));
 
@@ -755,7 +801,7 @@ describe("runSlice", () => {
     Effect.gen(function* () {
       const fix = fixture({
         members: [memberA, memberB],
-        outcomes: [{ outcome: "uncertain" }],
+        answers: [new SubmissionUncertain({ reason: "timeout" })],
       });
 
       successOf(yield* runSliceNow(fix));
@@ -776,14 +822,14 @@ describe("runSlice", () => {
     }),
   );
 
-  it.effect("pauses on sending-paused after settling the recipient rejected", () =>
+  it.effect("pauses at once on a suspension, after settling the recipient rejected", () =>
     Effect.gen(function* () {
-      const fix = fixture({
-        outcomes: [{ outcome: "rejected", rejectionCode: "sending-paused" }],
-      });
+      const fix = fixture({ answers: [new SendingSuspended()] });
 
       successOf(yield* runSliceNow(fix));
 
+      expect(fix.mailer.sent).toHaveLength(1);
+      expect(fix.guard.slots).toHaveLength(1);
       expect(fix.world.counters.rejected).toBe(1);
       expect(fix.world.paused).toStrictEqual([{ reason: "sending-paused", cursor: memberA.id }]);
       expect(fix.wake.messages).toHaveLength(0);
@@ -887,10 +933,7 @@ describe("runSlice", () => {
       const fix = fixture({
         members: [memberA, memberB],
         guard: { limit: 3 },
-        outcomes: [
-          { outcome: "rejected", rejectionCode: "message-rejected" },
-          { outcome: "accepted", messageId: "ses-message" },
-        ],
+        answers: [new SendRejected({ code: "message-rejected" }), "ses-message"],
       });
 
       successOf(yield* runSliceNow(fix));

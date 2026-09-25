@@ -1,25 +1,49 @@
-import type * as dynamodb from "@distilled.cloud/aws/dynamodb";
+import * as dynamodb from "@distilled.cloud/aws/dynamodb";
 import type * as AWS from "alchemy/AWS";
-import { Data, Duration, Effect, Predicate, Random, Schedule, Schema } from "effect";
+import { Data, Duration, Effect, ErrorReporter, Predicate, Result, Schedule, Schema } from "effect";
 
-import { corrupt, StorageFailure, unavailable } from "./Errors.ts";
-import { attributeOf, listingIndexName, operationTimeout, str, tableLogicalId } from "./Items.ts";
+import { StorageUnavailable } from "@emailer/api/Errors";
+
+import { corrupt, unavailable } from "../Errors.ts";
+import { keyCodec, listingIndexName, operationTimeout, str, tableLogicalId } from "./Items.ts";
 
 import type { TableOperations } from "./Items.ts";
 
 const conditionalCheckFailed = "ConditionalCheckFailed";
 
-const CancellationCodes = Schema.UndefinedOr(
-  Schema.Array(Schema.Struct({ Code: Schema.optional(Schema.String) })),
+/** Every failure of a table call: the store was unreachable, timed out, or refused the request. */
+const storageUnavailable = (operation: string) => unavailable(StorageUnavailable, operation);
+
+/** The item a failed condition was checked against, when the request asked for it (`ALL_OLD`). */
+export type StoredItem = dynamodb.AttributeMap | undefined;
+
+/** What a failed condition means: a typed failure, decided from the stored item if it came back. */
+type Refuse<E> = (current: StoredItem) => Effect.Effect<never, E>;
+
+/**
+ * The SDK types a failed condition's item and a cancellation's reasons as `any`, and exports the
+ * schemas that type them precisely.
+ */
+const fromSdk = <T>(schema: Schema.Schema<T>) =>
+  // SAFETY: the SDK's generated schemas are plain data schemas, which need no services to decode.
+  schema as Schema.Codec<T, unknown>;
+
+const decodeStoredItem = Schema.decodeUnknownEffect(
+  Schema.UndefinedOr(Schema.Record(Schema.String, fromSdk(dynamodb.AttributeValue))),
 );
 
-const decodeCancellationCodes = Schema.decodeUnknownEffect(CancellationCodes);
+const decodeReasons = Schema.decodeUnknownEffect(
+  Schema.UndefinedOr(Schema.Array(fromSdk(dynamodb.CancellationReason))),
+);
 
-type TransactionOutcome =
-  | { readonly committed: true }
-  | { readonly committed: false; readonly conditionFailures: ReadonlySet<number> };
-
-const committed: TransactionOutcome = { committed: true };
+/** A condition failed that no caller gave a meaning to: it cannot happen, so it is a defect. */
+export class UnexpectedCondition extends Data.TaggedError("UnexpectedCondition")<{
+  readonly operation: string;
+}> {
+  override get [ErrorReporter.attributes]() {
+    return { operation: this.operation };
+  }
+}
 
 /**
  * A transaction cancelled because its items collided with another in-flight transaction applied
@@ -63,9 +87,9 @@ export interface StoredPage<Item, Cursor> {
   readonly nextCursor?: Cursor;
 }
 
-const IndexEntry = Schema.Struct({ gsi1sk: attributeOf(Schema.String) });
-
-const decodeIndexEntry = Schema.decodeUnknownEffect(IndexEntry);
+const decodeIndexEntry = Schema.decodeUnknownEffect(
+  keyCodec(Schema.Struct({ gsi1sk: Schema.String })),
+);
 
 /**
  * The next cursor is derived from `LastEvaluatedKey` and from nothing else. Deriving it from a
@@ -75,11 +99,11 @@ const decodeIndexEntry = Schema.decodeUnknownEffect(IndexEntry);
  * An unreadable `LastEvaluatedKey` is corrupt rather than absent, for the same reason: reading it
  * as "no more pages" would truncate the listing silently.
  */
-const nextCursorOf = (operationId: string, lastEvaluatedKey: dynamodb.AttributeMap | undefined) =>
+const nextCursorOf = (operation: string, lastEvaluatedKey: dynamodb.AttributeMap | undefined) =>
   lastEvaluatedKey === undefined
     ? Effect.undefined
     : decodeIndexEntry(lastEvaluatedKey).pipe(
-        Effect.mapError(corrupt(operationId)),
+        corrupt(operation),
         Effect.map((entry) => entry.gsi1sk),
       );
 
@@ -104,25 +128,24 @@ export const readPrimitives = (operations: Pick<TableOperations, "getItem">) => 
   const readItem = (operationId: string, key: AWS.DynamoDB.GetItemRequest["Key"]) =>
     operations
       .getItem({ Key: key, ConsistentRead: true })
-      .pipe(Effect.timeout(operationTimeout), Effect.mapError(unavailable(operationId)));
+      .pipe(Effect.timeout(operationTimeout), Effect.mapError(storageUnavailable(operationId)));
 
   return { readItem } as const;
 };
 
 export type ReadPrimitives = ReturnType<typeof readPrimitives>;
 
-export const writePrimitives = (operations: Pick<TableOperations, "putItem">) => {
+const writePrimitives = (operations: Pick<TableOperations, "putItem">) => {
   /**
-   * A put that leaves an existing item alone. The key is either a mailbox the caller wants
-   * recorded exactly once, or a freshly generated identifier that nobody else can hold, so an
-   * item already there is the outcome the caller wanted — including when it is this same request
-   * landing a second time after a lost response.
+   * A put that leaves an existing item alone. The key is a freshly generated identifier that
+   * nobody else can hold, so an item already there is this same request landing a second time
+   * after a lost response.
    */
   const recordOnce = (operationId: string, item: AWS.DynamoDB.PutItemRequest["Item"]) =>
     operations.putItem({ Item: item, ConditionExpression: "attribute_not_exists(pk)" }).pipe(
       Effect.timeout(operationTimeout),
       Effect.catchTag("ConditionalCheckFailedException", () => Effect.void),
-      Effect.mapError(unavailable(operationId)),
+      Effect.mapError(storageUnavailable(operationId)),
       Effect.asVoid,
     );
 
@@ -131,36 +154,47 @@ export const writePrimitives = (operations: Pick<TableOperations, "putItem">) =>
 
 export type WritePrimitives = ReturnType<typeof writePrimitives>;
 
-type UpdateIfResult =
-  | { readonly applied: true; readonly attributes: dynamodb.AttributeMap | undefined }
-  | { readonly applied: false };
-
 export const updatePrimitives = (operations: Pick<TableOperations, "updateItem">) => {
   /**
-   * A conditional single-item update whose failed condition is a documented outcome. `ReturnValues`
-   * is honoured so a caller can read the item that was written; any other error, including a
-   * timeout, is still unavailable.
+   * A conditional single-item update, answering the item as `ReturnValues` asks. A failed
+   * condition is `refused`, given the stored item if the request asked for it; any other error,
+   * including a timeout, is unavailable.
    *
    * The client retries transient answers, including a lost response, so the request may land
    * twice. `UpdateItem` has no idempotency token; what makes the repeat safe is the caller's
    * condition, which must hold both before and after the write for the actor that wrote it — a
    * run token, a slice identifier, the value being set — so a second landing applies the same
-   * values or reports `applied` just as the first did.
+   * values rather than being refused.
    */
-  const updateIf = (
-    operationId: string,
+  const updateIf = <E>(
+    operation: string,
     request: AWS.DynamoDB.UpdateItemRequest,
-  ): Effect.Effect<UpdateIfResult, StorageFailure> =>
-    operations.updateItem(request).pipe(
-      Effect.map((output): UpdateIfResult => ({ applied: true, attributes: output.Attributes })),
-      Effect.catchTag("ConditionalCheckFailedException", () =>
-        Effect.succeed<UpdateIfResult>({ applied: false }),
-      ),
-      Effect.timeout(operationTimeout),
-      Effect.mapError(unavailable(operationId)),
-    );
+    refused: Refuse<E>,
+  ) =>
+    Effect.gen(function* () {
+      const outcome = yield* operations.updateItem(request).pipe(
+        Effect.map((output) => Result.succeed(output.Attributes)),
+        Effect.catchTag("ConditionalCheckFailedException", (failure) =>
+          decodeStoredItem(failure.Item).pipe(corrupt(operation), Effect.map(Result.fail)),
+        ),
+        Effect.timeout(operationTimeout),
+        Effect.mapError(storageUnavailable(operation)),
+      );
 
-  return { updateIf } as const;
+      return Result.isSuccess(outcome) ? outcome.success : yield* refused(outcome.failure);
+    });
+
+  /** An unconditional single-item update, safe to repeat because it sets what it sets. */
+  const update = (operation: string, request: AWS.DynamoDB.UpdateItemRequest) =>
+    operations
+      .updateItem(request)
+      .pipe(
+        Effect.timeout(operationTimeout),
+        Effect.mapError(storageUnavailable(operation)),
+        Effect.asVoid,
+      );
+
+  return { update, updateIf } as const;
 };
 
 export type UpdatePrimitives = ReturnType<typeof updatePrimitives>;
@@ -179,24 +213,26 @@ const queryPrimitives = (operations: Pick<TableOperations, "query">) => {
   ) =>
     operations
       .query(target === "index" ? request : { ...request, ConsistentRead: true })
-      .pipe(Effect.timeout(operationTimeout), Effect.mapError(unavailable(operationId)));
+      .pipe(Effect.timeout(operationTimeout), Effect.mapError(storageUnavailable(operationId)));
 
   return { runQuery } as const;
 };
 
 export type QueryPrimitives = ReturnType<typeof queryPrimitives>;
 
-const batchAttempts = 4;
-
-const batchRetryDelay = Duration.millis(100);
+/**
+ * Unprocessed keys are retried three times, backing off jittered from 100 ms: they mean the table is
+ * shedding load, and retrying in lockstep with every other caller is how that gets worse.
+ */
+const unprocessedBackoff = Schedule.exponential("100 millis").pipe(
+  Schedule.jittered,
+  Schedule.upTo({ times: 3 }),
+);
 
 const batchDeadline = Duration.seconds(5);
 
-/** Why a hydration failed after its last attempt: the items that did arrive and the keys that did not. */
-class IncompleteBatch extends Data.TaggedError("IncompleteBatch")<{
-  readonly items: ReadonlyArray<dynamodb.AttributeMap>;
-  readonly pending: dynamodb.KeysAndAttributes;
-}> {}
+/** A batch read left keys unprocessed. */
+class UnprocessedKeys extends Data.TaggedError("UnprocessedKeys") {}
 
 const batchPrimitives = (operations: Pick<TableOperations, "batchGetItem">) => {
   /**
@@ -208,8 +244,8 @@ const batchPrimitives = (operations: Pick<TableOperations, "batchGetItem">) => {
    *
    * AWS may leave keys unprocessed on any response, including the retry of a retry — it is
    * throttling, not a one-off. Returning whatever arrived would answer a partial hydration as if it
-   * were a complete one, and a listing would quietly drop members. So the pending block is retried
-   * until it is empty, and if the attempts run out the operation fails. A short read is never a
+   * were a complete one, and a listing would quietly drop members. So the pending keys are retried
+   * until none are left, and if the retries run out the operation fails. A short read is never a
    * successful read.
    */
   const readItems = (operationId: string, keys: ReadonlyArray<dynamodb.AttributeMap>) =>
@@ -225,37 +261,40 @@ const batchPrimitives = (operations: Pick<TableOperations, "batchGetItem">) => {
       const items: Array<dynamodb.AttributeMap> = [];
       let requested: dynamodb.KeysAndAttributes = { Keys: [...keys], ConsistentRead: true };
 
-      for (let attempt = 1; attempt <= batchAttempts; attempt += 1) {
+      const round = Effect.gen(function* () {
         const response = yield* operations
           .batchGetItem({ RequestItems: { [tableLogicalId]: requested } })
-          .pipe(Effect.mapError(unavailable(operationId)));
+          .pipe(Effect.mapError(storageUnavailable(operationId)));
 
         items.push(...responseItems(response));
 
         const pending = Object.values(response.UnprocessedKeys ?? {})[0];
 
-        if (pending === undefined || pending.Keys.length === 0) {
-          return items;
+        if (pending !== undefined && pending.Keys.length > 0) {
+          // Re-keyed to the logical ID the binding expects, preserving ConsistentRead.
+          requested = { Keys: pending.Keys, ConsistentRead: true };
+
+          return yield* new UnprocessedKeys();
         }
 
-        // Re-keyed to the logical ID the binding expects, preserving ConsistentRead.
-        requested = { Keys: pending.Keys, ConsistentRead: true };
+        return items;
+      });
 
-        if (attempt < batchAttempts) {
-          // Jittered exponential backoff: unprocessed keys mean the table is shedding load, and
-          // retrying in lockstep with every other caller is how that gets worse.
-          const jitter = yield* Random.next;
-
-          yield* Effect.sleep(Duration.times(batchRetryDelay, 2 ** (attempt - 1) * (1 + jitter)));
-        }
-      }
-
-      return yield* unavailable(operationId)(new IncompleteBatch({ items, pending: requested }));
+      return yield* Effect.retry(round, {
+        schedule: unprocessedBackoff,
+        while: Predicate.isTagged("UnprocessedKeys"),
+      }).pipe(
+        Effect.catchTag("UnprocessedKeys", (short) =>
+          Effect.fail(storageUnavailable(operationId)(short)),
+        ),
+      );
     }).pipe(
       // One deadline for the whole operation, retries included, rather than one per attempt: the
       // caller's budget does not grow because the store needed several rounds.
       Effect.timeout(batchDeadline),
-      Effect.catchTag("TimeoutError", (timeout) => Effect.fail(unavailable(operationId)(timeout))),
+      Effect.catchTag("TimeoutError", (timeout) =>
+        Effect.fail(storageUnavailable(operationId)(timeout)),
+      ),
     );
 
   return { readItems } as const;
@@ -308,9 +347,7 @@ const pagePrimitives = (primitives: QueryPrimitives & BatchPrimitives) => {
       const keys: Array<dynamodb.AttributeMap> = [];
 
       for (const entry of page.Items ?? []) {
-        const { gsi1sk } = yield* decodeIndexEntry(entry).pipe(
-          Effect.mapError(corrupt(operationId)),
-        );
+        const { gsi1sk } = yield* decodeIndexEntry(entry).pipe(corrupt(operationId));
 
         keys.push(keyOf(gsi1sk.slice(gsi1sk.indexOf("#") + 1)));
       }
@@ -337,11 +374,30 @@ const pagePrimitives = (primitives: QueryPrimitives & BatchPrimitives) => {
 
 export type PagePrimitives = ReturnType<typeof pagePrimitives>;
 
+type TransactItem = AWS.DynamoDB.TransactWriteItemsRequest["TransactItems"][number];
+
 /**
- * A transaction request as the store writes it: the idempotency token is the primitive's to add,
- * one per logical call, and never the caller's.
+ * One action of a transaction. `refused` names what its failed condition means; an action whose
+ * condition can only fail through a bug declares none.
  */
-export type TransactionRequest = Omit<AWS.DynamoDB.TransactWriteItemsRequest, "ClientRequestToken">;
+export type Action<E = never> = TransactItem & { readonly refused?: Refuse<E> };
+
+/** The failures a transaction's actions declare. */
+type Refusal<A> = A extends { readonly refused?: infer Refuses }
+  ? Refuses extends Refuse<infer E>
+    ? E
+    : never
+  : never;
+
+const withoutRefusal = <E>({ refused: _refused, ...item }: Action<E>): TransactItem => item;
+
+/** A cancellation that only condition failures caused, as opposed to a conflict or a throttle. */
+const onlyConditionsFailed = (
+  reasons: ReadonlyArray<dynamodb.CancellationReason> | undefined,
+): reasons is ReadonlyArray<dynamodb.CancellationReason> =>
+  reasons !== undefined &&
+  reasons.some((reason) => reason.Code === conditionalCheckFailed) &&
+  reasons.every((reason) => reason.Code === conditionalCheckFailed || reason.Code === "None");
 
 /** A fresh token per logical transaction; at most 36 characters, which a UUID exactly fills. */
 export type TransactionTokens = Effect.Effect<string>;
@@ -351,56 +407,62 @@ export const transactionPrimitives = (
   tokens: TransactionTokens,
 ) => {
   /**
-   * A transaction whose cancelled condition checks are a documented outcome.
+   * A transaction whose failed conditions fail it with what their actions declare. Of the actions
+   * whose condition failed, the first in declaration order that declares a refusal decides, so the
+   * order of the actions is the order of precedence.
    *
    * Every logical call carries its own `ClientRequestToken`. DynamoDB then treats a repeat of the
    * identical request within ten minutes as the same call and answers success without applying it
    * again, which is what makes the client's default transient retries safe here: a lost response
    * is resent, not misread as a condition failure. A cancellation whose reasons are only
    * `TransactionConflict` or `None` applied nothing and is retried as a **new** call with a new
-   * token, since nothing documents how a cancelled token replays. A mix with
-   * `ConditionalCheckFailed` is a business outcome, classified below; any other reason is
+   * token, since nothing documents how a cancelled token replays. Any other mix of reasons is
    * unavailable. The timeout wraps the whole sequence.
    */
-  const runTransaction = (
-    operationId: string,
-    request: TransactionRequest,
-  ): Effect.Effect<TransactionOutcome, StorageFailure> =>
-    tokens.pipe(
-      Effect.flatMap((token) =>
-        operations.transactWriteItems({ ...request, ClientRequestToken: token }).pipe(
-          Effect.as(committed),
-          Effect.catchTag("TransactionCanceledException", (failure) =>
-            decodeCancellationCodes(failure.CancellationReasons).pipe(
-              Effect.mapError(() => failure),
-              Effect.flatMap((reasons) => {
-                const conditionFailures = new Set<number>();
-                let hasOtherReason = false;
+  const transact = <const Actions extends ReadonlyArray<Action<unknown>>>(
+    operation: string,
+    actions: Actions,
+  ): Effect.Effect<void, Refusal<Actions[number]> | StorageUnavailable> =>
+    Effect.gen(function* () {
+      // SAFETY: each action's refusal fails with the error it declares, and `Refusal` is the union
+      // of those; the tuple's element type only loses which action declares which.
+      const declared = actions as ReadonlyArray<Action<Refusal<Actions[number]>>>;
 
-                (reasons ?? []).forEach((reason, index) => {
-                  if (reason.Code === conditionalCheckFailed) {
-                    conditionFailures.add(index);
-                  } else if (reason.Code !== undefined && reason.Code !== "None") {
-                    hasOtherReason = true;
-                  }
-                });
-
-                if (hasOtherReason || conditionFailures.size === 0) {
-                  return Effect.fail(failure);
-                }
-
-                return Effect.succeed<TransactionOutcome>({ committed: false, conditionFailures });
-              }),
-            ),
+      const cancelled = yield* tokens.pipe(
+        Effect.flatMap((token) =>
+          operations.transactWriteItems({
+            TransactItems: declared.map(withoutRefusal),
+            ClientRequestToken: token,
+          }),
+        ),
+        Effect.retry({ schedule: conflictRetry, while: isConflictCancellation }),
+        Effect.as(undefined),
+        Effect.catchTag("TransactionCanceledException", (failure) =>
+          decodeReasons(failure.CancellationReasons).pipe(
+            corrupt(operation),
+            Effect.filterOrFail(onlyConditionsFailed, () => failure),
           ),
         ),
-      ),
-      Effect.retry({ schedule: conflictRetry, while: isConflictCancellation }),
-      Effect.timeout(operationTimeout),
-      Effect.mapError(unavailable(operationId)),
-    );
+        Effect.timeout(operationTimeout),
+        Effect.mapError(storageUnavailable(operation)),
+      );
 
-  return { runTransaction } as const;
+      if (cancelled === undefined) {
+        return;
+      }
+
+      for (const [index, reason] of cancelled.entries()) {
+        const refused = declared[index]?.refused;
+
+        if (reason.Code === conditionalCheckFailed && refused !== undefined) {
+          return yield* refused(reason.Item);
+        }
+      }
+
+      return yield* Effect.die(new UnexpectedCondition({ operation }));
+    });
+
+  return { transact } as const;
 };
 
 export type TransactionPrimitives = ReturnType<typeof transactionPrimitives>;

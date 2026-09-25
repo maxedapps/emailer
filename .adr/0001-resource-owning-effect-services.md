@@ -33,7 +33,7 @@ Emailer will expose an AWS SES email service through a CLI and later MCP. The in
 
 Providing a production service Layer adds its resource and binding requirements to the Stack. Tests can supply an alternative implementation without creating AWS resources. Moving service files must preserve logical IDs; resource removal and test cleanup still require explicit lifecycle policy. Built/deployed runtime checks remain necessary because types and mocked services do not prove cloud wiring.
 
-The first slice remains contact → list membership → campaign → immediate plain-text submission to one allowlisted recipient. Its task and validation details live in the [implementation plan](work/first-campaign-slice.md).
+The first slice remains contact → list membership → campaign → immediate plain-text submission to one allowlisted recipient. Its task and validation details live in the implementation plan (`work/first-campaign-slice.md`, in git history).
 
 ## References
 

@@ -2,13 +2,8 @@ import { NodeCrypto } from "@effect/platform-node";
 import { EmailerApi } from "@emailer/api/Api";
 import * as Schemas from "@emailer/api/Schemas";
 import * as AWS from "alchemy/AWS";
-import { Duration, Effect, Layer, Option, Redacted } from "effect";
-import {
-  HttpRouter,
-  HttpServer,
-  HttpServerRequest,
-  HttpServerResponse,
-} from "effect/unstable/http";
+import { Duration, Effect, Layer, Redacted } from "effect";
+import { HttpRouter, HttpServer, HttpServerResponse } from "effect/unstable/http";
 import { HttpApiBuilder } from "effect/unstable/httpapi";
 
 import * as Addresses from "../audience/Addresses.ts";
@@ -19,8 +14,8 @@ import * as Campaigns from "../campaigns/Campaigns.ts";
 import { PreviewFunction, previewLink, previewSecret } from "../campaigns/Previews.ts";
 import { sendTest } from "../campaigns/TestSends.ts";
 import { UnsubscribeFunction, unsubscribeSecret } from "../consent/Unsubscribe.ts";
-import { publicly } from "../Diagnostics.ts";
-import { lambdaBasics } from "../Lambda.ts";
+import { FunctionServicesLive, lambdaBasics } from "../Lambda.ts";
+import { respondingToFailures } from "../Reporting.ts";
 import { CampaignWakeLive } from "../sending/Dispatch.ts";
 import { MailerLive } from "../sending/Mailer.ts";
 import { SendGuardLive } from "../sending/SendGuard.ts";
@@ -37,113 +32,71 @@ const invocationTimeout = Duration.seconds(60);
 const pageOf = (query: { readonly limit?: number | undefined }) =>
   query.limit ?? Schemas.defaultPageSize;
 
-// Handlers reach a store through `use`: the router is built before the services are provided, so
-// a group cannot yield them up front.
 const contactsHandlers = HttpApiBuilder.group(EmailerApi, "contacts", (handlers) =>
-  handlers.handleAll({
-    create: (request) => publicly(Contacts.create(request.payload)),
-    get: (request) => publicly(AudienceStore.use((store) => store.getContact(request.params.id))),
-    getByEmail: (request) =>
-      publicly(AudienceStore.use((store) => store.getContactByEmail(request.query.email))),
-    list: (request) =>
-      publicly(
-        AudienceStore.use((store) =>
-          store.listContacts(pageOf(request.query), request.query.cursor),
-        ),
-      ),
-    update: (request) =>
-      publicly(
-        AudienceStore.use((store) => store.updateContact(request.params.id, request.payload)),
-      ),
-    remove: (request) =>
-      publicly(AudienceStore.use((store) => store.deleteContact(request.params.id))),
+  Effect.gen(function* () {
+    const audience = yield* AudienceStore;
+
+    return handlers.handleAll({
+      create: (request) => Contacts.create(request.payload),
+      get: (request) => audience.getContact(request.params.id),
+      getByEmail: (request) => audience.getContactByEmail(request.query.email),
+      list: (request) => audience.listContacts(pageOf(request.query), request.query.cursor),
+      update: (request) => audience.updateContact(request.params.id, request.payload),
+      remove: (request) => audience.deleteContact(request.params.id),
+    });
   }),
 );
 
 const listsHandlers = HttpApiBuilder.group(EmailerApi, "lists", (handlers) =>
-  handlers.handleAll({
-    create: (request) => publicly(Lists.create(request.payload)),
-    get: (request) => publicly(AudienceStore.use((store) => store.getList(request.params.id))),
-    list: (request) =>
-      publicly(
-        AudienceStore.use((store) => store.listLists(pageOf(request.query), request.query.cursor)),
-      ),
-    update: (request) =>
-      publicly(
-        AudienceStore.use((store) => store.renameList(request.params.id, request.payload.name)),
-      ),
-    remove: (request) =>
-      publicly(AudienceStore.use((store) => store.deleteList(request.params.id))),
-    listMembers: (request) =>
-      publicly(
-        AudienceStore.use((store) =>
-          store.listMembers(request.params.listId, pageOf(request.query), request.query.cursor),
-        ),
-      ),
-    addContact: (request) =>
-      publicly(Lists.addContact(request.params.listId, request.params.contactId)),
-    removeContact: (request) =>
-      publicly(
-        AudienceStore.use((store) =>
-          store.removeMember(request.params.listId, request.params.contactId),
-        ),
-      ),
-    import: (request) => publicly(Lists.importContacts(request.params.listId, request.payload)),
+  Effect.gen(function* () {
+    const audience = yield* AudienceStore;
+
+    return handlers.handleAll({
+      create: (request) => Lists.create(request.payload),
+      get: (request) => audience.getList(request.params.id),
+      list: (request) => audience.listLists(pageOf(request.query), request.query.cursor),
+      update: (request) => audience.renameList(request.params.id, request.payload.name),
+      remove: (request) => audience.deleteList(request.params.id),
+      listMembers: (request) =>
+        audience.listMembers(request.params.listId, pageOf(request.query), request.query.cursor),
+      addContact: (request) => Lists.addContact(request.params.listId, request.params.contactId),
+      removeContact: (request) =>
+        audience.removeMember(request.params.listId, request.params.contactId),
+      import: (request) => Lists.importContacts(request.params.listId, request.payload),
+    });
   }),
 );
 
 const campaignsHandlers = HttpApiBuilder.group(EmailerApi, "campaigns", (handlers) =>
-  handlers.handleAll({
-    create: (request) => publicly(Campaigns.create(request.payload)),
-    list: (request) =>
-      publicly(
-        CampaignStore.use((store) =>
-          store.listCampaigns(pageOf(request.query), request.query.cursor),
-        ),
-      ),
-    get: (request) => publicly(CampaignStore.use((store) => store.getCampaign(request.params.id))),
-    update: (request) => publicly(Campaigns.update(request.params.id, request.payload)),
-    remove: (request) => publicly(Campaigns.remove(request.params.id)),
-    test: (request) => publicly(sendTest(request.params.id, request.payload)),
-    preview: (request) =>
-      publicly(
-        CampaignStore.use((store) => store.getCampaign(request.params.id)).pipe(
-          Effect.andThen(previewLink(request.params.id).pipe(Effect.orDie)),
-        ),
-      ),
-    send: (request) => publicly(Campaigns.send(request.params.id)),
-    resume: (request) => publicly(Campaigns.resume(request.params.id)),
-    schedule: (request) => publicly(Campaigns.schedule(request.params.id, request.payload.sendAt)),
-    cancel: (request) => publicly(Campaigns.cancel(request.params.id)),
+  Effect.gen(function* () {
+    const campaigns = yield* CampaignStore;
+
+    return handlers.handleAll({
+      create: (request) => Campaigns.create(request.payload),
+      list: (request) => campaigns.listCampaigns(pageOf(request.query), request.query.cursor),
+      get: (request) => campaigns.getCampaign(request.params.id),
+      update: (request) => Campaigns.update(request.params.id, request.payload),
+      remove: (request) => Campaigns.remove(request.params.id),
+      test: (request) => sendTest(request.params.id, request.payload),
+      // The campaign's control item is enough to know it exists; its body is not read.
+      preview: (request) =>
+        campaigns
+          .getCampaignControl(request.params.id)
+          .pipe(Effect.andThen(previewLink(request.params.id).pipe(Effect.orDie))),
+      send: (request) => Campaigns.send(request.params.id),
+      resume: (request) => Campaigns.resume(request.params.id),
+      schedule: (request) => Campaigns.schedule(request.params.id, request.payload.sendAt),
+      cancel: (request) => Campaigns.cancel(request.params.id),
+    });
   }),
 );
 
 const addressesHandlers = HttpApiBuilder.group(EmailerApi, "addresses", (handlers) =>
   handlers.handleAll({
-    status: (request) => publicly(Addresses.status(request.query.email)),
-    unsuppress: (request) => publicly(Addresses.unsuppress(request.payload.email)),
+    status: (request) => Addresses.status(request.query.email),
+    unsuppress: (request) => Addresses.unsuppress(request.payload.email),
   }),
 );
-
-const tooLarge = HttpServerResponse.text(
-  JSON.stringify(new Schemas.PayloadTooLarge({ limitBytes: Schemas.maxRequestBytes })),
-  { status: 413, contentType: "application/json" },
-);
-
-const oversizedBody = Effect.gen(function* () {
-  const request = yield* HttpServerRequest.HttpServerRequest;
-  const declared = request.headers["content-length"];
-
-  if (declared !== undefined && Number(declared) > Schemas.maxRequestBytes) {
-    return Option.some(tooLarge);
-  }
-
-  const body = yield* request.text;
-
-  return Schemas.utf8ByteLength(body) > Schemas.maxRequestBytes
-    ? Option.some(tooLarge)
-    : Option.none<HttpServerResponse.HttpServerResponse>();
-});
 
 const apiProps = Effect.gen(function* () {
   const { logGroupName, ...basics } = yield* lambdaBasics("Api", "api");
@@ -174,11 +127,11 @@ const apiProps = Effect.gen(function* () {
 });
 
 /**
- * Builds the application once and returns the per-invocation handler. Construction is instance
- * work and the handler is request work; keeping them apart is also what makes the request scope
- * visible, since only the returned effect runs inside it. Nothing request-specific is captured
- * here: the credential check reads the incoming request, and finalizers belong to the invocation's
- * own scope.
+ * Builds the application once, from the services in context, and returns the per-invocation
+ * handler. Construction is instance work and the handler is request work; keeping them apart is
+ * also what makes the request scope visible, since only the returned effect runs inside it.
+ * Nothing request-specific is captured here: the credential check reads the incoming request, and
+ * finalizers belong to the invocation's own scope.
  */
 export const makeApiHandler = (token: Redacted.Redacted<string>) =>
   Effect.map(
@@ -192,19 +145,14 @@ export const makeApiHandler = (token: Redacted.Redacted<string>) =>
       ),
     ),
     (handle) =>
-      Effect.gen(function* () {
-        const refused = yield* oversizedBody;
-
-        if (Option.isSome(refused)) {
-          return refused.value;
-        }
-
-        const response = yield* handle;
-
-        return response.status === 401
-          ? HttpServerResponse.setHeader(response, "www-authenticate", "Bearer")
-          : response;
-      }),
+      handle.pipe(
+        Effect.map((response) =>
+          response.status === 401
+            ? HttpServerResponse.setHeader(response, "www-authenticate", "Bearer")
+            : response,
+        ),
+        respondingToFailures,
+      ),
   );
 
 /** Every service the handlers use, bound once per instance. */
@@ -216,6 +164,7 @@ const ApiLive = Layer.mergeAll(
   CampaignScheduleLive,
   MailerLive,
   SendGuardLive,
+  FunctionServicesLive,
 ).pipe(Layer.provideMerge(NodeCrypto.layer));
 
 export default class ApiFunction extends AWS.Lambda.Function<ApiFunction>()(
@@ -226,7 +175,7 @@ export default class ApiFunction extends AWS.Lambda.Function<ApiFunction>()(
     // Built here rather than per request: the services are instance-lifetime, and the built
     // context carries no request scope into the handler.
     const services = yield* Layer.build(ApiLive);
-    const handle = yield* makeApiHandler(token);
+    const handle = yield* makeApiHandler(token).pipe(Effect.provideContext(services));
 
     return { fetch: Effect.provideContext(handle, services) };
   }),

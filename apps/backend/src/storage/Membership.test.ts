@@ -1,3 +1,4 @@
+import * as Errors from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
 import { Effect } from "effect";
 import { describe, expect, it } from "@effect/vitest";
@@ -8,7 +9,6 @@ import {
   cancelled,
   contactId,
   createdAt,
-  failureOf,
   listId,
   scriptedTable,
   serverError,
@@ -20,6 +20,30 @@ import type { Table } from "./Testing.ts";
 import type { ScriptedReplies } from "./Testing.ts";
 
 const operationsFor = (table: Table) => membershipOperations(primitivesFor(table));
+
+/** A membership row as a query returns it: either direction stores the same record. */
+const memberRow = (list: string, member: string) => ({
+  v: { N: "1" },
+  listId: { S: list },
+  contactId: { S: member },
+  addedAt: { S: createdAt },
+});
+
+/** Joining a list: an upsert that keeps the time the contact first joined. */
+const join = (key: Record<string, { readonly S: string }>) => ({
+  Update: {
+    Table: tableLogicalId,
+    Key: key,
+    UpdateExpression:
+      "SET v = :v, listId = :listId, contactId = :contactId, addedAt = if_not_exists(addedAt, :addedAt)",
+    ExpressionAttributeValues: {
+      ":v": { N: "1" },
+      ":listId": { S: listId },
+      ":contactId": { S: contactId },
+      ":addedAt": { S: createdAt },
+    },
+  },
+});
 
 describe("addMember", () => {
   const addMember = (replies: ScriptedReplies) => {
@@ -35,7 +59,7 @@ describe("addMember", () => {
     Effect.gen(function* () {
       const { table, run } = addMember({});
 
-      expect(yield* run).toBe("added");
+      yield* run;
 
       const request = table.transactionRequests[0];
 
@@ -55,34 +79,8 @@ describe("addMember", () => {
             ConditionExpression: "attribute_exists(pk)",
           },
         },
-        {
-          Put: {
-            Table: tableLogicalId,
-            Item: {
-              pk: { S: `LIST#${listId}` },
-              sk: { S: `MEMBER#${contactId}` },
-              v: { N: "1" },
-              listId: { S: listId },
-              contactId: { S: contactId },
-              addedAt: { S: createdAt },
-            },
-            ConditionExpression: "attribute_not_exists(pk)",
-          },
-        },
-        {
-          Put: {
-            Table: tableLogicalId,
-            Item: {
-              pk: { S: `CONTACT#${contactId}` },
-              sk: { S: `LISTOF#${listId}` },
-              v: { N: "1" },
-              listId: { S: listId },
-              contactId: { S: contactId },
-              addedAt: { S: createdAt },
-            },
-            ConditionExpression: "attribute_not_exists(pk)",
-          },
-        },
+        join({ pk: { S: `LIST#${listId}` }, sk: { S: `MEMBER#${contactId}` } }),
+        join({ pk: { S: `CONTACT#${contactId}` }, sk: { S: `LISTOF#${listId}` } }),
       ]);
     }),
   );
@@ -93,7 +91,7 @@ describe("addMember", () => {
         transactWriteItems: [cancelled("ConditionalCheckFailed", "None", "None", "None")],
       });
 
-      expect(yield* Effect.flip(run)).toStrictEqual(new Schemas.NotFound({ entity: "contact" }));
+      expect(yield* Effect.flip(run)).toStrictEqual(new Errors.ContactNotFound());
     }),
   );
 
@@ -103,19 +101,21 @@ describe("addMember", () => {
         transactWriteItems: [cancelled("None", "ConditionalCheckFailed", "None", "None")],
       });
 
-      expect(yield* Effect.flip(run)).toStrictEqual(new Schemas.NotFound({ entity: "list" }));
+      expect(yield* Effect.flip(run)).toStrictEqual(new Errors.ListNotFound());
     }),
   );
 
-  it.effect("treats a repeated addition as a no-op", () =>
+  it.effect("joins again without failing and without rewriting when the contact joined", () =>
     Effect.gen(function* () {
-      const { run } = addMember({
-        transactWriteItems: [
-          cancelled("None", "None", "ConditionalCheckFailed", "ConditionalCheckFailed"),
-        ],
-      });
+      const { table, run } = addMember({});
 
-      expect(yield* run).toBe("already-member");
+      yield* run;
+      yield* run;
+
+      expect(table.transactionRequests).toHaveLength(2);
+      expect(table.transactionRequests[1]?.TransactItems[2]?.Update?.UpdateExpression).toContain(
+        "addedAt = if_not_exists(addedAt, :addedAt)",
+      );
     }),
   );
 
@@ -125,7 +125,7 @@ describe("addMember", () => {
         transactWriteItems: [cancelled("None", "None", "None", "ValidationError")],
       });
 
-      expect(failureOf(yield* Effect.result(run)).reason).toBe("unavailable");
+      expect(yield* Effect.flip(run)).toBeInstanceOf(Errors.StorageUnavailable);
     }),
   );
 
@@ -133,7 +133,7 @@ describe("addMember", () => {
     Effect.gen(function* () {
       const { run } = addMember({ transactWriteItems: [Effect.fail(serverError)] });
 
-      expect(failureOf(yield* Effect.result(run)).reason).toBe("unavailable");
+      expect(yield* Effect.flip(run)).toBeInstanceOf(Errors.StorageUnavailable);
     }),
   );
 });
@@ -187,7 +187,7 @@ describe("removeMember", () => {
         transactWriteItems: [cancelled("None", "None", "ConditionalCheckFailed")],
       });
 
-      expect(yield* Effect.flip(run)).toStrictEqual(new Schemas.NotFound({ entity: "list" }));
+      expect(yield* Effect.flip(run)).toStrictEqual(new Errors.ListNotFound());
     }),
   );
 
@@ -209,7 +209,7 @@ describe("removeMember", () => {
     Effect.gen(function* () {
       const { run } = removeMember({ transactWriteItems: [Effect.fail(serverError)] });
 
-      expect(failureOf(yield* Effect.result(run)).reason).toBe("unavailable");
+      expect(yield* Effect.flip(run)).toBeInstanceOf(Errors.StorageUnavailable);
     }),
   );
 });
@@ -236,7 +236,7 @@ describe("listMembers", () => {
 
       expect(
         yield* Effect.flip(operationsFor(table).listMembers(listId, 25, undefined)),
-      ).toStrictEqual(new Schemas.NotFound({ entity: "list" }));
+      ).toStrictEqual(new Errors.ListNotFound());
       expect(table.queryRequests).toStrictEqual([]);
     }),
   );
@@ -260,7 +260,7 @@ describe("listMembers", () => {
           getItem: [Effect.succeed({ Item: listItem })],
           query: [
             Effect.succeed({
-              Items: [{ contactId: { S: contactId } }, { contactId: { S: otherContactId } }],
+              Items: [memberRow(listId, contactId), memberRow(listId, otherContactId)],
             }),
           ],
           batchGetItem: [
@@ -319,7 +319,7 @@ describe("listMembers", () => {
         getItem: [Effect.succeed({ Item: listItem })],
         query: [
           Effect.succeed({
-            Items: [{ contactId: { S: contactId } }, { contactId: { S: otherContactId } }],
+            Items: [memberRow(listId, contactId), memberRow(listId, otherContactId)],
           }),
         ],
         batchGetItem: [Effect.succeed({ Responses: { [physicalName]: [contactItem(contactId)] } })],
@@ -347,8 +347,7 @@ describe("deleteContact", () => {
   const reverseItem = (list: string) => ({
     pk: { S: `CONTACT#${contactId}` },
     sk: { S: `LISTOF#${list}` },
-    listId: { S: list },
-    contactId: { S: contactId },
+    ...memberRow(list, contactId),
   });
 
   const found: ScriptedReplies = { getItem: [Effect.succeed({ Item: contactMeta })] };
@@ -358,7 +357,7 @@ describe("deleteContact", () => {
       const table = scriptedTable({});
 
       expect(yield* Effect.flip(operationsFor(table).deleteContact(contactId))).toStrictEqual(
-        new Schemas.NotFound({ entity: "contact" }),
+        new Errors.ContactNotFound(),
       );
       expect(table.transactionRequests).toStrictEqual([]);
     }),
@@ -419,16 +418,33 @@ describe("deleteContact", () => {
       }),
   );
 
-  it.effect("surfaces a failed final condition rather than reporting the delete as done", () =>
+  it.effect("retries a lost final condition from a fresh read, which finds the contact gone", () =>
     Effect.gen(function* () {
       const table = scriptedTable({
         ...found,
         transactWriteItems: [cancelled("ConditionalCheckFailed", "None")],
       });
 
-      const attempt = yield* Effect.result(operationsFor(table).deleteContact(contactId));
+      const failure = yield* Effect.flip(operationsFor(table).deleteContact(contactId));
 
-      expect(failureOf(attempt).reason).toBe("unavailable");
+      expect(failure).toStrictEqual(new Errors.ContactNotFound());
+      expect(table.getItemRequests).toHaveLength(2);
+    }),
+  );
+
+  it.effect("answers ContactChanged when the contact keeps changing under the delete", () =>
+    Effect.gen(function* () {
+      const read = Effect.succeed({ Item: contactMeta });
+      const lost = cancelled("ConditionalCheckFailed", "None");
+
+      const table = scriptedTable({
+        getItem: [read, read, read],
+        transactWriteItems: [lost, lost, lost],
+      });
+
+      const failure = yield* Effect.flip(operationsFor(table).deleteContact(contactId));
+
+      expect(failure).toStrictEqual(new Errors.ContactChanged());
     }),
   );
 
@@ -480,16 +496,16 @@ describe("deleteList", () => {
   const found: ScriptedReplies = { getItem: [Effect.succeed({ Item: listMeta })] };
 
   const memberItems = (count: number) =>
-    Array.from({ length: count }, (_, index) => ({
-      contactId: { S: `0195f0a0-1111-4222-8333-4444444${String(index).padStart(5, "0")}` },
-    }));
+    Array.from({ length: count }, (_, index) =>
+      memberRow(listId, `0195f0a0-1111-4222-8333-4444444${String(index).padStart(5, "0")}`),
+    );
 
   it.effect("answers NotFound for a list that is not there without writing anything", () =>
     Effect.gen(function* () {
       const table = scriptedTable({});
 
       expect(yield* Effect.flip(operationsFor(table).deleteList(listId))).toStrictEqual(
-        new Schemas.NotFound({ entity: "list" }),
+        new Errors.ListNotFound(),
       );
       expect(table.transactionRequests).toStrictEqual([]);
     }),
@@ -560,7 +576,7 @@ describe("deleteList", () => {
 
       const table = scriptedTable({
         ...found,
-        query: [Effect.succeed({ Items: [{ contactId: { S: memberId } }] })],
+        query: [Effect.succeed({ Items: [memberRow(listId, memberId)] })],
       });
 
       yield* operationsFor(table).deleteList(listId);
@@ -737,25 +753,32 @@ describe("importContacts", () => {
         [candidate(contactId, "sam@example.com")],
       );
 
-      expect(yield* Effect.flip(run)).toStrictEqual(new Schemas.NotFound({ entity: "list" }));
+      expect(yield* Effect.flip(run)).toStrictEqual(new Errors.ListNotFound());
     }),
   );
 
-  it.effect("keeps an import racing a contact delete on the failure channel", () =>
+  it.effect("retries an import that raced a contact delete, from a fresh pre-read", () =>
     Effect.gen(function* () {
-      const { run } = importInto(
+      const { table, run } = importInto(
         {
+          // The first pre-read finds the holder; by the retry, the contact and its address are gone.
           batchGetItem: [
             Effect.succeed({
               Responses: { [physicalName]: [reservationFor("sam@example.com", contactId)] },
             }),
           ],
-          transactWriteItems: [cancelled("None", "ConditionalCheckFailed", "None", "None")],
+          transactWriteItems: [cancelled("None", "ConditionalCheckFailed", "None", "None", "None")],
         },
-        [candidate(contactId, "sam@example.com")],
+        [candidate(otherContactId, "sam@example.com")],
       );
 
-      expect(failureOf(yield* Effect.result(run)).reason).toBe("unavailable");
+      expect(yield* run).toStrictEqual({
+        contacts: [{ email: "sam@example.com", contactId: otherContactId, member: true }],
+      });
+      expect(table.transactionRequests).toHaveLength(2);
+      expect(table.transactionRequests[1]?.TransactItems[1]?.Put?.Item?.["id"]).toStrictEqual({
+        S: otherContactId,
+      });
     }),
   );
 });

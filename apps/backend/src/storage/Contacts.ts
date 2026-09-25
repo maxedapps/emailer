@@ -1,27 +1,22 @@
 import type * as dynamodb from "@distilled.cloud/aws/dynamodb";
-import * as Schemas from "@emailer/api/Schemas";
-import { Effect, Schema, SchemaTransformation, Struct } from "effect";
-
-import { corrupt, unavailable } from "./Errors.ts";
-import { unsubscribeKey } from "./Addresses.ts";
 import {
-  attributeOf,
-  listingAttributes,
-  num,
-  recordVersion,
-  str,
-  StoredVersionAttribute,
-  StringMapAttribute,
-  strMap,
-  tableLogicalId,
-} from "./Items.ts";
+  AddressOptedOut,
+  ContactChanged,
+  ContactNotFound,
+  EmailAlreadyUsed,
+} from "@emailer/api/Errors";
+import * as Schemas from "@emailer/api/Schemas";
+import { Effect, Predicate, Schema } from "effect";
+
+import { addressKey } from "./Addresses.ts";
+import { itemReader, itemWriter, listingAttributes, str, tableLogicalId } from "./Items.ts";
 
 import type {
+  Action,
   PagePrimitives,
   ReadPrimitives,
   StoredPage,
   TransactionPrimitives,
-  TransactionRequest,
 } from "./Primitives.ts";
 
 const contactKind = "contact";
@@ -41,31 +36,16 @@ export const reservationKey = (email: string) => ({
   sk: str("META"),
 });
 
-/**
- * The stored item, wire kinds and domain rules together. `optionalKey` rather than `optional`: an
- * attribute DynamoDB never wrote is absent from the map, and an attribute present but of the wrong
- * kind is a decoding failure rather than an absence. Key and index attributes travel on the same
- * item and are ignored here.
- */
-const StoredContact = Schema.Struct({
-  v: StoredVersionAttribute,
-  id: attributeOf(Schemas.EntityId),
-  email: attributeOf(Schemas.NormalizedEmailAddress),
-  name: Schema.optionalKey(attributeOf(Schemas.EntityName)),
-  attributes: Schema.optionalKey(
-    StringMapAttribute.pipe(
-      Schema.decodeTo(Schemas.ContactAttributes, SchemaTransformation.passthrough()),
-    ),
-  ),
-  createdAt: attributeOf(Schemas.Timestamp),
-});
+const writeContact = itemWriter(Schemas.Contact);
 
-/** Decodes a stored contact item. Membership hydrates contacts too, so this is shared. */
-export const decodeContactItem = Schema.decodeUnknownEffect(StoredContact);
+/** Reads a stored contact. Membership hydrates contacts too, so this is shared. */
+export const readContact = itemReader(Schemas.Contact);
 
-const StoredReservation = Schema.Struct({ contactId: attributeOf(Schemas.EntityId) });
+const Reservation = Schema.Struct({ contactId: Schemas.EntityId });
 
-const decodeReservation = Schema.decodeUnknownEffect(StoredReservation);
+const writeReservation = itemWriter(Reservation);
+
+const readReservation = itemReader(Reservation);
 
 /** Builds a contact with its absent fields omitted rather than set to `undefined`. */
 export const contactOf = (
@@ -81,81 +61,62 @@ export const contactOf = (
   return attributes === undefined ? named : { ...named, attributes };
 };
 
-export const contactItem = (contact: Schemas.Contact): dynamodb.AttributeMap => {
-  const item: dynamodb.AttributeMap = {
+/** A contact's whole item: its record, its key and its entry in the listing index. */
+export const contactItem = (contact: Schemas.Contact): Effect.Effect<dynamodb.AttributeMap> =>
+  Effect.map(writeContact(contact), (attributes) => ({
     ...contactKey(contact.id),
     ...listingAttributes(contactKind, contact.createdAt, contact.id),
-    v: num(recordVersion),
-    id: str(contact.id),
-    email: str(contact.email),
-    createdAt: str(contact.createdAt),
-  };
+    ...attributes,
+  }));
 
-  const named = contact.name === undefined ? item : { ...item, name: str(contact.name) };
+/**
+ * A write that lost a race with another request on the same contact, retried from a fresh read:
+ * the race is over by then, and the retry answers what now holds. A contact that keeps changing
+ * answers `ContactChanged`.
+ */
+export const retryLostRace = <A, E, R>(write: Effect.Effect<A, E, R>) =>
+  Effect.retry(write, { times: 2, while: Predicate.isTagged("ContactChanged") });
 
-  return contact.attributes === undefined
-    ? named
-    : { ...named, attributes: strMap(contact.attributes) };
-};
-
-export const reservationItem = (email: string, contactId: string): dynamodb.AttributeMap => ({
-  ...reservationKey(email),
-  v: num(recordVersion),
-  contactId: str(contactId),
-});
+export const reservationItem = (email: string, contactId: string) =>
+  Effect.map(writeReservation({ contactId }), (attributes) => ({
+    ...reservationKey(email),
+    ...attributes,
+  }));
 
 export const contactOperations = (
   primitives: ReadPrimitives & PagePrimitives & TransactionPrimitives,
 ) => {
-  const { readEntityPage, readItem, runTransaction } = primitives;
+  const { readEntityPage, readItem, transact } = primitives;
 
   /**
-   * Slot 0 is the contact, slot 1 its address reservation. A slot-1 condition failure is the
-   * ordinary answer `EmailAlreadyUsed`; a slot-0 failure means the generated identifier already
-   * exists, which is an anomaly rather than an answer and stays a storage failure.
+   * The contact and its address reservation. The contact's condition could only fail if a freshly
+   * generated identifier already existed, so it declares no refusal: that would be a defect.
    */
   const createContact = Effect.fn("Storage.createContact")(function* (contact: Schemas.Contact) {
-    const outcome = yield* runTransaction("createContact", {
-      TransactItems: [
-        {
-          Put: {
-            Table: tableLogicalId,
-            Item: contactItem(contact),
-            ConditionExpression: "attribute_not_exists(pk)",
-          },
+    yield* transact("createContact", [
+      {
+        Put: {
+          Table: tableLogicalId,
+          Item: yield* contactItem(contact),
+          ConditionExpression: "attribute_not_exists(pk)",
         },
-        {
-          Put: {
-            Table: tableLogicalId,
-            Item: reservationItem(contact.email, contact.id),
-            ConditionExpression: "attribute_not_exists(pk)",
-          },
+      },
+      {
+        Put: {
+          Table: tableLogicalId,
+          Item: yield* reservationItem(contact.email, contact.id),
+          ConditionExpression: "attribute_not_exists(pk)",
         },
-      ],
-    });
-
-    if (outcome.committed) {
-      return;
-    }
-
-    if (outcome.conditionFailures.has(1)) {
-      return yield* new Schemas.EmailAlreadyUsed({ email: contact.email });
-    }
-
-    return yield* unavailable("createContact")(outcome.conditionFailures);
+        refused: () => new EmailAlreadyUsed({ email: contact.email }),
+      },
+    ]);
   });
-
-  const readContact = (operationId: string, item: dynamodb.AttributeMap) =>
-    decodeContactItem(item).pipe(
-      Effect.mapError(corrupt(operationId)),
-      Effect.map((stored): Schemas.Contact => Struct.omit(stored, ["v"])),
-    );
 
   const getContact = Effect.fn("Storage.getContact")(function* (contactId: string) {
     const response = yield* readItem("getContact", contactKey(contactId));
 
     if (response.Item === undefined) {
-      return yield* new Schemas.NotFound({ entity: "contact" });
+      return yield* new ContactNotFound();
     }
 
     return yield* readContact("getContact", response.Item);
@@ -175,12 +136,10 @@ export const contactOperations = (
     const reservation = yield* readItem("getContactByEmail", reservationKey(email));
 
     if (reservation.Item === undefined) {
-      return yield* new Schemas.NotFound({ entity: "contact" });
+      return yield* new ContactNotFound();
     }
 
-    const reserved = yield* decodeReservation(reservation.Item).pipe(
-      Effect.mapError(corrupt("getContactByEmail")),
-    );
+    const reserved = yield* readReservation("getContactByEmail", reservation.Item);
 
     const found = yield* getContact(reserved.contactId);
 
@@ -188,7 +147,7 @@ export const contactOperations = (
     // cannot disagree. If they ever did, answering "no contact has this address" is honest, where
     // returning a contact under an address it does not hold would not be.
     if (Schemas.mailboxKey(found.email) !== Schemas.mailboxKey(email)) {
-      return yield* new Schemas.NotFound({ entity: "contact" });
+      return yield* new ContactNotFound();
     }
 
     return found;
@@ -216,7 +175,7 @@ export const contactOperations = (
     // Old and new addresses sharing a mailbox key means one reservation item, which a transaction
     // may not both delete and put. Only the stored spelling changes, so there is no reservation to
     // move — and the contact stays on the same mailbox, so there is no opt-out to check.
-    const move: TransactionRequest["TransactItems"] =
+    const move: Array<Action<AddressOptedOut | EmailAlreadyUsed>> =
       Schemas.mailboxKey(email) === Schemas.mailboxKey(current.email)
         ? []
         : [
@@ -228,9 +187,10 @@ export const contactOperations = (
               // opt-out landing mid-update cannot slip past.
               ConditionCheck: {
                 Table: tableLogicalId,
-                Key: unsubscribeKey(current.email),
-                ConditionExpression: "attribute_not_exists(pk)",
+                Key: addressKey(current.email),
+                ConditionExpression: "attribute_not_exists(unsubscribedAt)",
               },
+              refused: () => new AddressOptedOut({ email: current.email }),
             },
             {
               // Unconditional: the contact's write in slot 0 establishes that this request owns the
@@ -241,52 +201,41 @@ export const contactOperations = (
             {
               Put: {
                 Table: tableLogicalId,
-                Item: reservationItem(email, contactId),
+                Item: yield* reservationItem(email, contactId),
                 ConditionExpression: "attribute_not_exists(pk)",
               },
+              refused: () => new EmailAlreadyUsed({ email }),
             },
           ];
 
-    const outcome = yield* runTransaction("updateContact", {
-      TransactItems: [
-        {
-          // Commits only against the contact as it was just read. A concurrent address change is
-          // then a lost race on the failure channel, never silently reverted — which would leave the
-          // other request's reservation pointing at a contact that no longer holds that address,
-          // unreachable through any endpoint. The condition also accepts the new spelling, which
-          // holds once this write has applied, so the same request landing twice is not a lost race.
-          Put: {
-            Table: tableLogicalId,
-            Item: contactItem(next),
-            ConditionExpression:
-              "attribute_exists(pk) AND (#email = :currentEmail OR #email = :email)",
-            ExpressionAttributeNames: { "#email": "email" },
-            ExpressionAttributeValues: {
-              ":currentEmail": str(current.email),
-              ":email": str(email),
-            },
+    // The contact comes first, so a lost race decides over the address checks computed from it.
+    yield* transact("updateContact", [
+      {
+        // Commits only against the contact as it was just read. A concurrent address change is
+        // then a lost race on the failure channel, never silently reverted — which would leave the
+        // other request's reservation pointing at a contact that no longer holds that address,
+        // unreachable through any endpoint. The condition also accepts the new spelling, which
+        // holds once this write has applied, so the same request landing twice is not a lost race.
+        Put: {
+          Table: tableLogicalId,
+          Item: yield* contactItem(next),
+          ConditionExpression:
+            "attribute_exists(pk) AND (#email = :currentEmail OR #email = :email)",
+          ExpressionAttributeNames: { "#email": "email" },
+          ExpressionAttributeValues: {
+            ":currentEmail": str(current.email),
+            ":email": str(email),
           },
         },
-        ...move,
-      ],
-    });
+        refused: () => new ContactChanged(),
+      },
+      // An opt-out is answered before `EmailAlreadyUsed` when both fail: another address can be
+      // chosen, an opt-out cannot be worked around.
+      ...move,
+    ]);
 
-    if (outcome.committed) {
-      return next;
-    }
-
-    // Answered before `EmailAlreadyUsed` when both fail: another address can be chosen, an opt-out
-    // cannot be worked around.
-    if (outcome.conditionFailures.has(1)) {
-      return yield* new Schemas.AddressOptedOut({ email: current.email });
-    }
-
-    if (outcome.conditionFailures.has(3)) {
-      return yield* new Schemas.EmailAlreadyUsed({ email });
-    }
-
-    return yield* unavailable("updateContact")(outcome.conditionFailures);
-  });
+    return next;
+  }, retryLostRace);
 
   return {
     createContact,
