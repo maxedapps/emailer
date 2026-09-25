@@ -2,19 +2,19 @@ import { DateTime, Option, Schema, SchemaTransformation } from "effect";
 
 export const maxNameLength = 200;
 
-export const maxSubjectLength = 200;
+const maxSubjectLength = 200;
 
 export const maxTextBytes = 64 * 1024;
 
-export const maxHtmlBytes = 256 * 1024;
+const maxHtmlBytes = 256 * 1024;
 
 export const maxEmailLength = 254;
 
-export const maxAttributeEntries = 20;
+const maxAttributeEntries = 20;
 
 export const maxAttributeKeyLength = 64;
 
-export const maxAttributeValueLength = 512;
+const maxAttributeValueLength = 512;
 
 export const maxImportEntries = 20;
 
@@ -24,7 +24,7 @@ export const maxImportEntries = 20;
  */
 export const maxTestRecipients = 20;
 
-export const minPageSize = 1;
+const minPageSize = 1;
 
 export const maxPageSize = 100;
 
@@ -32,7 +32,7 @@ export const defaultPageSize = 25;
 
 const utf8 = new TextEncoder();
 
-export const utf8ByteLength = (value: string): number => utf8.encode(value).length;
+const utf8ByteLength = (value: string): number => utf8.encode(value).length;
 
 export const utf8ByteCeiling = (maxBytes: number) =>
   Schema.makeFilter((value: string) =>

@@ -340,7 +340,7 @@ Status: Done. As built:
 
 ### T11 — Contract tests
 
-Status: Not started
+Status: Done. As built: `Schemas.test.ts` went from 141 tests to 64 and `Client.test.ts` from 7 to 3. Where a test passes an input that already has the contract's encoded type, it now uses `Schema.decodeResult`.
 
 **Where:** `packages/api/src/{Schemas,Client}.test.ts`.
 
