@@ -1,6 +1,6 @@
 # Plan: Keep prod's data on destroy, and test through the libraries' harnesses
 
-- Status: In progress
+- Status: Done
 - Decision: [ADR-0026](0026-prod-data-retention-and-harness-driven-tests.md)
 
 ## Goal
@@ -525,7 +525,13 @@ Cause, confirmed with a minimal reproduction on unmodified Alchemy beta.79:
 
 ### T16 — Prod rollout
 
-Status: Not started. Runs when the user asks.
+Status: Done on 2026-09-25, at the user's go, from `main` at adc9da8. As built:
+
+- The deploy updated 64 resources and created, replaced or deleted none.
+- All five functions' `CodeSha256` changed.
+- `Api`'s env holds no `AWS_*` or log-group key.
+- Alchemy's state records `EmailerData` with `removalPolicy: "retain"`; it was `"destroy"` before. The table name is unchanged.
+- `pnpm emailer campaigns list --limit 1` answers with a page.
 
 Until this deploy runs, prod is not protected: `alchemy destroy` takes retain-or-delete from the policy stored in state (`Plan.ts:2040`), not from code, and prod's state gets `retain` only when this deploy writes it.
 
