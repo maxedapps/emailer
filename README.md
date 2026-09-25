@@ -189,23 +189,6 @@ pnpm exec alchemy destroy --config alchemy.run.ts --stage prod --env-file .env -
 
 Destroying a stage deletes its resources and rotates the unsubscribe and preview keys. The sending identity and Alchemy bootstrap/state buckets stay.
 
-### Upgrading a stage deployed before ADR-0024
-
-Each mailbox's opt-out, suppression and transient bounces moved from three items to one ([ADR-0024](.adr/0024-typed-errors-and-cost-neutral-storage.md)). A stage deployed before that change needs its old items merged once. The script reads AWS credentials and the Region from the environment, so export them, then the table's physical name:
-
-```sh
-eval "$(aws configure export-credentials --profile <profile> --format env)"
-export AWS_REGION=<region>
-aws dynamodb list-tables --query "TableNames[?contains(@, 'EmailerData-<stage>-')]"
-export EMAILER_TABLE_NAME=<that name>
-```
-
-1. Before the deploy, merge: `node apps/backend/scripts/MigrateAddressItems.ts`. It prints how many old items it found and merged, never addresses.
-2. Deploy with `--force`, as above.
-3. Wait at least five minutes, the dispatcher's longest invocation, so no old code is still writing.
-4. Merge again: the same command picks up whatever the old code wrote in between. Each merge keeps what an address item already holds, so running it again is safe.
-5. Check, then delete the old items: `node apps/backend/scripts/MigrateAddressItems.ts --verify`, then `--delete-old`, which verifies again before it deletes anything.
-
 ## Use
 
 `pnpm emailer` runs the CLI with the `.env` in the repository root; variables already set in your shell take precedence. To use another file, run Node directly, e.g. `node --env-file=.env.test apps/cli/src/main.ts …`.
