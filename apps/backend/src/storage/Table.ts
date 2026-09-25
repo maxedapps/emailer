@@ -1,3 +1,4 @@
+import { RemovalPolicy, Stack } from "alchemy";
 import * as AWS from "alchemy/AWS";
 import { Effect, Layer } from "effect";
 
@@ -10,6 +11,9 @@ import type { TableOperations } from "./Items.ts";
  * `Campaigns.ts`, `Feedback.ts`, `RateLimit.ts` and `Unsubscribe.ts` — so that each binds only the
  * DynamoDB operations it actually performs. Alchemy registers IAM while a binding is constructed,
  * so a single shared service would hand every consumer every permission.
+ *
+ * Stage `prod` retains it on destroy: it holds every opt-out and suppression, and losing them would
+ * make re-imported contacts mailable again. Every other stage deletes it with the stage.
  */
 export const dataTable = AWS.DynamoDB.Table(tableLogicalId, {
   partitionKey: "pk",
@@ -27,7 +31,7 @@ export const dataTable = AWS.DynamoDB.Table(tableLogicalId, {
       projection: { ProjectionType: "KEYS_ONLY" },
     },
   ],
-});
+}).pipe(RemovalPolicy.retain(Effect.map(Stack, ({ stage }) => stage === "prod")));
 
 /**
  * All six operations, bound, for the two capabilities that genuinely perform every one of them: the

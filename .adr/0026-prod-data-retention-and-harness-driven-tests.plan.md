@@ -45,7 +45,7 @@
 
 ### T1 — Retain the prod table
 
-Status: Not started
+Status: Done. As built: a removal-policy change is not a plan diff in beta.79. `alchemy plan --stage prod` lists `EmailerData` as `noop`, and the apply of a `noop` row writes the new policy to state (`Apply.ts:702–745`), so T16 checks state rather than the plan.
 
 - **Where:** `dataTable` in `apps/backend/src/storage/Table.ts`.
 - **Change:** `.pipe(RemovalPolicy.retain(Effect.map(Stack, ({ stage }) => stage === "prod")))`.
@@ -88,7 +88,7 @@ Status: Not started
 **Verify:**
 
 - `pnpm check`;
-- `pnpm exec alchemy plan --config alchemy.run.ts --stage prod --env-file .env.prod` plans no change besides T1's removal policy.
+- `pnpm exec alchemy plan --config alchemy.run.ts --stage prod --env-file .env.prod` plans every resource `noop`.
 
 **Cost:** none.
 
@@ -130,7 +130,7 @@ Status: Not started
 **Verify:**
 
 - `pnpm check`;
-- `alchemy plan --stage prod` plans no alarm change; the only changes are T1's removal policy and T4's function env.
+- `alchemy plan --stage prod` plans no alarm change; the only changes are T4's function env.
 
 **Cost:** none.
 
@@ -495,7 +495,6 @@ Status: Not started. Runs when the user asks.
 - **Deploy:** redeploy `prod` with `--env-file .env.prod --force`.
 - **Check:**
   - each function's `CodeSha256` changed;
-  - the deploy log shows the table's removal policy moving to `retain`;
   - Alchemy's state records `removalPolicy: retain`;
   - `pnpm emailer campaigns list --limit 1` answers.
 

@@ -186,7 +186,9 @@ Outputs: `apiUrl`, `unsubscribeUrl`, `previewUrl`, `alertsTopicArn`. Put `apiUrl
 pnpm exec alchemy destroy --config alchemy.run.ts --stage prod --env-file .env --profile emailer --yes --no-input
 ```
 
-Destroying a stage deletes its resources and rotates the unsubscribe and preview keys. The sending identity and Alchemy bootstrap/state buckets stay.
+Destroying a stage deletes its resources and rotates the unsubscribe and preview keys, so every unsubscribe link already sent stops working. The sending identity and Alchemy bootstrap/state buckets stay.
+
+Stage `prod` keeps its DynamoDB table when destroyed, because it holds every opt-out and suppression. The table stays in AWS but Alchemy stops tracking it: a new deploy of `prod` creates a fresh, empty table, and recovering the old data is manual. Every other stage deletes its table.
 
 ## Use
 
