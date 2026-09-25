@@ -187,7 +187,12 @@ Status: Done. As built: create and update share one `attributesFlag`, and `conta
 
 ### T9 — Storage tests
 
-Status: Not started
+Status: Done. As built: 213 tests became 183. Candidates kept after checking them against the deletion reasons:
+
+- "projects a stored filter into the campaign", the only test of `getCampaign`'s filter projection;
+- the three-row `newRun` server-error table, whose rows cover the three operation names;
+- the reserved-name sweep, which fails on an unaliased reserved word in any new expression;
+- "refuses to write an empty set", which fails if the write succeeds.
 
 **Where:** `apps/backend/src/storage/*.test.ts`.
 

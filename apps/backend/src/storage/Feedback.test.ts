@@ -105,6 +105,7 @@ describe("recordFeedback", () => {
 
       yield* operationsFor(table).recordFeedback(bounceRow, count("bounced"));
 
+      expect(table.transactionRequests).toHaveLength(1);
       expect(table.transactionRequests[0]?.TransactItems).toStrictEqual([
         historyPut("bounce", "suppressed", {
           bounceType: { S: "Permanent" },

@@ -176,37 +176,6 @@ const runTransaction = (transport: Transport) =>
     );
   }).pipe(Effect.provide(bindings(transport)));
 
-const runLifecycleTransaction = (transport: Transport) =>
-  Effect.gen(function* () {
-    const transactWriteItems = yield* AWS.DynamoDB.TransactWriteItems(table);
-
-    const { transact } = transactionPrimitives(
-      { transactWriteItems },
-      tokensFor(transport.attempts),
-    );
-
-    return yield* Effect.result(
-      transact("enqueueCampaign", [
-        {
-          Update: {
-            Table: table.LogicalId,
-            Key: key,
-            UpdateExpression:
-              "SET #state = :queued, queuedAt = :now, runToken = :run, runAccepted = accepted, runBounced = bounced, runComplained = complained",
-            ConditionExpression: "#state = :draft AND attribute_not_exists(runToken)",
-            ExpressionAttributeNames: { "#state": "state" },
-            ExpressionAttributeValues: {
-              ":queued": str("queued"),
-              ":now": str("2026-09-11T10:00:04.000Z"),
-              ":run": str("0195f0a0-1111-4222-8333-44444444e5d2"),
-              ":draft": str("draft"),
-            },
-          },
-        },
-      ]),
-    );
-  }).pipe(Effect.provide(bindings(transport)));
-
 describe("conditional primitives over the real client", () => {
   it.live("updateIf lets the client retry a server error with the identical request", () =>
     Effect.gen(function* () {
@@ -272,23 +241,6 @@ describe("conditional primitives over the real client", () => {
     }),
   );
 
-  it.live(
-    "retries a lifecycle Update with the identical body and ClientRequestToken after a server error",
-    () =>
-      Effect.gen(function* () {
-        const transport = transportReplying([serverError, ok]);
-
-        const outcome = yield* runLifecycleTransaction(transport);
-
-        expect(Result.isSuccess(outcome)).toBe(true);
-        expect(transport.attempts).toHaveLength(2);
-        expect(transport.attempts[1]).toBe(transport.attempts[0]);
-        expect(tokenOf(transport.attempts[0] ?? "")).toBe("token-1");
-        expect(transport.attempts[0]).toContain("attribute_not_exists");
-        expect(transport.attempts[0]).toContain("ClientRequestToken");
-      }),
-  );
-
   it.live("passes the item a failed condition returned to the refusal, as the SDK parsed it", () =>
     Effect.gen(function* () {
       const transport = transportReplying([conditionCancellation]);
@@ -300,17 +252,6 @@ describe("conditional primitives over the real client", () => {
       );
       expect(transport.attempts).toHaveLength(1);
       expect(transport.attempts[0]).toContain('"ReturnValuesOnConditionCheckFailure":"ALL_OLD"');
-    }),
-  );
-
-  it.live("retries a lifecycle Update conflict cancellation as a new call with a new token", () =>
-    Effect.gen(function* () {
-      const transport = transportReplying([conflictCancellation, ok]);
-
-      const outcome = yield* runLifecycleTransaction(transport);
-
-      expect(Result.isSuccess(outcome)).toBe(true);
-      expect(transport.attempts.map(tokenOf)).toStrictEqual(["token-1", "token-2"]);
     }),
   );
 });

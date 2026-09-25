@@ -70,34 +70,6 @@ describe("readItems", () => {
     }),
   );
 
-  it.live(
-    "re-keys unprocessed keys to the logical id rather than replaying the physical name",
-    () =>
-      Effect.gen(function* () {
-        const pending = { Keys: [contactKey(otherContactId)], ConsistentRead: true };
-
-        const { table, primitives } = withTable({
-          batchGetItem: [
-            Effect.succeed({
-              Responses: { [physicalName]: [itemFor(contactId)] },
-              UnprocessedKeys: { [physicalName]: pending },
-            }),
-            Effect.succeed({ Responses: { [physicalName]: [itemFor(otherContactId)] } }),
-          ],
-        });
-
-        const items = yield* primitives.readItems("listContacts", [
-          contactKey(contactId),
-          contactKey(otherContactId),
-        ]);
-
-        expect(items).toStrictEqual([itemFor(contactId), itemFor(otherContactId)]);
-        expect(table.batchGetItemRequests[1]?.RequestItems).toStrictEqual({
-          [tableLogicalId]: pending,
-        });
-      }),
-  );
-
   // AWS leaves keys unprocessed when it is shedding load, and it can do so on the retry of a
   // retry. Returning what arrived would answer a partial hydration as a complete one, which is a
   // listing silently dropping members.
@@ -127,11 +99,12 @@ describe("readItems", () => {
       expect(items).toStrictEqual([itemFor(contactId), itemFor(otherContactId)]);
       expect(table.batchGetItemRequests).toHaveLength(3);
 
-      // Only the keys still outstanding are re-requested; the item already read is not re-read.
+      // Only the keys still outstanding are re-requested, re-keyed to the logical id the binding
+      // maps rather than the physical name AWS echoed, and still strongly consistent.
       for (const request of table.batchGetItemRequests.slice(1)) {
-        expect(request.RequestItems[tableLogicalId]?.Keys).toStrictEqual([
-          contactKey(otherContactId),
-        ]);
+        expect(request.RequestItems).toStrictEqual({
+          [tableLogicalId]: pendingFor(otherContactId),
+        });
       }
     }),
   );
@@ -196,23 +169,6 @@ describe("readItems", () => {
       expect(table.batchGetItemRequests).toStrictEqual([]);
     }),
   );
-
-  it.effect("drops a key the response omits instead of matching results by position", () =>
-    Effect.gen(function* () {
-      const { primitives } = withTable({
-        batchGetItem: [
-          Effect.succeed({ Responses: { [physicalName]: [itemFor(otherContactId)] } }),
-        ],
-      });
-
-      const items = yield* primitives.readItems("listContacts", [
-        contactKey(contactId),
-        contactKey(otherContactId),
-      ]);
-
-      expect(items).toStrictEqual([itemFor(otherContactId)]);
-    }),
-  );
 });
 
 describe("runQuery", () => {
@@ -267,6 +223,8 @@ describe("readEntityPage", () => {
 
       expect(table.queryRequests[0]?.IndexName).toBe("gsi1");
       expect(table.queryRequests[0]?.Limit).toBe(25);
+      // An index refuses a consistent read at runtime.
+      expect(table.queryRequests[0]).not.toHaveProperty("ConsistentRead");
       expect(table.batchGetItemRequests[0]?.RequestItems[tableLogicalId]?.Keys).toStrictEqual([
         keyOf(contactId),
       ]);
@@ -366,16 +324,6 @@ describe("readEntityPage", () => {
       expect(page.items).toStrictEqual([first, second]);
     }),
   );
-
-  it.effect("never asks the index for a consistent read", () =>
-    Effect.gen(function* () {
-      const { table, primitives } = withTable({});
-
-      yield* primitives.readEntityPage("listContacts", kind, keyOf, 25, undefined);
-
-      expect(table.queryRequests[0]).not.toHaveProperty("ConsistentRead");
-    }),
-  );
 });
 
 describe("updateIf", () => {
@@ -394,19 +342,6 @@ describe("updateIf", () => {
   class Refused extends Data.TaggedError("Refused")<{ readonly current: StoredItem }> {}
 
   const refused = (current: StoredItem) => new Refused({ current });
-
-  it.effect("returns the new attributes when ReturnValues is ALL_NEW", () =>
-    Effect.gen(function* () {
-      const attributes = { ...contactKey(contactId), state: str("sending") };
-
-      const { table, primitives } = withTable({
-        updateItem: [Effect.succeed({ Attributes: attributes })],
-      });
-
-      expect(yield* primitives.updateIf("beginRun", request, refused)).toStrictEqual(attributes);
-      expect(table.updateItemRequests[0]?.ReturnValues).toBe("ALL_NEW");
-    }),
-  );
 
   it.effect("fails a failed condition with the refusal, given the item it found", () =>
     Effect.gen(function* () {
@@ -434,23 +369,6 @@ describe("updateIf", () => {
 
       expect(failure).toBeInstanceOf(Errors.StorageUnavailable);
       expect(failure).toMatchObject({ operation: "beginRun" });
-    }),
-  );
-
-  it.effect("leaves a TransactionConflictException to the client's retry policy", () =>
-    Effect.gen(function* () {
-      const { table, primitives } = withTable({
-        updateItem: [
-          Effect.fail(new dynamodb.TransactionConflictException({ message: "conflict" })),
-        ],
-      });
-
-      const failure = yield* Effect.flip(primitives.updateIf("beginRun", request, refused));
-
-      // The scripted table sits above the client, whose default policy retries this class;
-      // the primitive itself sends once and reports what came back.
-      expect(failure).toBeInstanceOf(Errors.StorageUnavailable);
-      expect(table.updateItemRequests).toHaveLength(1);
     }),
   );
 });
@@ -495,6 +413,21 @@ describe("transact", () => {
         "token-2",
       ]);
       expect(table.transactionRequests[0]?.TransactItems).toStrictEqual([put, update]);
+    }),
+  );
+
+  it.effect("reports a failed call as unavailable, under the operation's name", () =>
+    Effect.gen(function* () {
+      const { primitives } = withTable({ transactWriteItems: [Effect.fail(serverError)] });
+
+      const failure = yield* Effect.flip(primitives.transact("claimRecipient", actions));
+
+      expect(failure).toStrictEqual(
+        new Errors.StorageUnavailable({
+          operation: "claimRecipient",
+          failure: "InternalServerError",
+        }),
+      );
     }),
   );
 

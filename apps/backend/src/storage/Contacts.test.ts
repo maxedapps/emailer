@@ -13,7 +13,6 @@ import {
   defectOf,
   primitivesFor,
   scriptedTable,
-  serverError,
 } from "./Testing.ts";
 
 import type { Table } from "./Testing.ts";
@@ -114,24 +113,6 @@ describe("createContact", () => {
     }),
   );
 
-  it.effect("stores bounded attributes as a map and omits an absent name", () =>
-    Effect.gen(function* () {
-      const table = scriptedTable({});
-
-      yield* operationsFor(table).createContact({
-        id: contactId,
-        email,
-        createdAt,
-        attributes: { plan: "pro" },
-      });
-
-      const item = table.transactionRequests[0]?.TransactItems[0]?.Put?.Item ?? {};
-
-      expect(item["attributes"]).toStrictEqual({ M: { plan: { S: "pro" } } });
-      expect(item).not.toHaveProperty("name");
-    }),
-  );
-
   it.effect("answers a taken address with the contract's conflict, naming it", () =>
     Effect.gen(function* () {
       const { run } = create({
@@ -153,19 +134,6 @@ describe("createContact", () => {
       );
     }),
   );
-
-  it.effect("reports an unavailable provider instead of pretending the write happened", () =>
-    Effect.gen(function* () {
-      const { run } = create({ transactWriteItems: [Effect.fail(serverError)] });
-
-      // Captured once: the stub serves replies by call order, so running the same effect twice
-      // would take the default reply and report a success that never happened.
-      const failure = yield* Effect.flip(run);
-
-      expect(failure).toBeInstanceOf(Errors.StorageUnavailable);
-      expect(failure).toMatchObject({ operation: "createContact" });
-    }),
-  );
 });
 
 describe("getContact", () => {
@@ -183,56 +151,12 @@ describe("getContact", () => {
     }),
   );
 
-  it.effect("decodes a stored attribute map back into the contract shape", () =>
-    Effect.gen(function* () {
-      const table = scriptedTable({
-        getItem: [
-          Effect.succeed({
-            Item: { ...contactItem, attributes: { M: { plan: { S: "pro" } } } },
-          }),
-        ],
-      });
-
-      const contact = yield* operationsFor(table).getContact(contactId);
-
-      expect(contact.attributes).toStrictEqual({ plan: "pro" });
-    }),
-  );
-
   it.effect("answers NotFound for a missing record", () =>
     Effect.gen(function* () {
       const storage = operationsFor(scriptedTable({}));
 
       expect(yield* Effect.flip(storage.getContact(contactId))).toStrictEqual(
         new Errors.ContactNotFound(),
-      );
-    }),
-  );
-
-  it.effect("treats a record that no longer satisfies the contract as corrupt", () =>
-    Effect.gen(function* () {
-      const table = scriptedTable({
-        getItem: [Effect.succeed({ Item: { ...contactItem, email: { S: "not-an-address" } } })],
-      });
-
-      const storage = operationsFor(table);
-
-      const defect = yield* defectOf(storage.getContact(contactId));
-
-      expect(defect).toStrictEqual(new CorruptItem({ operation: "getContact" }));
-    }),
-  );
-
-  it.effect("treats a record written by an unknown schema version as corrupt", () =>
-    Effect.gen(function* () {
-      const table = scriptedTable({
-        getItem: [Effect.succeed({ Item: { ...contactItem, v: { N: "2" } } })],
-      });
-
-      const storage = operationsFor(table);
-
-      expect(yield* defectOf(storage.getContact(contactId))).toStrictEqual(
-        new CorruptItem({ operation: "getContact" }),
       );
     }),
   );

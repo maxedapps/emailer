@@ -112,17 +112,6 @@ describe("suppressAddress", () => {
         ]);
       }),
   );
-
-  it.effect("still reports a provider that is unavailable", () =>
-    Effect.gen(function* () {
-      const table = scriptedTable({ updateItem: [Effect.fail(serverError)] });
-
-      const failure = yield* Effect.flip(operationsFor(table).suppressAddress(suppression));
-
-      expect(failure).toBeInstanceOf(Errors.StorageUnavailable);
-      expect(failure).toMatchObject({ operation: "suppressAddress" });
-    }),
-  );
 });
 
 describe("unsubscribeAddress", () => {

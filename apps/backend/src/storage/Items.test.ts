@@ -61,22 +61,11 @@ describe("the item codec", () => {
     }),
   );
 
-  it.effect("ignores the key and index attributes that travel on the same item", () =>
-    Effect.gen(function* () {
-      const item = yield* contactItem(contact);
-
-      expect(item["pk"]).toBeDefined();
-      expect(item["gsi1pk"]).toBeDefined();
-      expect(yield* read(item)).toStrictEqual(contact);
-    }),
-  );
-
   it.effect.each([
     ["an attribute of the wrong kind", { name: { N: "7" } }],
     ["a required value of the wrong kind", { email: { N: "7" } }],
     ["an address that is not one", { email: { S: "not-an-address" } }],
     ["a version this code cannot read", { v: { N: "99" } }],
-    ["no version at all", { v: undefined }],
   ] as const)("reads an item carrying %s as the CorruptItem defect", ([_label, overrides]) =>
     Effect.gen(function* () {
       const item = { ...(yield* contactItem(contact)), ...overrides };
@@ -87,14 +76,16 @@ describe("the item codec", () => {
     }),
   );
 
-  it.effect("reads an item missing a required attribute as the CorruptItem defect", () =>
-    Effect.gen(function* () {
-      const { createdAt: _absent, ...item } = yield* contactItem(contact);
+  it.effect.each(["createdAt", "v"] as const)(
+    "reads an item without its %s attribute as the CorruptItem defect",
+    (name) =>
+      Effect.gen(function* () {
+        const { [name]: _absent, ...item } = yield* contactItem(contact);
 
-      expect(yield* defectOf(read(item))).toStrictEqual(
-        new CorruptItem({ operation: "getContact" }),
-      );
-    }),
+        expect(yield* defectOf(read(item))).toStrictEqual(
+          new CorruptItem({ operation: "getContact" }),
+        );
+      }),
   );
 
   // DynamoDB refuses an empty set, so writing one is a bug, never a request.

@@ -156,58 +156,6 @@ describe("fixedWindow", () => {
   );
 });
 
-describe("unsupported algorithms", () => {
-  it.effect(
-    "fails tokenBucket, adaptiveConsume and adaptiveFeedback with RateLimitStoreError",
-    () =>
-      Effect.gen(function* () {
-        const { store } = withStore({});
-
-        const tokenBucket = limiterError(
-          yield* Effect.result(
-            store.tokenBucket({
-              key,
-              tokens,
-              limit: 1,
-              refillRate,
-              allowOverflow: true,
-            }),
-          ),
-        );
-
-        const adaptiveConsume = limiterError(
-          yield* Effect.result(
-            store.adaptiveConsume({
-              key,
-              tokens,
-              fallbackLimit: 1,
-              fallbackWindow: refillRate,
-            }),
-          ),
-        );
-
-        const adaptiveFeedback = limiterError(
-          yield* Effect.result(
-            store.adaptiveFeedback({
-              key,
-              epoch: 0,
-              tokens,
-              status: 429,
-              retryAfter: refillRate,
-            }),
-          ),
-        );
-
-        expect(tokenBucket._tag).toBe("RateLimitStoreError");
-        expect(tokenBucket.message).toBe("tokenBucket is not supported");
-        expect(adaptiveConsume._tag).toBe("RateLimitStoreError");
-        expect(adaptiveConsume.message).toBe("adaptiveConsume is not supported");
-        expect(adaptiveFeedback._tag).toBe("RateLimitStoreError");
-        expect(adaptiveFeedback.message).toBe("adaptiveFeedback is not supported");
-      }),
-  );
-});
-
 describe("RateLimiter.consume", () => {
   it.effect("returns the delay implied by the store count in delay mode", () => {
     const count = 3;

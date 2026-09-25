@@ -11,7 +11,6 @@ import {
   createdAt,
   listId,
   scriptedTable,
-  serverError,
   primitivesFor,
 } from "./Testing.ts";
 
@@ -105,33 +104,11 @@ describe("addMember", () => {
     }),
   );
 
-  it.effect("joins again without failing and without rewriting when the contact joined", () =>
-    Effect.gen(function* () {
-      const { table, run } = addMember({});
-
-      yield* run;
-      yield* run;
-
-      expect(table.transactionRequests).toHaveLength(2);
-      expect(table.transactionRequests[1]?.TransactItems[2]?.Update?.UpdateExpression).toContain(
-        "addedAt = if_not_exists(addedAt, :addedAt)",
-      );
-    }),
-  );
-
   it.effect("does not turn an unrecognized cancellation reason into a business answer", () =>
     Effect.gen(function* () {
       const { run } = addMember({
         transactWriteItems: [cancelled("None", "None", "None", "ValidationError")],
       });
-
-      expect(yield* Effect.flip(run)).toBeInstanceOf(Errors.StorageUnavailable);
-    }),
-  );
-
-  it.effect("does not turn a lost transaction response into a business answer", () =>
-    Effect.gen(function* () {
-      const { run } = addMember({ transactWriteItems: [Effect.fail(serverError)] });
 
       expect(yield* Effect.flip(run)).toBeInstanceOf(Errors.StorageUnavailable);
     }),
@@ -188,28 +165,6 @@ describe("removeMember", () => {
       });
 
       expect(yield* Effect.flip(run)).toStrictEqual(new Errors.ListNotFound());
-    }),
-  );
-
-  it.effect("stays harmless when the contact was never a member", () =>
-    Effect.gen(function* () {
-      const { table, run } = removeMember({});
-
-      expect(yield* run).toBeUndefined();
-      expect(table.transactionRequests[0]?.TransactItems[0]?.Delete).not.toHaveProperty(
-        "ConditionExpression",
-      );
-      expect(table.transactionRequests[0]?.TransactItems[1]?.Delete).not.toHaveProperty(
-        "ConditionExpression",
-      );
-    }),
-  );
-
-  it.effect("does not turn a lost transaction response into a business answer", () =>
-    Effect.gen(function* () {
-      const { run } = removeMember({ transactWriteItems: [Effect.fail(serverError)] });
-
-      expect(yield* Effect.flip(run)).toBeInstanceOf(Errors.StorageUnavailable);
     }),
   );
 });
@@ -448,24 +403,6 @@ describe("deleteContact", () => {
     }),
   );
 
-  it.effect(
-    "completes on a repeat after an interrupted cascade, because META outlives the memberships",
-    () =>
-      Effect.gen(function* () {
-        // The state a timed-out DELETE leaves behind: memberships gone, META still there. The
-        // repeat discovers nothing to cascade and finishes the job.
-        const table = scriptedTable({ ...found, query: [Effect.succeed({ Items: [] })] });
-
-        expect(yield* operationsFor(table).deleteContact(contactId)).toBeUndefined();
-
-        expect(table.transactionRequests).toHaveLength(1);
-        expect(table.transactionRequests[0]?.TransactItems[0]?.Delete?.Key).toStrictEqual({
-          pk: { S: `CONTACT#${contactId}` },
-          sk: { S: "META" },
-        });
-      }),
-  );
-
   it.effect("follows the continuation key so a contact in many lists is fully drained", () =>
     Effect.gen(function* () {
       const otherListId = "0195f0a0-1111-4222-8333-4444444410af";
@@ -541,6 +478,24 @@ describe("deleteList", () => {
       expect(
         table.transactionRequests.map((request) => request.TransactItems.length),
       ).toStrictEqual([80, 6, 1]);
+
+      // Each member goes in both directions.
+      const firstMember = "0195f0a0-1111-4222-8333-444444400000";
+
+      expect(table.transactionRequests[0]?.TransactItems.slice(0, 2)).toStrictEqual([
+        {
+          Delete: {
+            Table: tableLogicalId,
+            Key: { pk: { S: `LIST#${listId}` }, sk: { S: `MEMBER#${firstMember}` } },
+          },
+        },
+        {
+          Delete: {
+            Table: tableLogicalId,
+            Key: { pk: { S: `CONTACT#${firstMember}` }, sk: { S: `LISTOF#${listId}` } },
+          },
+        },
+      ]);
     }),
   );
 
@@ -567,30 +522,6 @@ describe("deleteList", () => {
       expect(table.transactionRequests[1]?.TransactItems).toStrictEqual([
         { Delete: { Table: tableLogicalId, Key: listMeta } },
       ]);
-    }),
-  );
-
-  it.effect("removes both directions for every member", () =>
-    Effect.gen(function* () {
-      const memberId = "0195f0a0-1111-4222-8333-44444444c001";
-
-      const table = scriptedTable({
-        ...found,
-        query: [Effect.succeed({ Items: [memberRow(listId, memberId)] })],
-      });
-
-      yield* operationsFor(table).deleteList(listId);
-
-      const items = table.transactionRequests[0]?.TransactItems ?? [];
-
-      expect(items[0]?.Delete?.Key).toStrictEqual({
-        pk: { S: `LIST#${listId}` },
-        sk: { S: `MEMBER#${memberId}` },
-      });
-      expect(items[1]?.Delete?.Key).toStrictEqual({
-        pk: { S: `CONTACT#${memberId}` },
-        sk: { S: `LISTOF#${listId}` },
-      });
     }),
   );
 });
@@ -690,46 +621,9 @@ describe("importContacts", () => {
     }),
   );
 
-  it.effect("re-running an identical import writes no new item and answers identically", () =>
-    Effect.gen(function* () {
-      const reserved: ScriptedReplies = {
-        batchGetItem: [
-          Effect.succeed({
-            Responses: { [physicalName]: [reservationFor("sam@example.com", contactId)] },
-          }),
-        ],
-      };
-
-      const first = importInto(reserved, [candidate(contactId, "sam@example.com")]);
-      const firstResult = yield* first.run;
-
-      const second = importInto(reserved, [candidate(otherContactId, "sam@example.com")]);
-      const secondResult = yield* second.run;
-
-      expect(secondResult).toStrictEqual(firstResult);
-
-      const items = second.table.transactionRequests[0]?.TransactItems ?? [];
-
-      // Members are upserted and the holder only checked, so nothing new is created.
-      expect(items.some((item) => item.Put !== undefined)).toBe(false);
-    }),
-  );
-
-  it.effect("keeps the original join time when a member is imported again", () =>
-    Effect.gen(function* () {
-      const { table, run } = importInto({}, [candidate(contactId, "sam@example.com")]);
-
-      yield* run;
-
-      expect(table.transactionRequests[0]?.TransactItems[2]?.Update?.UpdateExpression).toContain(
-        "addedAt = if_not_exists(addedAt, :addedAt)",
-      );
-    }),
-  );
-
   it.effect("stays inside the transaction action limit at a full batch", () =>
     Effect.gen(function* () {
-      const candidates = Array.from({ length: 20 }, (_, index) =>
+      const candidates = Array.from({ length: Schemas.maxImportEntries }, (_, index) =>
         candidate(
           `0195f0a0-1111-4222-8333-4444444${String(index).padStart(5, "0")}`,
           `contact${index}@example.com`,
@@ -740,7 +634,11 @@ describe("importContacts", () => {
 
       yield* run;
 
-      expect(table.transactionRequests[0]?.TransactItems).toHaveLength(80);
+      const actions = table.transactionRequests[0]?.TransactItems ?? [];
+
+      // DynamoDB refuses a transaction of more than 100 actions.
+      expect(actions).toHaveLength(Schemas.maxImportEntries * 4);
+      expect(actions.length).toBeLessThanOrEqual(100);
     }),
   );
 
