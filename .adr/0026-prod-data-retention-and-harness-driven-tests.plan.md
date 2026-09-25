@@ -486,7 +486,7 @@ Status: Done in code; the live run is T15. As built:
 
 ### T14 — Vendored upstream tests
 
-Status: Not started
+Status: Done. As built: a probe file still drew `anti-slop(no-reflect-get)` and `anti-slop-effect(no-manual-tag-comparison)`, so both plugins load without the tests.
 
 - **Where:** the 24 `*.test.ts` files under `tools/oxlint/anti-slop/`.
 - **Change:** delete them. `UPSTREAM.md` records that the upstream tests are omitted, and the rule sources stay unchanged.
