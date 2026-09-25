@@ -340,6 +340,7 @@ Deviations:
 Fixes from the PR review, after T9:
 
 - **Sign-ups read a cached send guard.** SES allows one `GetAccount` per second for the whole account, and every dispatch slice reads it too. Reading it on every sign-up let a sign-up spike answer 503s and throttle a slice past its retries. `SendGuard` now also has `recent`: the allowance through `Effect.cachedWithTTL`, built once per API instance, kept 30 seconds after a successful read and not at all after a failed one. Sign-ups read `recent`. Dispatch slices and test sends still read `current`. Trade-off: a sign-up may act on a reputation halt or a spent daily budget up to 30 seconds late. The pacing slot still applies to each mail. Cost: fewer SES and CloudWatch reads.
+- **The README warns about the confirm URL.** The URL carries the subscriber's address and the link's one-time secret. The README now says the confirm page should load no analytics or third-party scripts, or should remove `token` from the URL before they run.
 
 ### T10 — Prod rollout
 

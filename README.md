@@ -452,7 +452,7 @@ The confirmation mail is neutral and in English. It names the list and links to 
 
 ### Confirm: `POST /subscriptions/confirm`
 
-The confirm page must **never confirm on GET**: mail scanners and link previews open every link in a mail. On GET, show a button. On its POST, call the API with the same key:
+The confirm page must **never confirm on GET**: mail scanners and link previews open every link in a mail. On GET, show a button. The URL carries the subscriber's address and the link's one-time secret, so the page should load no analytics or third-party scripts, or should remove `token` from the URL before they run. On its POST, call the API with the same key:
 
 ```json
 { "token": "<the token query parameter>", "ip": "203.0.113.7" }
