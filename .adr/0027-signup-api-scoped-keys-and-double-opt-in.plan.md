@@ -290,7 +290,12 @@ Deviations:
 
 ### T8 — Docs
 
-Status: To do
+Status: Done
+
+Deviations:
+
+- On Effect rc.117 the server ignores undeclared fields rather than refusing them: ADR-0022's API-level annotation waits for the next RC. The README therefore tells integrators to send only the documented fields, and says unknown fields will answer 400 once ADR-0022 lands.
+- The README also corrects what T1 made false (address-wide opt-out, the test-send link, the `addresses status` fields), and lists the status codes and tags as `Api.ts` declares them.
 
 - **README:**
   - "What you get": a sign-up API with double opt-in, and per-list unsubscribe.

@@ -18,7 +18,9 @@ const addressesStatus = Command.make(
     );
   }),
 ).pipe(
-  Command.withDescription("Show the lists an address left and its local and account suppression"),
+  Command.withDescription(
+    "Show the lists an address left, its consents and pending sign-ups, and its suppression",
+  ),
 );
 
 const addressesUnsuppress = Command.make(
