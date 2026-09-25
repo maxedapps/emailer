@@ -443,6 +443,8 @@ Status: Done in code; the live run is T15. As built:
 - Collection registers 37 tests: the 41 before, minus the removed non-simulator case and the three merged cases.
 - `ALCHEMY_TEST_STAGE=prod` and a plain `./.env` each fail the file before any hook runs.
 - With `SignedToken.verify` made to accept any signature in a scratch copy, the new forged-token oracle fails (200 instead of 404), while the old one still passes.
+- `sendRows` and `campaignMeta` read the table from `Deployment` as well. The review pass found them still reading `EMAILER_TEST_TABLE_NAME`, which only a live run would have exposed.
+- The ADR's last decision item had no task, so it landed here: the README row for `EMAILER_DAILY_SEND_CEILING` says SES counts sends against the cap across the whole account.
 
 - **Stack outputs** (`alchemy.run.ts`), none secret:
   - `tableName`;
@@ -516,6 +518,8 @@ Status: Not started
 ### T16 — Prod rollout
 
 Status: Not started. Runs when the user asks.
+
+Until this deploy runs, prod is not protected: `alchemy destroy` takes retain-or-delete from the policy stored in state (`Plan.ts:2040`), not from code, and prod's state gets `retain` only when this deploy writes it.
 
 - **Deploy:** redeploy `prod` with `--env-file .env.prod --force`.
 - **Check:**

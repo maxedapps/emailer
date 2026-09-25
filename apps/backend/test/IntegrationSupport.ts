@@ -520,7 +520,7 @@ export const awaitCampaignFeedback = (
 /** Every SEND row of a campaign, across pages: Distilled carries `LastEvaluatedKey` forward. */
 export const sendRows = (campaignId: string) =>
   Effect.gen(function* () {
-    const tableName = yield* Config.String("EMAILER_TEST_TABLE_NAME");
+    const { tableName } = yield* Deployment;
 
     return yield* dynamodb.query
       .items({
@@ -540,7 +540,7 @@ export const sendRows = (campaignId: string) =>
 
 export const campaignMeta = (campaignId: string) =>
   Effect.gen(function* () {
-    const tableName = yield* Config.String("EMAILER_TEST_TABLE_NAME");
+    const { tableName } = yield* Deployment;
     const getItem = yield* dynamodb.getItem;
 
     const response = yield* getItem({
