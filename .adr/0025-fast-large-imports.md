@@ -9,6 +9,7 @@
 
   They approved this record and its plan on 2026-09-25 by asking for the implementation.
 - Supersedes in part, once implemented: [ADR-0005](0005-contact-identity-and-membership-access-paths.md): "larger imports are a client-side loop" (the CLI runs the loop), and the import transaction's list check.
+- Amended: 2026-09-25 — 4 calls in flight, not 8, per the live gate (see Confirmation). The user was asked to confirm.
 - Plan: [0025-fast-large-imports.plan.md](0025-fast-large-imports.plan.md)
 
 ## Context

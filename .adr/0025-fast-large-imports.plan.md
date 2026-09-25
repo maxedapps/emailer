@@ -223,7 +223,8 @@ Status: Done on 2026-09-25 on stage `test-import`. The gate imported 40,000 cont
   - 8 in flight again, as the control: 40 s, 250 throttled, 11.1.
 - **Decision:** the CLI sends 4 calls at a time, which is faster and on budget.
   - This departs from the plan's 8, so ADR-0025 and the README record it.
-  - The run with 4 used the committed code's number.
+  - The run with 4 used a temporary local edit of the constant, which the committed code now holds.
+  - One run each, and the run with 4 came after the table had taken load, so the speeds are about equal. The write units and throttle counts are the robust difference.
 
 - **Stage:** a dedicated one, `--stage test-import`, so it never shares state with the typed-errors gate.
   - Deploy it from the worktree.
