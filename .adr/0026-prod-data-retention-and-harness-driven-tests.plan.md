@@ -136,7 +136,7 @@ Status: Done in code. As built: `alerting` holds the props every alarm shares, `
 
 ### T6 — Effect idioms
 
-Status: Not started
+Status: Done. As built: the transient window compares each occurrence with `now` minus 30 days (`DateTime.subtract`, `isGreaterThanOrEqualTo`), which keeps the old boundary. `Items.ts` names the effect `Record` module's `ReadonlyRecord` type where it used TypeScript's `Record`.
 
 - **Helpers that only return an `Effect.gen` become `Effect.fnUntraced`:**
   - `updateIf`, `readItems`, `readEntityPage` and `transact` in `storage/Primitives.ts`;

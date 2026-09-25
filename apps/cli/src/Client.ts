@@ -44,26 +44,26 @@ const retryingTransient = (client: HttpClient.HttpClient) =>
     times: 8,
   });
 
-const emailerClient = (transformClient: (client: HttpClient.HttpClient) => HttpClient.HttpClient) =>
-  Effect.gen(function* () {
-    const url = yield* Config.String("EMAILER_API_URL");
-    const token = yield* Config.Redacted("EMAILER_API_TOKEN");
+const emailerClient = Effect.fn("Client.emailerClient")(function* (
+  transformClient: (client: HttpClient.HttpClient) => HttpClient.HttpClient,
+) {
+  const url = yield* Config.String("EMAILER_API_URL");
+  const token = yield* Config.Redacted("EMAILER_API_TOKEN");
 
-    return yield* makeEmailerClient(url, token, transformClient);
-  });
+  return yield* makeEmailerClient(url, token, transformClient);
+});
 
-export const withClient = <A, E>(
+export const withClient = Effect.fn("Client.withClient")(function* <A, E>(
   use: (client: EmailerClient) => Effect.Effect<A, E>,
   options: { readonly retryTransient?: boolean } = {},
-) =>
-  Effect.gen(function* () {
-    const client = yield* emailerClient(
-      options.retryTransient === true
-        ? (client) => retryingTransient(withDeadline(client))
-        : withDeadline,
-    );
+) {
+  const client = yield* emailerClient(
+    options.retryTransient === true
+      ? (client) => retryingTransient(withDeadline(client))
+      : withDeadline,
+  );
 
-    return yield* use(client);
-  }).pipe(Effect.provide(FetchHttpClient.layer));
+  return yield* use(client);
+}, Effect.provide(FetchHttpClient.layer));
 
 export const report = <Value>(value: Value) => Console.log(Inspectable.toStringUnknown(value));

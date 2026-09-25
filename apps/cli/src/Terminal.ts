@@ -45,8 +45,8 @@ const opener = process.platform === "darwin" ? "open" : "xdg-open";
  * Hands a URL to the desktop's opener without waiting for it: detached, with no stdio ties and
  * unreferenced, so neither the scope's finalizer nor Node's event loop holds the command open.
  */
-export const openInBrowser = (url: string) =>
-  Effect.gen(function* () {
+export const openInBrowser = Effect.fn("Terminal.openInBrowser")(
+  function* (url: string) {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
     const handle = yield* spawner.spawn(
@@ -60,13 +60,13 @@ export const openInBrowser = (url: string) =>
 
     // `unref` answers the effect that would re-reference the child; nothing ever will.
     yield* Effect.asVoid(handle.unref);
-  }).pipe(
-    Effect.scoped,
-    Effect.mapError(
-      (cause) =>
-        new CliError.UserError({
-          cause,
-          userMessage: `Could not start ${opener}; open the printed link in any browser`,
-        }),
-    ),
-  );
+  },
+  Effect.scoped,
+  Effect.mapError(
+    (cause) =>
+      new CliError.UserError({
+        cause,
+        userMessage: `Could not start ${opener}; open the printed link in any browser`,
+      }),
+  ),
+);

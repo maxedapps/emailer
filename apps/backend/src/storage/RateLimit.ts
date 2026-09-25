@@ -54,61 +54,60 @@ export const rateLimitOperations = (primitives: Pick<UpdatePrimitives, "updateIf
     updateIf("fixedWindow", request, () => new WindowMoved());
 
   return RateLimiter.RateLimiterStore.of({
-    fixedWindow: ({ key, tokens, refillRate }) =>
-      Effect.gen(function* () {
-        const now = yield* Clock.currentTimeMillis;
-        const extend = Math.max(1, Math.ceil(Duration.toMillis(refillRate) * tokens));
-        const itemKey = rateLimitKey(key);
+    fixedWindow: Effect.fnUntraced(function* ({ key, tokens, refillRate }) {
+      const now = yield* Clock.currentTimeMillis;
+      const extend = Math.max(1, Math.ceil(Duration.toMillis(refillRate) * tokens));
+      const itemKey = rateLimitKey(key);
 
-        const common = {
-          Key: itemKey,
-          UpdateExpression:
-            "SET #count = if_not_exists(#count, :zero) + :tokens, #expiresAt = if_not_exists(#expiresAt, :now) + :extend, v = if_not_exists(v, :version)",
-          ConditionExpression: "attribute_not_exists(pk) OR #expiresAt > :now",
-          ExpressionAttributeNames: windowNames,
-          ExpressionAttributeValues: {
-            ":zero": num(0),
-            ":tokens": num(tokens),
-            ":now": num(now),
-            ":extend": num(extend),
-            ":version": num(recordVersion),
-          },
-          ReturnValues: "ALL_NEW" as const,
-        };
+      const common = {
+        Key: itemKey,
+        UpdateExpression:
+          "SET #count = if_not_exists(#count, :zero) + :tokens, #expiresAt = if_not_exists(#expiresAt, :now) + :extend, v = if_not_exists(v, :version)",
+        ConditionExpression: "attribute_not_exists(pk) OR #expiresAt > :now",
+        ExpressionAttributeNames: windowNames,
+        ExpressionAttributeValues: {
+          ":zero": num(0),
+          ":tokens": num(tokens),
+          ":now": num(now),
+          ":extend": num(extend),
+          ":version": num(recordVersion),
+        },
+        ReturnValues: "ALL_NEW" as const,
+      };
 
-        const reset = {
-          Key: itemKey,
-          UpdateExpression: "SET #count = :tokens, #expiresAt = :nowPlusExtend",
-          ConditionExpression: "attribute_exists(pk) AND #expiresAt <= :now",
-          ExpressionAttributeNames: windowNames,
-          ExpressionAttributeValues: {
-            ":tokens": num(tokens),
-            ":now": num(now),
-            ":nowPlusExtend": num(now + extend),
-          },
-          ReturnValues: "ALL_NEW" as const,
-        };
+      const reset = {
+        Key: itemKey,
+        UpdateExpression: "SET #count = :tokens, #expiresAt = :nowPlusExtend",
+        ConditionExpression: "attribute_exists(pk) AND #expiresAt <= :now",
+        ExpressionAttributeNames: windowNames,
+        ExpressionAttributeValues: {
+          ":tokens": num(tokens),
+          ":now": num(now),
+          ":nowPlusExtend": num(now + extend),
+        },
+        ReturnValues: "ALL_NEW" as const,
+      };
 
-        // Claim in the live window; else reset an expired one; else another claim just reset it,
-        // so claim in that window.
-        const window = yield* claim(common).pipe(
-          Effect.catchTag("WindowMoved", () => claim(reset)),
-          Effect.catchTag("WindowMoved", () => claim(common)),
-          Effect.catchTags({
-            WindowMoved: () =>
-              Effect.fail(
-                new RateLimiter.RateLimiterError({
-                  reason: new RateLimiter.RateLimitStoreError({
-                    message: "fixedWindow lost the race after reset",
-                  }),
+      // Claim in the live window; else reset an expired one; else another claim just reset it,
+      // so claim in that window.
+      const window = yield* claim(common).pipe(
+        Effect.catchTag("WindowMoved", () => claim(reset)),
+        Effect.catchTag("WindowMoved", () => claim(common)),
+        Effect.catchTags({
+          WindowMoved: () =>
+            Effect.fail(
+              new RateLimiter.RateLimiterError({
+                reason: new RateLimiter.RateLimitStoreError({
+                  message: "fixedWindow lost the race after reset",
                 }),
-              ),
-            StorageUnavailable: (failure) => Effect.fail(storeFailure(failure)),
-          }),
-        );
+              }),
+            ),
+          StorageUnavailable: (failure) => Effect.fail(storeFailure(failure)),
+        }),
+      );
 
-        return yield* fromAttributes(now, window);
-      }),
+      return yield* fromAttributes(now, window);
+    }),
     tokenBucket: () => Effect.fail(unsupported("tokenBucket")),
     adaptiveConsume: () => Effect.fail(unsupported("adaptiveConsume")),
     adaptiveFeedback: () => Effect.fail(unsupported("adaptiveFeedback")),

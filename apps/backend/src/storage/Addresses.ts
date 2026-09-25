@@ -1,5 +1,5 @@
 import * as Schemas from "@emailer/api/Schemas";
-import { Clock, Data, Duration, Effect, Predicate, Record, Schema } from "effect";
+import { Data, DateTime, Effect, Option, Predicate, Record, Schema } from "effect";
 
 import { itemReader, num, recordVersion, str, strMap } from "./Items.ts";
 
@@ -65,18 +65,15 @@ const readRecord = itemReader(
   }),
 );
 
-const inTransientWindow = (occurrence: string, now: number): boolean => {
+/** An occurrence is `<receivedAt>#<feedbackId>`; one that does not parse is outside the window. */
+const occurredSince = (occurrence: string, windowStart: DateTime.Utc): boolean => {
   const separator = occurrence.indexOf("#");
 
-  if (separator <= 0) {
-    return false;
-  }
-
-  const timestamp = Date.parse(occurrence.slice(0, separator));
-
   return (
-    Number.isFinite(timestamp) &&
-    now - timestamp <= Duration.toMillis(Duration.days(transientWindow.days))
+    separator > 0 &&
+    Option.exists(DateTime.make(occurrence.slice(0, separator)), (receivedAt) =>
+      DateTime.isGreaterThanOrEqualTo(receivedAt, windowStart),
+    )
   );
 };
 
@@ -86,7 +83,7 @@ const statusOf = (
     readonly suppression?: unknown;
     readonly transientBounces?: ReadonlyArray<string>;
   },
-  now: number,
+  now: DateTime.Utc,
 ): Schemas.AddressStatus => {
   if (stored.unsubscribedAt !== undefined) {
     return "unsubscribed";
@@ -96,8 +93,10 @@ const statusOf = (
     return "suppressed";
   }
 
+  const windowStart = DateTime.subtract(now, { days: transientWindow.days });
+
   const inWindow = (stored.transientBounces ?? []).filter((occurrence) =>
-    inTransientWindow(occurrence, now),
+    occurredSince(occurrence, windowStart),
   );
 
   return inWindow.length >= transientWindow.occurrences ? "bouncing" : "mailable";
@@ -174,7 +173,7 @@ export const addressReads = (primitives: ReadPrimitives) => {
       return "mailable" as const;
     }
 
-    return statusOf(yield* readStatus("addressStatus", Item), yield* Clock.currentTimeMillis);
+    return statusOf(yield* readStatus("addressStatus", Item), yield* DateTime.now);
   });
 
   const addressRecord = Effect.fn("Storage.addressRecord")(function* (email: string) {
@@ -185,7 +184,7 @@ export const addressReads = (primitives: ReadPrimitives) => {
 
     const record = {
       email,
-      status: statusOf(stored, yield* Clock.currentTimeMillis),
+      status: statusOf(stored, yield* DateTime.now),
       transientBounces: stored.transientBounces ?? [],
       accountSuppression: null,
     };

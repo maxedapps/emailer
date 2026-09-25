@@ -1,6 +1,6 @@
 import { CampaignNotFound, CampaignStateConflict, SendAtNotInFuture } from "@emailer/api/Errors";
 import type * as Schemas from "@emailer/api/Schemas";
-import { Clock, Effect } from "effect";
+import { DateTime, Effect } from "effect";
 
 import { newIdentifier, nowIso } from "../Identifiers.ts";
 import { CampaignWake } from "../sending/Dispatch.ts";
@@ -188,7 +188,7 @@ export const schedule = Effect.fn("Campaigns.schedule")(function* (
   const schedules = yield* CampaignSchedule;
   const control = yield* campaigns.getCampaignControl(campaignId);
 
-  if (Date.parse(sendAt) <= (yield* Clock.currentTimeMillis)) {
+  if (!(yield* DateTime.isFuture(DateTime.makeUnsafe(sendAt)))) {
     return yield* new SendAtNotInFuture({ sendAt });
   }
 

@@ -53,8 +53,6 @@ const senderName = Config.option(
   ),
 );
 
-const decodeAddress = Schema.decodeUnknownEffect(Schemas.EmailAddress);
-
 /**
  * The From address, its optional display name and the postal address every footer carries. A
  * sender outside the verified identity, an invalid name or an empty postal address is a deployment
@@ -63,19 +61,18 @@ const decodeAddress = Schema.decodeUnknownEffect(Schemas.EmailAddress);
 export const senderSettings = Effect.gen(function* () {
   const raw = yield* Config.all({
     identity: Config.String("EMAILER_SENDER_IDENTITY"),
-    sender: Config.String("EMAILER_FROM_EMAIL"),
+    sender: Config.schema(Schemas.EmailAddress, "EMAILER_FROM_EMAIL"),
     senderName,
     postalAddress,
   });
 
   const identity = raw.identity.trim().toLowerCase();
-  const sender = yield* Effect.orDie(decodeAddress(raw.sender));
 
-  if (!belongsToIdentity(sender, identity)) {
+  if (!belongsToIdentity(raw.sender, identity)) {
     return yield* Effect.die(new SenderNotOnIdentity({ identity }));
   }
 
-  return { sender, senderName: raw.senderName, postalAddress: raw.postalAddress };
+  return { sender: raw.sender, senderName: raw.senderName, postalAddress: raw.postalAddress };
 });
 
 const printableAscii = /^[\x20-\x7E]*$/;

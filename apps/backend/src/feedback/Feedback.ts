@@ -122,79 +122,78 @@ const campaignTag = "campaignId";
 
 export const expectedConfigurationSet = Config.String("EMAILER_CONFIGURATION_SET");
 
-const record = (event: EmailEvent) =>
-  Effect.gen(function* () {
-    const classified = classify(event);
-    const campaignId = event.mail.tags?.[campaignTag]?.[0];
-    const messageId = event.mail.messageId;
+const record = Effect.fn("Feedback.record")(function* (event: EmailEvent) {
+  const classified = classify(event);
+  const campaignId = event.mail.tags?.[campaignTag]?.[0];
+  const messageId = event.mail.messageId;
 
-    const storage = yield* FeedbackStore;
-    const receivedAt = yield* nowIso;
+  const storage = yield* FeedbackStore;
+  const receivedAt = yield* nowIso;
 
-    if (classified.suppress) {
-      for (const recipient of classified.recipients) {
-        yield* storage.suppressAddress({
-          email: recipient,
-          reason: classified.kind,
-          messageId,
+  if (classified.suppress) {
+    for (const recipient of classified.recipients) {
+      yield* storage.suppressAddress({
+        email: recipient,
+        reason: classified.kind,
+        messageId,
+        feedbackId: classified.feedbackId,
+        bounceSubType: classified.bounceSubType,
+        complaintFeedbackType: classified.complaintFeedbackType,
+        complaintSubType: classified.complaintSubType,
+        suppressedAt: receivedAt,
+      });
+    }
+  }
+
+  // Every campaign send is tagged with its campaign; a test send deliberately is not, so its
+  // bounces and complaints suppress the address without reaching any campaign's counters.
+  if (campaignId === undefined) {
+    return yield* Effect.logInfo("feedback without a campaign tag (a test send)", {
+      messageId,
+      kind: classified.kind,
+      suppressed: classified.suppress,
+    });
+  }
+
+  for (const recipient of classified.recipients) {
+    yield* storage
+      .recordFeedback(
+        {
+          campaignId,
+          kind: classified.kind,
           feedbackId: classified.feedbackId,
+          recipient,
+          messageId,
+          outcome: classified.outcome,
+          receivedAt,
+          bounceType: classified.bounceType,
           bounceSubType: classified.bounceSubType,
           complaintFeedbackType: classified.complaintFeedbackType,
           complaintSubType: classified.complaintSubType,
-          suppressedAt: receivedAt,
-        });
-      }
-    }
+        },
+        classified.write,
+      )
+      .pipe(
+        Effect.catchTags({
+          FeedbackAlreadyRecorded: () =>
+            Effect.logDebug("duplicate feedback event", { campaignId, kind: classified.kind }),
+          CampaignNotFound: () =>
+            Effect.logWarning("feedback event for unknown campaign", {
+              campaignId,
+              kind: classified.kind,
+            }),
+        }),
+      );
+  }
 
-    // Every campaign send is tagged with its campaign; a test send deliberately is not, so its
-    // bounces and complaints suppress the address without reaching any campaign's counters.
-    if (campaignId === undefined) {
-      return yield* Effect.logInfo("feedback without a campaign tag (a test send)", {
-        messageId,
-        kind: classified.kind,
-        suppressed: classified.suppress,
-      });
-    }
-
-    for (const recipient of classified.recipients) {
-      yield* storage
-        .recordFeedback(
-          {
-            campaignId,
-            kind: classified.kind,
-            feedbackId: classified.feedbackId,
-            recipient,
-            messageId,
-            outcome: classified.outcome,
-            receivedAt,
-            bounceType: classified.bounceType,
-            bounceSubType: classified.bounceSubType,
-            complaintFeedbackType: classified.complaintFeedbackType,
-            complaintSubType: classified.complaintSubType,
-          },
-          classified.write,
-        )
-        .pipe(
-          Effect.catchTags({
-            FeedbackAlreadyRecorded: () =>
-              Effect.logDebug("duplicate feedback event", { campaignId, kind: classified.kind }),
-            CampaignNotFound: () =>
-              Effect.logWarning("feedback event for unknown campaign", {
-                campaignId,
-                kind: classified.kind,
-              }),
-          }),
-        );
-    }
-
-    yield* Effect.logInfo("feedback recorded", {
-      campaignId,
-      kind: classified.kind,
-      recipients: classified.recipients.length,
-      suppressed: classified.suppress,
-      classification: classified.classification,
-    });
+  yield* Effect.logInfo("feedback recorded", {
+    campaignId,
+    kind: classified.kind,
+    recipients: classified.recipients.length,
+    suppressed: classified.suppress,
+    classification: classified.classification,
   });
+});
 
 const handleEvent = Effect.fn("Feedback.handleEvent")((
   expected: string,

@@ -1,7 +1,15 @@
 import type * as dynamodb from "@distilled.cloud/aws/dynamodb";
 import type * as Schemas from "@emailer/api/Schemas";
 import type * as AWS from "alchemy/AWS";
-import { Duration, Effect, Schema, SchemaIssue, SchemaTransformation } from "effect";
+import {
+  Duration,
+  Effect,
+  Predicate,
+  Record,
+  Schema,
+  SchemaIssue,
+  SchemaTransformation,
+} from "effect";
 
 import { corrupt } from "../Errors.ts";
 
@@ -73,8 +81,8 @@ const StringMapAttribute = Schema.Struct({
   Schema.decodeTo(
     Schema.Record(Schema.String, Schema.String),
     SchemaTransformation.transform({
-      decode: (attribute: { readonly M: Record<string, string> }) => attribute.M,
-      encode: (value: Record<string, string>) => ({ M: value }),
+      decode: (attribute: { readonly M: Record.ReadonlyRecord<string, string> }) => attribute.M,
+      encode: (value: Record.ReadonlyRecord<string, string>) => ({ M: value }),
     }),
   ),
 );
@@ -108,23 +116,13 @@ const PlainValues = Schema.Record(Schema.String, Schema.UndefinedOr(Schema.toTyp
 type PlainValues = typeof PlainValues.Type;
 
 /** An optional field left `undefined` is an attribute that is not written. */
-const present = (values: PlainValues) => {
-  const written: Record<string, Value> = {};
-
-  for (const [name, value] of Object.entries(values)) {
-    if (value !== undefined) {
-      written[name] = value;
-    }
-  }
-
-  return written;
-};
+const present = (values: PlainValues) => Record.filter(values, Predicate.isNotUndefined);
 
 /** An item's attributes as plain values, and back. */
 const Plain = Schema.Record(Schema.String, Attribute).pipe(
   Schema.decodeTo(
     PlainValues,
-    SchemaTransformation.transform<PlainValues, Record<string, Value>>({
+    SchemaTransformation.transform<PlainValues, Record.ReadonlyRecord<string, Value>>({
       decode: (values) => values,
       encode: present,
     }),

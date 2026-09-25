@@ -166,23 +166,22 @@ export const updatePrimitives = (operations: Pick<TableOperations, "updateItem">
    * run token, a slice identifier, the value being set — so a second landing applies the same
    * values rather than being refused.
    */
-  const updateIf = <E>(
+  const updateIf = Effect.fnUntraced(function* <E>(
     operation: string,
     request: AWS.DynamoDB.UpdateItemRequest,
     refused: Refuse<E>,
-  ) =>
-    Effect.gen(function* () {
-      const outcome = yield* operations.updateItem(request).pipe(
-        Effect.map((output) => Result.succeed(output.Attributes)),
-        Effect.catchTag("ConditionalCheckFailedException", (failure) =>
-          decodeStoredItem(failure.Item).pipe(corrupt(operation), Effect.map(Result.fail)),
-        ),
-        Effect.timeout(operationTimeout),
-        Effect.mapError(storageUnavailable(operation)),
-      );
+  ) {
+    const outcome = yield* operations.updateItem(request).pipe(
+      Effect.map((output) => Result.succeed(output.Attributes)),
+      Effect.catchTag("ConditionalCheckFailedException", (failure) =>
+        decodeStoredItem(failure.Item).pipe(corrupt(operation), Effect.map(Result.fail)),
+      ),
+      Effect.timeout(operationTimeout),
+      Effect.mapError(storageUnavailable(operation)),
+    );
 
-      return Result.isSuccess(outcome) ? outcome.success : yield* refused(outcome.failure);
-    });
+    return Result.isSuccess(outcome) ? outcome.success : yield* refused(outcome.failure);
+  });
 
   /** An unconditional single-item update, safe to repeat because it sets what it sets. */
   const update = (operation: string, request: AWS.DynamoDB.UpdateItemRequest) =>
@@ -248,8 +247,8 @@ const batchPrimitives = (operations: Pick<TableOperations, "batchGetItem">) => {
    * until none are left, and if the retries run out the operation fails. A short read is never a
    * successful read.
    */
-  const readItems = (operationId: string, keys: ReadonlyArray<dynamodb.AttributeMap>) =>
-    Effect.gen(function* () {
+  const readItems = Effect.fnUntraced(
+    function* (operationId: string, keys: ReadonlyArray<dynamodb.AttributeMap>) {
       // A page can legitimately hydrate nothing — an empty listing partition, or a page whose
       // every index entry has since been deleted. `KeysAndAttributes.Keys` must carry at least one
       // key, and neither the SDK nor the service tolerates an empty one, so the request is skipped
@@ -288,14 +287,17 @@ const batchPrimitives = (operations: Pick<TableOperations, "batchGetItem">) => {
           Effect.fail(storageUnavailable(operationId)(short)),
         ),
       );
-    }).pipe(
-      // One deadline for the whole operation, retries included, rather than one per attempt: the
-      // caller's budget does not grow because the store needed several rounds.
-      Effect.timeout(batchDeadline),
-      Effect.catchTag("TimeoutError", (timeout) =>
-        Effect.fail(storageUnavailable(operationId)(timeout)),
+    },
+    // One deadline for the whole operation, retries included, rather than one per attempt: the
+    // caller's budget does not grow because the store needed several rounds.
+    (read, operationId) =>
+      read.pipe(
+        Effect.timeout(batchDeadline),
+        Effect.catchTag("TimeoutError", (timeout) =>
+          Effect.fail(storageUnavailable(operationId)(timeout)),
+        ),
       ),
-    );
+  );
 
   return { readItems } as const;
 };
@@ -312,62 +314,61 @@ const pagePrimitives = (primitives: QueryPrimitives & BatchPrimitives) => {
    * the listing repairs itself rather than serving a stale projection. The page is in index order
    * (UTF-8 byte order of the string sort key); callers do not sort.
    */
-  const readEntityPage = (
+  const readEntityPage = Effect.fnUntraced(function* (
     operationId: string,
     kind: string,
     keyOf: (id: string) => dynamodb.AttributeMap,
     limit: number,
     cursor: string | undefined,
-  ) =>
-    Effect.gen(function* () {
-      const request = {
-        IndexName: listingIndexName,
-        KeyConditionExpression: "gsi1pk = :kind",
-        ExpressionAttributeValues: { ":kind": str(kind) },
-        Limit: limit,
-      };
+  ) {
+    const request = {
+      IndexName: listingIndexName,
+      KeyConditionExpression: "gsi1pk = :kind",
+      ExpressionAttributeValues: { ":kind": str(kind) },
+      Limit: limit,
+    };
 
-      const page = yield* runQuery(
-        operationId,
-        "index",
-        cursor === undefined
-          ? request
-          : {
-              ...request,
-              // The cursor *is* the index sort key, so an index query resumes from it directly —
-              // and from the table key it points at, which the identifier half names.
-              ExclusiveStartKey: {
-                gsi1pk: str(kind),
-                gsi1sk: str(cursor),
-                ...keyOf(cursor.slice(cursor.indexOf("#") + 1)),
-              },
+    const page = yield* runQuery(
+      operationId,
+      "index",
+      cursor === undefined
+        ? request
+        : {
+            ...request,
+            // The cursor *is* the index sort key, so an index query resumes from it directly —
+            // and from the table key it points at, which the identifier half names.
+            ExclusiveStartKey: {
+              gsi1pk: str(kind),
+              gsi1sk: str(cursor),
+              ...keyOf(cursor.slice(cursor.indexOf("#") + 1)),
             },
-      );
+          },
+    );
 
-      const keys: Array<dynamodb.AttributeMap> = [];
+    const keys: Array<dynamodb.AttributeMap> = [];
 
-      for (const entry of page.Items ?? []) {
-        const { gsi1sk } = yield* decodeIndexEntry(entry).pipe(corrupt(operationId));
+    for (const entry of page.Items ?? []) {
+      const { gsi1sk } = yield* decodeIndexEntry(entry).pipe(corrupt(operationId));
 
-        keys.push(keyOf(gsi1sk.slice(gsi1sk.indexOf("#") + 1)));
-      }
+      keys.push(keyOf(gsi1sk.slice(gsi1sk.indexOf("#") + 1)));
+    }
 
-      const hydrated = yield* readItems(operationId, keys);
-      const byPk = new Map(hydrated.map((item) => [item.pk?.S, item] as const));
+    const hydrated = yield* readItems(operationId, keys);
+    const byPk = new Map(hydrated.map((item) => [item.pk?.S, item] as const));
 
-      const items = keys.flatMap((key): Array<dynamodb.AttributeMap> => {
-        const item = byPk.get(key.pk?.S);
+    const items = keys.flatMap((key): Array<dynamodb.AttributeMap> => {
+      const item = byPk.get(key.pk?.S);
 
-        return item === undefined ? [] : [item];
-      });
-
-      const nextCursor = yield* nextCursorOf(operationId, page.LastEvaluatedKey);
-
-      return (nextCursor === undefined ? { items } : { items, nextCursor }) satisfies StoredPage<
-        dynamodb.AttributeMap,
-        string
-      >;
+      return item === undefined ? [] : [item];
     });
+
+    const nextCursor = yield* nextCursorOf(operationId, page.LastEvaluatedKey);
+
+    return (nextCursor === undefined ? { items } : { items, nextCursor }) satisfies StoredPage<
+      dynamodb.AttributeMap,
+      string
+    >;
+  });
 
   return { readEntityPage } as const;
 };
@@ -419,48 +420,49 @@ export const transactionPrimitives = (
    * token, since nothing documents how a cancelled token replays. Any other mix of reasons is
    * unavailable. The timeout wraps the whole sequence.
    */
-  const transact = <const Actions extends ReadonlyArray<Action<unknown>>>(
+  const transact = Effect.fnUntraced(function* <
+    const Actions extends ReadonlyArray<Action<unknown>>,
+  >(
     operation: string,
     actions: Actions,
-  ): Effect.Effect<void, Refusal<Actions[number]> | StorageUnavailable> =>
-    Effect.gen(function* () {
-      // SAFETY: each action's refusal fails with the error it declares, and `Refusal` is the union
-      // of those; the tuple's element type only loses which action declares which.
-      const declared = actions as ReadonlyArray<Action<Refusal<Actions[number]>>>;
+  ): Effect.fn.Return<void, Refusal<Actions[number]> | StorageUnavailable> {
+    // SAFETY: each action's refusal fails with the error it declares, and `Refusal` is the union
+    // of those; the tuple's element type only loses which action declares which.
+    const declared = actions as ReadonlyArray<Action<Refusal<Actions[number]>>>;
 
-      const cancelled = yield* tokens.pipe(
-        Effect.flatMap((token) =>
-          operations.transactWriteItems({
-            TransactItems: declared.map(withoutRefusal),
-            ClientRequestToken: token,
-          }),
+    const cancelled = yield* tokens.pipe(
+      Effect.flatMap((token) =>
+        operations.transactWriteItems({
+          TransactItems: declared.map(withoutRefusal),
+          ClientRequestToken: token,
+        }),
+      ),
+      Effect.retry({ schedule: conflictRetry, while: isConflictCancellation }),
+      Effect.as(undefined),
+      Effect.catchTag("TransactionCanceledException", (failure) =>
+        decodeReasons(failure.CancellationReasons).pipe(
+          corrupt(operation),
+          Effect.filterOrFail(onlyConditionsFailed, () => failure),
         ),
-        Effect.retry({ schedule: conflictRetry, while: isConflictCancellation }),
-        Effect.as(undefined),
-        Effect.catchTag("TransactionCanceledException", (failure) =>
-          decodeReasons(failure.CancellationReasons).pipe(
-            corrupt(operation),
-            Effect.filterOrFail(onlyConditionsFailed, () => failure),
-          ),
-        ),
-        Effect.timeout(operationTimeout),
-        Effect.mapError(storageUnavailable(operation)),
-      );
+      ),
+      Effect.timeout(operationTimeout),
+      Effect.mapError(storageUnavailable(operation)),
+    );
 
-      if (cancelled === undefined) {
-        return;
+    if (cancelled === undefined) {
+      return;
+    }
+
+    for (const [index, reason] of cancelled.entries()) {
+      const refused = declared[index]?.refused;
+
+      if (reason.Code === conditionalCheckFailed && refused !== undefined) {
+        return yield* refused(reason.Item);
       }
+    }
 
-      for (const [index, reason] of cancelled.entries()) {
-        const refused = declared[index]?.refused;
-
-        if (reason.Code === conditionalCheckFailed && refused !== undefined) {
-          return yield* refused(reason.Item);
-        }
-      }
-
-      return yield* Effect.die(new UnexpectedCondition({ operation }));
-    });
+    return yield* Effect.die(new UnexpectedCondition({ operation }));
+  });
 
   return { transact } as const;
 };
