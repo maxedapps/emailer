@@ -119,6 +119,9 @@ const record = {
 const notExercised = (operation: string) => () =>
   Effect.die(new Error(`${operation} is not exercised by this test`));
 
+/** Only sign-ups read the recent allowance; every other sender must read the current one. */
+const recentNotRead = Effect.die(new Error("SendGuard.recent is not exercised by this test"));
+
 /** Answers `value` and records the arguments of every call. */
 const recording =
   <A>(calls: Array<ReadonlyArray<unknown>>, value: A) =>
@@ -165,6 +168,7 @@ const servicesFor = (stubs: Stubs) =>
     Layer.succeed(SendGuard)(
       stubs.guard ?? {
         current: Effect.die(new Error("SendGuard.current is not exercised by this test")),
+        recent: recentNotRead,
         slot: notExercised("SendGuard.slot"),
       },
     ),
@@ -500,6 +504,7 @@ describe("campaigns", () => {
         campaigns: { getCampaign: () => Effect.succeed(campaign) },
         guard: {
           current: Effect.succeed({ limit: 14 }),
+          recent: recentNotRead,
           slot: () => Effect.succeed(Duration.zero),
         },
         mailer: {
@@ -758,7 +763,11 @@ describe("subscriptions", () => {
       subscriptionState: () => Effect.succeed(state),
       requestSubscription,
     },
-    guard: { current: Effect.succeed({ limit: 14 }), slot: () => Effect.succeed(Duration.zero) },
+    guard: {
+      current: Effect.die(new Error("A sign-up reads the recent allowance, not the current one")),
+      recent: Effect.succeed({ limit: 14 }),
+      slot: () => Effect.succeed(Duration.zero),
+    },
     mailer: { send: () => Effect.succeed("message-1") },
   });
 
@@ -965,6 +974,7 @@ describe("public errors", () => {
         campaigns: { getCampaign: () => Effect.succeed(campaign) },
         guard: {
           current: Effect.succeed({ limit: 14, refusal: "reputation" as const }),
+          recent: recentNotRead,
           slot: notExercised("SendGuard.slot"),
         },
       },
@@ -1058,6 +1068,7 @@ describe("failure reporting", () => {
           current: Effect.fail(
             new Errors.AlarmsUnavailable({ operation: "describeAlarms", ...unavailable }),
           ),
+          recent: recentNotRead,
           slot: notExercised("SendGuard.slot"),
         },
       },

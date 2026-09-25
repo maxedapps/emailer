@@ -292,6 +292,7 @@ const guardDouble = (
 
   const layer = Layer.succeed(SendGuard)({
     current: Effect.succeed(allowance),
+    recent: Effect.die(new Error("Only sign-ups read the recent allowance")),
     slot: (limit) =>
       Effect.sync(() => {
         slots.push(limit);

@@ -35,8 +35,8 @@ const confirmationLink = (
 };
 
 /**
- * Stores the pending sign-up and mails its link. The guard is asked first, so a paused account
- * writes nothing. SES refusing the mail after the write blocks a new one for an hour, which ADR-0027
+ * Stores the pending sign-up and mails its link. The guard's recent allowance is asked first, so a
+ * paused account writes nothing. SES refusing the mail after the write blocks a new one for an hour, which ADR-0027
  * accepts; a submission whose outcome is unknown may have gone out, so it counts as sent.
  */
 const requestConfirmation = Effect.fn("Subscriptions.requestConfirmation")(function* (
@@ -47,7 +47,7 @@ const requestConfirmation = Effect.fn("Subscriptions.requestConfirmation")(funct
   const audience = yield* AudienceStore;
   const guard = yield* SendGuard;
   const mailer = yield* Mailer;
-  const allowance = yield* guard.current;
+  const allowance = yield* guard.recent;
 
   if (allowance.refusal !== undefined) {
     return yield* new SendingPaused({ reason: allowance.refusal });

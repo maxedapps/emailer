@@ -124,6 +124,7 @@ const fixture = (scenario: Scenario = {}) => {
     }),
     Layer.succeed(SendGuard)({
       current: Effect.succeed(scenario.allowance ?? healthy),
+      recent: Effect.die(new Error("Only sign-ups read the recent allowance")),
       slot: (limit) =>
         Effect.sync(() => {
           slots.push(limit);

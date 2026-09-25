@@ -10,13 +10,12 @@ import { createHash } from "node:crypto";
 
 import { confirm, subscribe } from "./Subscriptions.ts";
 import { Mail, Mailer, SendRejected, SubmissionUncertain } from "../sending/Mailer.ts";
-import { SendGuard } from "../sending/SendGuard.ts";
+import { recentAllowance, SendGuard } from "../sending/SendGuard.ts";
 import { AudienceStore } from "../storage/Audience.ts";
 import { SubscriptionState } from "../storage/Subscriptions.ts";
 import { unusedAudience } from "../storage/Testing.ts";
 
 import type { SendError } from "../sending/Mailer.ts";
-import type { SendAllowance } from "../sending/SendGuard.ts";
 import type { SubscriptionConfirmation, SubscriptionRequest } from "../storage/Subscriptions.ts";
 
 const listId = "0195f0a0-1111-4222-8333-44444444109e";
@@ -37,7 +36,7 @@ const payload: Schemas.SubscribePayload = {
 
 interface Scenario {
   readonly state?: SubscriptionState;
-  readonly allowance?: SendAllowance;
+  readonly recent?: SendGuard["Service"]["recent"];
   readonly sendFailure?: SendError;
   readonly listMissing?: boolean;
 }
@@ -89,7 +88,8 @@ const fixture = (scenario: Scenario = {}) => {
         }),
     }),
     Layer.succeed(SendGuard)({
-      current: Effect.succeed(scenario.allowance ?? { limit: 3 }),
+      current: Effect.die(new Error("A sign-up reads the recent allowance, not the current one")),
+      recent: scenario.recent ?? Effect.succeed({ limit: 3 }),
       slot: () => Effect.succeed(Duration.zero),
     }),
     Layer.succeed(Mailer)({
@@ -178,6 +178,36 @@ describe("subscribe", () => {
     }),
   );
 
+  it.effect("reads the send guard once for sign-ups within 30 seconds, and again after", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(now);
+
+      let reads = 0;
+
+      // Built once, as the API instance builds it; each sign-up gets its own store for the hour rule.
+      const recent = yield* recentAllowance(
+        Effect.sync(() => {
+          reads += 1;
+
+          return { limit: 3 };
+        }),
+      );
+
+      const signUp = () => signingUp(fixture({ recent }));
+
+      yield* signUp();
+      yield* TestClock.adjust("29 seconds");
+      yield* signUp();
+
+      expect(reads).toBe(1);
+
+      yield* TestClock.adjust("1 second");
+      yield* signUp();
+
+      expect(reads).toBe(2);
+    }),
+  );
+
   it.effect("answers an address already on the list with 200 and mails nothing", () =>
     Effect.gen(function* () {
       const fix = fixture({ state: SubscriptionState.Subscribed() });
@@ -204,7 +234,7 @@ describe("subscribe", () => {
     ],
     [
       "a paused account",
-      { allowance: { limit: 3, refusal: "reputation" } },
+      { recent: Effect.succeed({ limit: 3, refusal: "reputation" as const }) },
       payload,
       new Errors.SendingPaused({ reason: "reputation" }),
     ],
