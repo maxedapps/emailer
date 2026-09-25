@@ -1,7 +1,8 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Errors from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
-import { ConfigProvider, Duration, Effect, Layer, Result } from "effect";
+import { Clock, ConfigProvider, Duration, Effect, Fiber, Layer, Result } from "effect";
+import { TestClock } from "effect/testing";
 
 import { sendTest } from "./TestSends.ts";
 import { unsubscribeLink } from "../consent/Unsubscribe.ts";
@@ -59,6 +60,8 @@ interface Scenario {
   readonly members?: ReadonlyArray<Schemas.Contact>;
   readonly nextCursor?: string;
   readonly listMissing?: boolean;
+  /** How long each pacing slot asks the sender to wait. */
+  readonly slotDelay?: Duration.Duration;
 }
 
 interface Sent {
@@ -70,6 +73,7 @@ interface Sent {
 
 const fixture = (scenario: Scenario = {}) => {
   const sent: Array<Sent> = [];
+  const sentAt: Array<number> = [];
   const slots: Array<number> = [];
   const pageRequests: Array<number> = [];
   const failures = [...(scenario.failures ?? [])];
@@ -102,14 +106,13 @@ const fixture = (scenario: Scenario = {}) => {
     }),
     Layer.succeed(Mailer)({
       send: (recipient, content, unsubscribeUrl, purpose) =>
-        Effect.suspend(() => {
+        Effect.gen(function* () {
           sent.push({ recipient, content, unsubscribeUrl, purpose });
+          sentAt.push(yield* Clock.currentTimeMillis);
 
           const failure = failures.shift();
 
-          return failure === undefined
-            ? Effect.succeed(`message-${sent.length}`)
-            : Effect.fail(failure);
+          return failure === undefined ? `message-${sent.length}` : yield* failure;
         }),
     }),
     Layer.succeed(SendGuard)({
@@ -118,12 +121,12 @@ const fixture = (scenario: Scenario = {}) => {
         Effect.sync(() => {
           slots.push(limit);
 
-          return Duration.zero;
+          return scenario.slotDelay ?? Duration.zero;
         }),
     }),
   );
 
-  return { layer, sent, slots, pageRequests };
+  return { layer, sent, sentAt, slots, pageRequests };
 };
 
 const run = (fix: ReturnType<typeof fixture>, payload: Schemas.TestSendPayload) =>
@@ -168,6 +171,19 @@ describe("sendTest", () => {
         );
         expect(fix.slots).toStrictEqual([healthy.limit, healthy.limit]);
       }),
+  );
+
+  it.effect("sends each address only once its pacing slot's delay has passed", () =>
+    Effect.gen(function* () {
+      const fix = fixture({ slotDelay: Duration.millis(500) });
+      const started = yield* Clock.currentTimeMillis;
+      const sending = yield* Effect.forkChild(run(fix, { to: ["a@example.com", "b@example.com"] }));
+
+      yield* TestClock.adjust("2 seconds");
+
+      expect(Result.isSuccess(yield* Fiber.join(sending))).toBe(true);
+      expect(fix.sentAt.map((at) => at - started)).toStrictEqual([500, 1000]);
+    }),
   );
 
   it.effect("skips addresses that are not mailable, without taking a slot", () =>

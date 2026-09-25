@@ -259,7 +259,14 @@ Status: Done. As built: 213 tests became 183. Candidates kept after checking the
 
 ### T10 — Backend domain tests
 
-Status: Not started
+Status: Done. As built:
+
+- 355 tests became 314, with the six additions.
+- **Pacing:** the tests record the clock at each send and expect 500 ms and 1,000 ms.
+- **Submission timeout:** the test waits until the hanging transport holds the request before it moves the clock, because signing is real asynchronous work.
+- **Wall clock no longer leaks:** building `Api.test.ts`'s handler inside the test's scope exposed a wall-clock dependency, so its `SendAtNotInFuture` row now uses the epoch.
+- **Kept after checking:** `Api.test.ts`'s error tables (the 404/409/`SendingPaused` rows and the 503 rows). Each row is the only check that its error class is ignored or logs its declared attributes.
+- **The fake store:** `Campaigns.test.ts`'s fake became recording stubs, and 70 tests became 50.
 
 **Where:** `apps/backend/src/{api,audience,campaigns,consent,feedback,identity,sending}/*.test.ts`, `Reporting.test.ts` and `SignedToken.test.ts`.
 

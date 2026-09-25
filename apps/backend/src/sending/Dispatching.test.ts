@@ -20,13 +20,7 @@ import { TestClock } from "effect/testing";
 import { unsubscribeLink } from "../consent/Unsubscribe.ts";
 import { memberPageSize, runSlice, SliceOverrun } from "./Dispatching.ts";
 import { CampaignWake } from "./Dispatch.ts";
-import {
-  Mailer,
-  SendingSuspended,
-  SendRejected,
-  SendThrottled,
-  SubmissionUncertain,
-} from "./Mailer.ts";
+import { Mailer, SendingSuspended, SendThrottled, SubmissionUncertain } from "./Mailer.ts";
 import { SendGuard } from "./SendGuard.ts";
 import { AudienceStore } from "../storage/Audience.ts";
 import { CampaignStore, RunSuperseded, SettlementNotApplied } from "../storage/Campaigns.ts";
@@ -315,6 +309,8 @@ interface SentMessage extends MessageContent {
 interface MailerDouble {
   readonly layer: Layer.Layer<Mailer>;
   readonly sent: Array<SentMessage>;
+  /** The clock's time at each send, in milliseconds. */
+  readonly sentAt: Array<number>;
 }
 
 /** SES's answer to a send: the message ID it accepted under, or the error it failed with. */
@@ -322,20 +318,22 @@ type Answer = string | SendError;
 
 const mailerDouble = (answers: ReadonlyArray<Answer> = []): MailerDouble => {
   const sent: Array<SentMessage> = [];
+  const sentAt: Array<number> = [];
   const remaining = [...answers];
 
   const layer = Layer.succeed(Mailer)({
     send: (recipient, content, unsubscribeUrl, purpose) =>
-      Effect.suspend(() => {
+      Effect.gen(function* () {
         sent.push({ recipient, ...content, unsubscribeUrl, purpose });
+        sentAt.push(yield* Clock.currentTimeMillis);
 
         const answer = remaining.shift() ?? "ses-message";
 
-        return Predicate.isString(answer) ? Effect.succeed(answer) : Effect.fail(answer);
+        return Predicate.isString(answer) ? answer : yield* answer;
       }),
   });
 
-  return { layer, sent };
+  return { layer, sent, sentAt };
 };
 
 interface WakeDouble {
@@ -524,6 +522,18 @@ describe("runSlice", () => {
         expect(fix.world.checkpoints).toMatchObject([{ previous: undefined, next: memberC.id }]);
         expect(fix.wake.messages).toStrictEqual([{ campaignId, runToken }]);
         expect(fix.world.completed).toBe(0);
+
+        // Each send goes out as the campaign, under the send id of the row it claimed, with the
+        // recipient's own unsubscribe link.
+        expect(fix.mailer.sent.map((message) => message.purpose)).toStrictEqual([
+          { kind: "campaign", campaignId, sendId: fix.world.rows.get(memberA.id)?.sendId },
+          { kind: "campaign", campaignId, sendId: fix.world.rows.get(memberB.id)?.sendId },
+        ]);
+        expect(fix.mailer.sent[0]?.unsubscribeUrl).toBe(
+          yield* unsubscribeLink(memberA.email).pipe(
+            Effect.provide(configurationOf(unsubscribeEnv)),
+          ),
+        );
       }),
   );
 
@@ -540,19 +550,20 @@ describe("runSlice", () => {
     }),
   );
 
-  it.effect("sends as the campaign, under the send id of the row it claimed", () =>
+  it.effect("sends each member only once its pacing slot's delay has passed", () =>
     Effect.gen(function* () {
-      const fix = fixture({ members: [memberA] });
+      const fix = fixture({
+        members: [memberA, memberB],
+        delays: [Duration.millis(500), Duration.millis(500)],
+      });
 
-      successOf(yield* runSliceNow(fix));
+      const started = yield* Clock.currentTimeMillis;
+      const slice = yield* Effect.forkChild(runSliceNow(fix));
 
-      expect(fix.mailer.sent.map((message) => message.purpose)).toStrictEqual([
-        { kind: "campaign", campaignId, sendId: fix.world.rows.get(memberA.id)?.sendId },
-      ]);
-      expect(fix.mailer.sent[0]?.subject).toBe(subject);
-      expect(fix.mailer.sent[0]?.unsubscribeUrl).toBe(
-        yield* unsubscribeLink(memberA.email).pipe(Effect.provide(configurationOf(unsubscribeEnv))),
-      );
+      yield* TestClock.adjust("2 seconds");
+
+      successOf(yield* Fiber.join(slice));
+      expect(fix.mailer.sentAt.map((at) => at - started)).toStrictEqual([500, 1000]);
     }),
   );
 
@@ -569,13 +580,14 @@ describe("runSlice", () => {
     }),
   );
 
-  it.effect("skips unsubscribed and suppressed members", () =>
+  it.effect("skips unsubscribed, suppressed and bouncing members without claiming them", () =>
     Effect.gen(function* () {
       const fix = fixture({
         members: [memberA, memberB, memberC],
         statuses: [
           [memberA.email, "unsubscribed"],
           [memberB.email, "suppressed"],
+          [memberC.email, "bouncing"],
         ],
       });
 
@@ -584,10 +596,11 @@ describe("runSlice", () => {
       expect(fix.world.skips).toStrictEqual([
         { contactId: memberA.id, reason: "unsubscribed" },
         { contactId: memberB.id, reason: "suppressed" },
+        { contactId: memberC.id, reason: "bouncing" },
       ]);
-      expect(fix.world.counters.skipped).toBe(2);
-      expect(fix.world.counters.accepted).toBe(1);
-      expect(fix.mailer.sent).toHaveLength(1);
+      expect(fix.world.counters.skipped).toBe(3);
+      expect(fix.world.claims).toHaveLength(0);
+      expect(fix.mailer.sent).toHaveLength(0);
       expect(fix.world.completed).toBe(1);
     }),
   );
@@ -904,6 +917,12 @@ describe("runSlice", () => {
     },
     { counts: "200 accepted with 9 bounced", run: { accepted: 200, bounced: 9, complained: 0 } },
     { counts: "999 accepted with 1 complaint", run: { accepted: 999, bounced: 0, complained: 1 } },
+    // Below the ratios with more than the minimum samples: the breaker compares rates, not counts.
+    { counts: "400 accepted with 19 bounced", run: { accepted: 400, bounced: 19, complained: 0 } },
+    {
+      counts: "2000 accepted with 1 complaint",
+      run: { accepted: 2000, bounced: 0, complained: 1 },
+    },
   ])("does not trip the breaker at $counts", ({ run }) =>
     Effect.gen(function* () {
       const fix = fixture({ run });
@@ -925,38 +944,6 @@ describe("runSlice", () => {
       expect(fix.world.completed).toBe(1);
       expect(fix.world.claims).toHaveLength(0);
       expect(fix.wake.messages).toHaveLength(0);
-    }),
-  );
-
-  it.effect("takes one pacing slot per attempt with the run's limit", () =>
-    Effect.gen(function* () {
-      const fix = fixture({
-        members: [memberA, memberB],
-        guard: { limit: 3 },
-        answers: [new SendRejected({ code: "message-rejected" }), "ses-message"],
-      });
-
-      successOf(yield* runSliceNow(fix));
-
-      expect(fix.guard.slots).toStrictEqual([3, 3]);
-      expect(fix.world.counters.rejected).toBe(1);
-      expect(fix.world.counters.accepted).toBe(1);
-    }),
-  );
-
-  it.effect("skips bouncing members", () =>
-    Effect.gen(function* () {
-      const fix = fixture({
-        members: [memberA],
-        statuses: [[memberA.email, "bouncing"]],
-      });
-
-      successOf(yield* runSliceNow(fix));
-
-      expect(fix.world.skips).toStrictEqual([{ contactId: memberA.id, reason: "bouncing" }]);
-      expect(fix.world.claims).toHaveLength(0);
-      expect(fix.mailer.sent).toHaveLength(0);
-      expect(fix.world.completed).toBe(1);
     }),
   );
 

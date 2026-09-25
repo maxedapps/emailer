@@ -40,28 +40,7 @@ const signIndependently = (key: string, payload: string): string => {
   return `${signed}.${createHmac("sha256", key).update(signed).digest("hex")}`;
 };
 
-// Links already sit in delivered mail, so the format is frozen: this literal must never change.
-const goldenToken =
-  "v1.cmVjaXBpZW50QGV4YW1wbGUuY29t.051454aaab35bc94e7d5bfbe7438617a78c802ee64b584ff42af318ef228a44b";
-
 describe("unsubscribe tokens", () => {
-  it.effect("mints and verifies the frozen token format byte for byte", () =>
-    Effect.gen(function* () {
-      const signingKey = yield* signingKeyFor(secret);
-
-      expect(mintToken(signingKey, email)).toBe(goldenToken);
-      expect(verifyToken(signingKey, goldenToken)).toStrictEqual(Option.some(mailbox));
-    }),
-  );
-
-  it.effect("matches an independently computed HMAC over the versioned payload", () =>
-    Effect.gen(function* () {
-      const signingKey = yield* signingKeyFor(secret);
-
-      expect(mintToken(signingKey, email)).toBe(signIndependently(secret, encode(mailbox)));
-    }),
-  );
-
   // Links already sit in inboxes, so the exact bytes a key and an address mint are a contract. The
   // twenty-byte address does not end on a base64 group, which pins the encoding as unpadded.
   it.effect.each([
@@ -84,16 +63,6 @@ describe("unsubscribe tokens", () => {
         expect(mintToken(signingKey, address)).toBe(token);
         expect(verifyToken(signingKey, token)).toStrictEqual(Option.some(expected));
       }),
-  );
-
-  it.effect("verifies a token it minted and yields the mailbox back", () =>
-    Effect.gen(function* () {
-      const signingKey = yield* signingKeyFor(secret);
-
-      expect(verifyToken(signingKey, mintToken(signingKey, email))).toStrictEqual(
-        Option.some(mailbox),
-      );
-    }),
   );
 
   it.effect("canonicalizes the address before signing, so one mailbox has one token", () =>

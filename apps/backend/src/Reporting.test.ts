@@ -171,22 +171,4 @@ describe("the HTTP functions' boundary", () => {
       expect(lines).toHaveLength(1);
     }).pipe(Effect.scoped),
   );
-
-  it.effect("keeps the router's 404 for an unknown path and reports nothing", () =>
-    Effect.gen(function* () {
-      const { status, lines } = yield* statusOf("/unknown");
-
-      expect(status).toBe(404);
-      expect(lines).toStrictEqual([]);
-    }).pipe(Effect.scoped),
-  );
-
-  it.effect("leaves a success alone", () =>
-    Effect.gen(function* () {
-      const { status, lines } = yield* statusOf("/fine");
-
-      expect(status).toBe(200);
-      expect(lines).toStrictEqual([]);
-    }).pipe(Effect.scoped),
-  );
 });

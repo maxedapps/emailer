@@ -2,7 +2,8 @@ import type * as sesv2 from "@distilled.cloud/aws/sesv2";
 import { describe, expect, it } from "@effect/vitest";
 import * as AWS from "alchemy/AWS";
 import { fromCredentials } from "alchemy/AWS/Credentials";
-import { Effect, Layer, Logger, Redacted, Schema } from "effect";
+import { Effect, Fiber, Layer, Logger, Redacted, Schema } from "effect";
+import { TestClock } from "effect/testing";
 import { FetchHttpClient } from "effect/unstable/http";
 
 import { mintToken } from "../consent/Unsubscribe.ts";
@@ -11,6 +12,7 @@ import {
   SendingSuspended,
   SendRejected,
   SendThrottled,
+  submissionTimeout,
   SubmissionUncertain,
 } from "./Mailer.ts";
 import { footerFor, htmlFooterFor } from "./Message.ts";
@@ -43,6 +45,25 @@ const transportReplying = (respond: (attempt: number) => Response): Transport =>
   };
 
   return { fetch: fetchStub, sent };
+};
+
+/** A transport that takes the request and never answers it; `arrived` settles once it has it. */
+const transportHanging = (): Transport & { readonly arrived: Promise<void> } => {
+  const sent: Array<SentRequest> = [];
+  const arrival = Promise.withResolvers<void>();
+
+  const fetchStub: typeof globalThis.fetch = (input, init) => {
+    const request = new Request(input, init);
+
+    return request.text().then((body) => {
+      sent.push({ url: request.url, method: request.method, body });
+      arrival.resolve();
+
+      return Promise.withResolvers<Response>().promise;
+    });
+  };
+
+  return { fetch: fetchStub, sent, arrived: arrival.promise };
 };
 
 const awsJson = (status: number, body: string, errorType?: string) =>
@@ -211,18 +232,6 @@ describe("makeSend", () => {
     }),
   );
 
-  it.effect("performs no HTTP call while the binding is being constructed", () =>
-    Effect.gen(function* () {
-      const transport = transportReplying(() => awsJson(200, acceptedBody));
-
-      yield* AWS.SES.SendEmail(identity, configurationSet).pipe(
-        Effect.provide(sendEmailLayer(transport)),
-      );
-
-      expect(transport.sent).toHaveLength(0);
-    }),
-  );
-
   it.effect.each([
     {
       answer: "a retryable throttle",
@@ -261,39 +270,6 @@ describe("makeSend", () => {
       }),
   );
 
-  // Live: Distilled's default retry backs off on the clock, so the retries this case counts
-  // happen only as real time passes within its two-second bound.
-  it.live("would retry the same answer without the operation-local policy", () =>
-    Effect.gen(function* () {
-      const transport = transportReplying(() =>
-        awsJson(429, JSON.stringify({ message: "rate exceeded" }), "TooManyRequestsException"),
-      );
-
-      yield* Effect.gen(function* () {
-        const send = yield* AWS.SES.SendEmail(identity, configurationSet);
-
-        return yield* send({
-          Destination: { ToAddresses: ["sam@example.com"] },
-          Content: { Simple: { Subject: { Data: "x" }, Body: { Text: { Data: "y" } } } },
-        });
-      }).pipe(Effect.provide(sendEmailLayer(transport)), Effect.timeout("2 seconds"), Effect.exit);
-
-      expect(transport.sent.length).toBeGreaterThan(1);
-    }),
-  );
-
-  it.effect("keeps an opaque server error uncertain rather than calling it a rejection", () =>
-    Effect.gen(function* () {
-      const transport = transportReplying(() =>
-        awsJson(500, JSON.stringify({ message: "we broke" })),
-      );
-
-      expect(yield* Effect.flip(sending(transport))).toStrictEqual(
-        new SubmissionUncertain({ reason: "transport" }),
-      );
-    }),
-  );
-
   it.effect("keeps a lost connection uncertain", () =>
     Effect.gen(function* () {
       const transport = transportReplying(() => {
@@ -310,6 +286,27 @@ describe("makeSend", () => {
       expect(messages).toMatchObject([["submission uncertain", { reason: "transport" }]]);
       expect(transport.sent).toHaveLength(1);
     }),
+  );
+
+  // A send that is never answered may still have gone out, so it must end uncertain rather than
+  // throttled: a throttle is retried, and a retry would mail the recipient twice.
+  it.effect(
+    "gives up on an unanswered send at the submission timeout, uncertain, after one attempt",
+    () =>
+      Effect.gen(function* () {
+        const transport = transportHanging();
+
+        const running = yield* Effect.forkChild(Effect.flip(sending(transport)));
+
+        // Signing is real asynchronous work, so the clock moves only once SES has the request.
+        yield* Effect.promise(() => transport.arrived);
+        yield* TestClock.adjust(submissionTimeout);
+
+        expect(yield* Fiber.join(running)).toStrictEqual(
+          new SubmissionUncertain({ reason: "timeout" }),
+        );
+        expect(transport.sent).toHaveLength(1);
+      }),
   );
 
   it.effect("keeps an acceptance without a MessageId uncertain", () =>

@@ -54,8 +54,8 @@ describe("compose", () => {
   });
 
   it("inserts the HTML footer before the last closing body tag only", () => {
-    expect(composedHtml("<p>&lt;/body&gt; is text</p><body></body>")).toBe(
-      `<p>&lt;/body&gt; is text</p><body>${footer}</body>`,
+    expect(composedHtml("<body><p>One</p></body><body><p>Two</p></body>")).toBe(
+      `<body><p>One</p></body><body><p>Two</p>${footer}</body>`,
     );
   });
 

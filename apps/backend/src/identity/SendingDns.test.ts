@@ -141,14 +141,6 @@ describe("dnsSettings", () => {
     }),
   );
 
-  it.effect("rejects a provider it does not support", () =>
-    Effect.gen(function* () {
-      const exit = yield* settingsFrom({ EMAILER_DNS: "godaddy" });
-
-      expect(Exit.isFailure(exit)).toBe(true);
-    }),
-  );
-
   it.effect("dies when a DMARC report address is set without a mode that would publish it", () =>
     Effect.gen(function* () {
       const exit = yield* settingsFrom({ EMAILER_DMARC_REPORT_EMAIL: "dmarc@example.com" });

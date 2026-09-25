@@ -487,31 +487,4 @@ describe("write outcomes and summary", () => {
       ]);
     }),
   );
-
-  it.effect.each([
-    ["Permanent", "General", "permanent-bounce"],
-    ["Permanent", "OnAccountSuppressionList", "suppression-echo"],
-    ["Permanent", "Suppressed", "suppression-echo"],
-    ["Transient", "MailboxFull", "transient-bounce"],
-  ] as const)("summarises a %s/%s bounce as %s", ([bounceType, bounceSubType, classification]) =>
-    Effect.gen(function* () {
-      const world = yield* run(bounceEvent(bounceType, bounceSubType));
-
-      expect(logsNamed(world, "feedback recorded")[0]?.message).toEqual([
-        "feedback recorded",
-        expect.objectContaining({ classification }),
-      ]);
-    }),
-  );
-
-  it.effect("summarises a complaint as a complaint", () =>
-    Effect.gen(function* () {
-      const world = yield* run(complaintEvent("abuse"));
-
-      expect(logsNamed(world, "feedback recorded")[0]?.message).toEqual([
-        "feedback recorded",
-        expect.objectContaining({ classification: "complaint" }),
-      ]);
-    }),
-  );
 });

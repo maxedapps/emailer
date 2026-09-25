@@ -1,7 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Errors from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
-import { Clock, ConfigProvider, Effect, Layer, Option, Redacted, Scope } from "effect";
+import { Clock, ConfigProvider, Effect, Layer, Option, Redacted } from "effect";
 import { HttpEffect } from "effect/unstable/http";
 
 import { footerFor } from "../sending/Message.ts";
@@ -44,16 +44,14 @@ const tokenFor = (id: string, offset = 3600, key = signingKey) =>
     mintPreviewToken(Redacted.make(key), id, expiresAt),
   );
 
-const pageFor = (stored: Schemas.Campaign | undefined, token: string, sender = settings) => {
+/** The page built inside the test's scope, as the deployed function builds it, asked for `token`. */
+const pageFor = Effect.fnUntraced(function* (
+  stored: Schemas.Campaign | undefined,
+  token: string,
+  sender: typeof settings = settings,
+) {
   const reads: Array<string> = [];
-  const scope = Scope.makeUnsafe();
-
-  const handle = Effect.runSync(
-    makePreviewHandler(sender).pipe(
-      Effect.provide(configuration),
-      Effect.provideService(Scope.Scope, scope),
-    ),
-  );
+  const handle = yield* makePreviewHandler(sender).pipe(Effect.provide(configuration));
 
   const handler = HttpEffect.toWebHandler(
     handle.pipe(
@@ -74,14 +72,12 @@ const pageFor = (stored: Schemas.Campaign | undefined, token: string, sender = s
     ),
   );
 
-  return Effect.gen(function* () {
-    const response = yield* Effect.promise(() =>
-      handler(new Request(`${baseUrl}/previews/${token}`)),
-    );
+  const response = yield* Effect.promise(() =>
+    handler(new Request(`${baseUrl}/previews/${token}`)),
+  );
 
-    return { response, body: yield* Effect.promise(() => response.text()), reads };
-  });
-};
+  return { response, body: yield* Effect.promise(() => response.text()), reads };
+});
 
 // Live throughout: the web handler runs on its own runtime and reads the real clock, so tokens are
 // minted against real time. On the test clock every token would arrive already expired.
@@ -159,15 +155,6 @@ describe("GET /previews/:token", () => {
       expect(response.status).toBe(404);
       expect(body).toContain("This preview link is not valid or has expired.");
       expect(response.headers.get("cache-control")).toBe("no-store");
-      expect(reads).toHaveLength(0);
-    }),
-  );
-
-  it.live("keeps the router's 404 for a path it does not serve", () =>
-    Effect.gen(function* () {
-      const { response, reads } = yield* pageFor(campaign, "not/a-token");
-
-      expect(response.status).toBe(404);
       expect(reads).toHaveLength(0);
     }),
   );
