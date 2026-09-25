@@ -108,7 +108,7 @@ Status: Done. As built:
 
 ### T4 — Import a file of any size, in parallel
 
-Status: Not started
+Status: Done. As built: the one-address-twice test was widened to 30 entries with the duplicate at positions 0 and 25, rather than adding a second test.
 
 - **Where:** `lists import` in `apps/cli/src/commands/Lists.ts`.
 - **Behaviour:**

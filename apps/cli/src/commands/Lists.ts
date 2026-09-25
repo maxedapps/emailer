@@ -1,5 +1,5 @@
 import * as Schemas from "@emailer/api/Schemas";
-import { Effect, FileSystem, Schema } from "effect";
+import { Array as Arr, Console, Effect, FileSystem, Schema } from "effect";
 import { CliError, Command, Flag } from "effect/unstable/cli";
 
 import { report, withClient } from "../Client.ts";
@@ -110,9 +110,20 @@ const listsRemoveContact = Command.make(
 ).pipe(Command.withDescription("Remove a contact from a list; repeating it changes nothing"));
 
 const decodeImportFile = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(Schemas.ImportContactsPayload),
+  Schema.fromJsonString(Schemas.ImportContactsFile),
   { onExcessProperty: "error" },
 );
+
+/**
+ * Calls in flight at once. One list's member items share a DynamoDB partition, which caps an import
+ * at about 200 contacts a second; eight calls reach that, and more only add throttled retries
+ * (ADR-0025).
+ */
+const importConcurrency = 8;
+
+const progressStep = 1_000;
+
+const count = (value: number) => value.toLocaleString("en-US");
 
 /**
  * Read and decoded here rather than through `Flag.FileSchema`, whose decode drops keys the contract
@@ -140,22 +151,53 @@ const importFile = Flag.File("file", { mustExist: true }).pipe(
   ),
 );
 
+/**
+ * A file of any size goes out in payloads of `maxImportEntries`, several at once. Each answer is the
+ * converged state of its batch, so the joined answers are the file's, in file order, and running
+ * the same file again — after a failure too — changes nothing it already did.
+ */
 const listsImport = Command.make(
   "import",
   { listId: idArgument("listId"), file: importFile },
   Effect.fn(function* (input) {
-    yield* report(
-      yield* withClient((client) =>
-        client.lists.import({ params: { listId: input.listId }, payload: input.file }),
+    const total = input.file.contacts.length;
+    let confirmed = 0;
+
+    const imported = yield* withClient(
+      (client) =>
+        Effect.forEach(
+          Arr.chunksOf(input.file.contacts, Schemas.maxImportEntries),
+          (contacts) =>
+            client.lists.import({ params: { listId: input.listId }, payload: { contacts } }).pipe(
+              Effect.tap(() => {
+                const before = confirmed;
+
+                confirmed += contacts.length;
+
+                return Math.floor(confirmed / progressStep) > Math.floor(before / progressStep)
+                  ? Console.error(`Imported ${count(confirmed)} of ${count(total)} contacts`)
+                  : Effect.void;
+              }),
+            ),
+          { concurrency: importConcurrency },
+        ),
+      { retryTransient: true },
+    ).pipe(
+      Effect.tapError(() =>
+        Console.error(
+          `Stopped after ${count(confirmed)} of ${count(total)} contacts were imported; running the same file again is safe`,
+        ),
       ),
     );
+
+    yield* report({ contacts: imported.flatMap((batch) => batch.contacts) });
   }),
 ).pipe(
-  Command.withDescription("Load a batch of contacts into a list"),
+  Command.withDescription("Load a file of contacts into a list, several batches at a time"),
   Command.withExamples([
     {
       command: "emailer lists import 0195f0a0-1111-4222-8333-44444444109e --file contacts.json",
-      description: "Load up to 20 contacts, reusing any that already hold their address",
+      description: "Load every contact in the file, reusing any that already hold their address",
     },
   ]),
 );
