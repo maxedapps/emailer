@@ -7,6 +7,7 @@ import { TestClock } from "effect/testing";
 import { sendTest } from "./TestSends.ts";
 import { unsubscribeLink } from "../consent/Unsubscribe.ts";
 import {
+  Mail,
   Mailer,
   SendingSuspended,
   SendRejected,
@@ -18,8 +19,7 @@ import { AudienceStore } from "../storage/Audience.ts";
 import { CampaignStore } from "../storage/Campaigns.ts";
 import { unusedAudience, unusedCampaigns } from "../storage/Testing.ts";
 
-import type { SendError, SendPurpose } from "../sending/Mailer.ts";
-import type { MessageContent } from "../sending/Message.ts";
+import type { SendError } from "../sending/Mailer.ts";
 import type { SendAllowance } from "../sending/SendGuard.ts";
 import type { MailboxStatus } from "@emailer/api/Schemas";
 
@@ -69,9 +69,7 @@ interface Scenario {
 
 interface Sent {
   readonly recipient: string;
-  readonly content: MessageContent;
-  readonly unsubscribeUrl: string;
-  readonly purpose: SendPurpose;
+  readonly mail: Mail;
 }
 
 const fixture = (scenario: Scenario = {}) => {
@@ -114,9 +112,9 @@ const fixture = (scenario: Scenario = {}) => {
         id === campaignId ? Effect.succeed(campaign) : Effect.fail(new Errors.CampaignNotFound()),
     }),
     Layer.succeed(Mailer)({
-      send: (recipient, content, unsubscribeUrl, purpose) =>
+      send: (recipient, mail) =>
         Effect.gen(function* () {
-          sent.push({ recipient, content, unsubscribeUrl, purpose });
+          sent.push({ recipient, mail });
           sentAt.push(yield* Clock.currentTimeMillis);
 
           const failure = failures.shift();
@@ -173,9 +171,14 @@ describe("sendTest", () => {
         expect(fix.sent).toStrictEqual(
           recipients.map((recipient, index) => ({
             recipient,
-            content: { subject: "[Test] Release notes", text: campaign.text, html: campaign.html },
-            unsubscribeUrl: links[index],
-            purpose: { kind: "test" },
+            mail: Mail.Test({
+              content: {
+                subject: "[Test] Release notes",
+                text: campaign.text,
+                html: campaign.html,
+              },
+              unsubscribeUrl: links[index] ?? "",
+            }),
           })),
         );
         expect(fix.slots).toStrictEqual([healthy.limit, healthy.limit]);
@@ -278,11 +281,11 @@ describe("sendTest", () => {
         { email: "member1@example.com", outcome: "skipped", reason: "unsubscribed" },
         { email: "member2@example.com", outcome: "accepted", messageId: "message-1" },
       ]);
-      expect(fix.sent[0]?.unsubscribeUrl).toBe(
-        yield* unsubscribeLink({ mailbox: "member2@example.com", listId }).pipe(
+      expect(fix.sent[0]?.mail).toMatchObject({
+        unsubscribeUrl: yield* unsubscribeLink({ mailbox: "member2@example.com", listId }).pipe(
           Effect.provide(configuration),
         ),
-      );
+      });
     }),
   );
 

@@ -8,6 +8,7 @@ import { FetchHttpClient } from "effect/unstable/http";
 
 import { mintToken } from "../consent/Unsubscribe.ts";
 import {
+  Mail,
   makeSend,
   SendingSuspended,
   SendRejected,
@@ -17,7 +18,6 @@ import {
 } from "./Mailer.ts";
 import { footerFor, htmlFooterFor } from "./Message.ts";
 
-import type { SendPurpose } from "./Mailer.ts";
 import type { MessageContent } from "./Message.ts";
 
 interface SentRequest {
@@ -127,26 +127,18 @@ const content: MessageContent = {
   html: undefined,
 };
 
-const campaignSend: SendPurpose = {
-  kind: "campaign",
-  campaignId: "0195f0a0-1111-4222-8333-4444444ca409",
-  sendId: "0195f0a0-1111-4222-8333-44444444e5d1",
-};
+const campaignId = "0195f0a0-1111-4222-8333-4444444ca409";
 
-const sending = (
-  transport: Transport,
-  sent: MessageContent = content,
-  purpose: SendPurpose = campaignSend,
-) =>
+const sendId = "0195f0a0-1111-4222-8333-44444444e5d1";
+
+const campaignMail = (sent: MessageContent = content) =>
+  Mail.Campaign({ content: sent, unsubscribeUrl, campaignId, sendId });
+
+const sending = (transport: Transport, mail: Mail = campaignMail()) =>
   Effect.gen(function* () {
     const send = yield* AWS.SES.SendEmail(identity, configurationSet);
 
-    return yield* makeSend(send, "news@example.com", postalAddress)(
-      recipient,
-      sent,
-      unsubscribeUrl,
-      purpose,
-    );
+    return yield* makeSend(send, "news@example.com", postalAddress)(recipient, mail);
   }).pipe(Effect.provide(sendEmailLayer(transport)));
 
 /** Captures what a send logs, which is the only place an uncertain outcome says why. */
@@ -177,8 +169,8 @@ const campaignRequest = (Body: sesv2.Body = { Text: textPart }) => ({
     },
   },
   EmailTags: [
-    { Name: "campaignId", Value: campaignSend.campaignId },
-    { Name: "sendId", Value: campaignSend.sendId },
+    { Name: "campaignId", Value: campaignId },
+    { Name: "sendId", Value: sendId },
   ],
   ConfigurationSetName: "emailer-mail",
 });
@@ -208,7 +200,9 @@ describe("makeSend", () => {
         const transport = transportReplying(() => awsJson(200, acceptedBody));
         const html = "<html><body><p>Hallo</p></body></html>";
 
-        expect(yield* sending(transport, { ...content, html })).toBe("0100018f-deadbeef");
+        expect(yield* sending(transport, campaignMail({ ...content, html }))).toBe(
+          "0100018f-deadbeef",
+        );
         expect(yield* parseJson(transport.sent[0]?.body ?? "{}")).toStrictEqual(
           campaignRequest({
             Text: textPart,
@@ -226,7 +220,7 @@ describe("makeSend", () => {
       const transport = transportReplying(() => awsJson(200, acceptedBody));
       const { EmailTags: _campaignTags, ...testRequest } = campaignRequest();
 
-      yield* sending(transport, content, { kind: "test" });
+      yield* sending(transport, Mail.Test({ content, unsubscribeUrl }));
 
       expect(yield* parseJson(transport.sent[0]?.body ?? "{}")).toStrictEqual(testRequest);
     }),
@@ -325,11 +319,11 @@ describe("makeSend", () => {
   );
 
   it.effect.each([
-    ["a campaign send", campaignSend],
-    ["a test send", { kind: "test" } satisfies SendPurpose],
+    ["a campaign send", campaignMail(), { mail: "Campaign", campaignId, sendId }],
+    ["a test send", Mail.Test({ content, unsubscribeUrl }), { mail: "Test" }],
   ] as const)(
-    "logs why %s ended uncertain, without the recipient's address, the body or credentials",
-    ([_label, purpose]) =>
+    "logs why %s ended uncertain, without the recipient's address, the body, the link or credentials",
+    ([_label, mail, logged]) =>
       Effect.gen(function* () {
         const transport = transportReplying(() =>
           awsJson(500, JSON.stringify({ message: `Unavailable while sending to ${recipient}` })),
@@ -337,14 +331,14 @@ describe("makeSend", () => {
 
         const messages: Array<unknown> = [];
 
-        const failure = yield* Effect.flip(sending(transport, content, purpose)).pipe(
+        const failure = yield* Effect.flip(sending(transport, mail)).pipe(
           Effect.provide(loggedTo(messages)),
         );
 
         expect(failure).toStrictEqual(new SubmissionUncertain({ reason: "transport" }));
         // Exact, so neither the address, the body nor a credential can be in it.
         expect(messages).toStrictEqual([
-          ["submission uncertain", { ...purpose, reason: "transport", cause: "InternalError" }],
+          ["submission uncertain", { ...logged, reason: "transport", cause: "InternalError" }],
         ]);
       }),
   );

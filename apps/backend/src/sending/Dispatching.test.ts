@@ -20,15 +20,14 @@ import { TestClock } from "effect/testing";
 import { unsubscribeLink } from "../consent/Unsubscribe.ts";
 import { memberPageSize, runSlice, SliceOverrun } from "./Dispatching.ts";
 import { CampaignWake } from "./Dispatch.ts";
-import { Mailer, SendingSuspended, SendThrottled, SubmissionUncertain } from "./Mailer.ts";
+import { Mail, Mailer, SendingSuspended, SendThrottled, SubmissionUncertain } from "./Mailer.ts";
 import { SendGuard } from "./SendGuard.ts";
 import { AudienceStore } from "../storage/Audience.ts";
 import { CampaignStore, RunSuperseded, SettlementNotApplied } from "../storage/Campaigns.ts";
 import { unusedAudience, unusedCampaigns } from "../storage/Testing.ts";
 
 import type { MailboxStatus, PauseReason, SkipReason } from "@emailer/api/Schemas";
-import type { SendError, SendPurpose } from "./Mailer.ts";
-import type { MessageContent } from "./Message.ts";
+import type { SendError } from "./Mailer.ts";
 import type { SendAllowance } from "./SendGuard.ts";
 import type { SubmissionOutcome } from "../storage/Campaigns.ts";
 
@@ -304,10 +303,9 @@ const guardDouble = (
   return { layer, slots };
 };
 
-interface SentMessage extends MessageContent {
+interface SentMessage {
   readonly recipient: string;
-  readonly unsubscribeUrl: string;
-  readonly purpose: SendPurpose;
+  readonly mail: Mail;
 }
 
 interface MailerDouble {
@@ -326,9 +324,9 @@ const mailerDouble = (answers: ReadonlyArray<Answer> = []): MailerDouble => {
   const remaining = [...answers];
 
   const layer = Layer.succeed(Mailer)({
-    send: (recipient, content, unsubscribeUrl, purpose) =>
+    send: (recipient, mail) =>
       Effect.gen(function* () {
-        sent.push({ recipient, ...content, unsubscribeUrl, purpose });
+        sent.push({ recipient, mail });
         sentAt.push(yield* Clock.currentTimeMillis);
 
         const answer = remaining.shift() ?? "ses-message";
@@ -531,15 +529,24 @@ describe("runSlice", () => {
 
         // Each send goes out as the campaign, under the send id of the row it claimed, with the
         // recipient's own unsubscribe link.
-        expect(fix.mailer.sent.map((message) => message.purpose)).toStrictEqual([
-          { kind: "campaign", campaignId, sendId: fix.world.rows.get(memberA.id)?.sendId },
-          { kind: "campaign", campaignId, sendId: fix.world.rows.get(memberB.id)?.sendId },
+        const campaignMail = (member: Schemas.Contact) =>
+          Effect.map(
+            unsubscribeLink({ mailbox: member.email, listId }).pipe(
+              Effect.provide(configurationOf(unsubscribeEnv)),
+            ),
+            (unsubscribeUrl) =>
+              Mail.Campaign({
+                content: { subject, text, html: undefined },
+                unsubscribeUrl,
+                campaignId,
+                sendId: fix.world.rows.get(member.id)?.sendId ?? "",
+              }),
+          );
+
+        expect(fix.mailer.sent.map((message) => message.mail)).toStrictEqual([
+          yield* campaignMail(memberA),
+          yield* campaignMail(memberB),
         ]);
-        expect(fix.mailer.sent[0]?.unsubscribeUrl).toBe(
-          yield* unsubscribeLink({ mailbox: memberA.email, listId }).pipe(
-            Effect.provide(configurationOf(unsubscribeEnv)),
-          ),
-        );
       }),
   );
 
@@ -552,7 +559,7 @@ describe("runSlice", () => {
 
       successOf(yield* runSliceNow(fix));
 
-      expect(fix.mailer.sent).toMatchObject([{ subject, text, html }]);
+      expect(fix.mailer.sent).toMatchObject([{ mail: { content: { subject, text, html } } }]);
     }),
   );
 

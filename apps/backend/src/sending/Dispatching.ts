@@ -4,14 +4,13 @@ import { Clock, Data, Duration, Effect, ErrorReporter, Predicate, Schedule } fro
 import { unsubscribeLink } from "../consent/Unsubscribe.ts";
 import { newIdentifier, nowIso } from "../Identifiers.ts";
 import { CampaignWake } from "./Dispatch.ts";
-import { accepted, failureOutcomes, Mailer, submissionTimeout } from "./Mailer.ts";
+import { accepted, failureOutcomes, Mail, Mailer, submissionTimeout } from "./Mailer.ts";
 import { SendGuard } from "./SendGuard.ts";
 import { AudienceStore } from "../storage/Audience.ts";
 import { CampaignStore } from "../storage/Campaigns.ts";
 import { operationTimeout } from "../storage/Items.ts";
 
 import type { DispatchMessage } from "./Dispatch.ts";
-import type { SendPurpose } from "./Mailer.ts";
 import type { MessageContent } from "./Message.ts";
 
 /**
@@ -234,8 +233,11 @@ const submitClaimed = Effect.fn("Dispatching.submitClaimed")(function* (input: {
   const mailer = yield* Mailer;
   const campaigns = yield* CampaignStore;
   const guards = yield* SendGuard;
-  const { recipient, content, campaignId, sendId, contactId, runToken, limit } = input;
-  const purpose: SendPurpose = { kind: "campaign", campaignId, sendId };
+
+  const { recipient, content, unsubscribeUrl, campaignId, sendId, contactId, runToken, limit } =
+    input;
+
+  const mail = Mail.Campaign({ content, unsubscribeUrl, campaignId, sendId });
 
   // One attempt waits for its pacing slot and sends. The first attempt's slot is the one already
   // checked against the time budget; a retry reserves its own once it has backed off.
@@ -244,7 +246,7 @@ const submitClaimed = Effect.fn("Dispatching.submitClaimed")(function* (input: {
 
     yield* Effect.sleep(attempt === 0 ? input.firstDelay : yield* guards.slot(limit));
 
-    return yield* mailer.send(recipient, content, input.unsubscribeUrl, purpose);
+    return yield* mailer.send(recipient, mail);
   });
 
   const settlement = yield* Effect.retry(sendOnce, throttleBackoff).pipe(

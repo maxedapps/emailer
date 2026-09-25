@@ -79,7 +79,7 @@ Status: Done
 
 ### T2 — One `Mail` tagged enum for the mailer
 
-Status: To do
+Status: Done
 
 - **Where:** `apps/backend/src/sending/Mailer.ts`.
 - **The type:** `Mail = Data.TaggedEnum<{ Campaign: { content, unsubscribeUrl, campaignId, sendId }; Test: { content, unsubscribeUrl } }>`. T6 adds `Confirmation`.
