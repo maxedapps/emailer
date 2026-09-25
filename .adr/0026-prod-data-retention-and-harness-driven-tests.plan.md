@@ -94,7 +94,7 @@ Status: Done. As built: `stacks/providers.ts` exports `awsProviders`. With it, t
 
 ### T4 — Drop the log-group ordering env var
 
-Status: Done in code; the live check runs in T15.
+Status: Done. As built: in T15 the harness-deployed stage had all five `/aws/lambda/emailer-<stage>-*` log groups at 7-day retention, and the destroy removed them.
 
 - **Where:** `lambdaBasics` in `apps/backend/src/Lambda.ts`, and `EMAILER_LOG_GROUP` in the props of the Api, Dispatcher, Feedback, Unsubscribe and Preview functions.
 - **Change:**
@@ -434,7 +434,7 @@ Status: Done. As built:
 
 ### T13 — Live suite through `Test.make`
 
-Status: Done in code; the live run is T15. As built:
+Status: Done; T15 ran it live. As built:
 
 - `dispatchFailuresQueueUrl` is not an output, because with the DLQ-count assertions gone nothing reads it.
 - Alchemy types a function's `functionUrl` as optional, so the entry file fails the run when the deployed stack lacks one rather than widening `Deployment`.
@@ -499,11 +499,11 @@ Status: Done. As built: a probe file still drew `anti-slop(no-reflect-get)` and 
 
 ### T15 — Live gate
 
-Status: Blocked, waiting on the user's call. Checked so far:
+Status: Done. As built, two runs:
 
 - The prod plans are done (see T3 and T5).
-- The harness deployed stage `test_max`, and all five log groups had 7-day retention.
-- The stage's `Api` create then failed with Lambda's "reserved keys … AWS_SESSION_TOKEN, AWS_REGION, AWS_ACCESS_KEY_ID". All 37 tests were skipped. `afterAll` destroyed the stage, and neither the account nor Alchemy's state holds anything for `test_max`.
+- **First run:** the harness deployed stage `test_max`, and all five log groups had 7-day retention.
+- The first run's `Api` create then failed with Lambda's "reserved keys … AWS_SESSION_TOKEN, AWS_REGION, AWS_ACCESS_KEY_ID". All 37 tests were skipped. `afterAll` destroyed the stage, and neither the account nor Alchemy's state holds anything for `test_max`.
 
 Cause, confirmed with a minimal reproduction on unmodified Alchemy beta.79:
 
@@ -513,6 +513,15 @@ Cause, confirmed with a minimal reproduction on unmodified Alchemy beta.79:
 - Under `Test.make`, that is the run's first evaluation, so the deployer's `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` and `AWS_REGION` are pinned into the function's env. Planning our stack through the harness, with a stop before apply, showed that only `Api` pins them, and only through `CampaignSchedule.layer`.
 - One function whose init binds `CreateSchedule`, deployed with the documented `Test.make` pattern, fails with the same Lambda error. The same stack's `alchemy plan --detailed` shows only the binding outputs in its env.
 - Reading `AWS.AWSEnvironment.current` in the stack body before yielding the function makes the harness deploy pass.
+- The user confirmed it as Alchemy's bug and approved the report, filed as [alchemy-run/alchemy#1842](https://github.com/alchemy-run/alchemy/issues/1842). `alchemy.run.ts` now reads the environment first, with a comment linking the issue; the line goes once it is fixed. The prod plan is unchanged by it.
+
+**Second run,** with the fix:
+
+- All 37 live tests pass. Deploy, tests and destroy took 11 minutes, with exported CLI credentials and `AWS_REGION`.
+- After the destroy, the account holds no function, table, log group, queue, schedule group, alarm, topic, role, configuration set or rule for `test_max` or `test-max`, and Alchemy's state holds only `Emailer/prod` and `EmailerSending`.
+- The suppression list holds no simulator addresses.
+- `.env.test` sets no `EMAILER_ALERT_EMAIL`, so the stage subscribed no inbox and sent no alert mail.
+- `ALCHEMY_TEST_STAGE=prod` fails before any deploy (checked in T13).
 
 ### T16 — Prod rollout
 
