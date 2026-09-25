@@ -62,7 +62,7 @@ Status: Done. As built: a removal-policy change is not a plan diff in beta.79. `
 
 ### T2 — Prod configuration in `.env.prod`
 
-Status: Not started
+Status: Done. As built: the README's "Configure" section also says why no plain `.env` may stay in the repository root.
 
 - **Where:**
   - `package.json`: `emailer` loads `--env-file-if-exists=.env.prod`;

@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "prepare": "effect-tsgo patch --oxlint",
-    "emailer": "node --env-file-if-exists=.env apps/cli/src/main.ts",
+    "emailer": "node --env-file-if-exists=.env.prod apps/cli/src/main.ts",
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",
     "lint": "oxlint .",

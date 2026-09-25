@@ -50,13 +50,13 @@ Do not skip lifecycle scripts. There is no build step: Node 24 runs the TypeScri
 ## First deployment at a glance
 
 1. Get SES production access in your Region.
-2. Fill in `.env` ([Configure](#configure)).
+2. Fill in `.env.prod` ([Configure](#configure)).
 3. Create the Alchemy profile and bootstrap the account ([One-time setup](#one-time-setup)).
 4. Set up the sending identity ([Sending identity](#sending-identity-once-per-account-and-region)):
    - without `EMAILER_DNS`, publish its MAIL FROM and DMARC records first;
    - deploy the identity stack, then publish its DKIM records if DNS is manual;
    - wait until SES reports it verified.
-5. Deploy the service and put `apiUrl` into `.env` ([Deploy the service](#deploy-the-service)).
+5. Deploy the service and put `apiUrl` into `.env.prod` ([Deploy the service](#deploy-the-service)).
 6. If you set `EMAILER_ALERT_EMAIL`, confirm the subscription mail it receives.
 7. Send your first campaign ([Your first campaign](#your-first-campaign)).
 
@@ -68,7 +68,9 @@ Nothing is manual outside the CLI when `EMAILER_DNS` manages your zone, except a
 
 ## Configure
 
-Copy `.env.example` to an untracked `.env` and fill it in. Alchemy reads the file you pass with `--env-file`, and the CLI reads `.env` (see [Use](#use)). Neither interpolates `$OTHER` inside it.
+Copy `.env.example` to an untracked `.env.prod` and fill it in. Alchemy reads the file you pass with `--env-file`, and the CLI reads `.env.prod` (see [Use](#use)). Neither interpolates `$OTHER` inside it.
+
+Do not keep a plain `.env` in the repository root. Alchemy's test harness reads `./.env` as a fallback for every key the test environment lacks, so its values would reach test deploys.
 
 | Variable                     | Required | Purpose                                                                                                                                                                                                                               |
 | ---------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -136,7 +138,7 @@ Publish MX, SPF and DMARC **before** the first deploy, so SES never finds the MA
 ### Deploy and verify
 
 ```sh
-pnpm exec alchemy deploy --config stacks/sending-identity.ts --stage shared --env-file .env --profile emailer --yes --no-input
+pnpm exec alchemy deploy --config stacks/sending-identity.ts --stage shared --env-file .env.prod --profile emailer --yes --no-input
 ```
 
 1. **Manual DNS only:** publish the three `CNAME`s from the stack output `dkimRecords` (`name` → `value`). Copy their target: the zone differs by Region and by identity.
@@ -166,8 +168,8 @@ pnpm exec alchemy deploy --config stacks/sending-identity.ts --stage shared --en
 The identity stack must already be deployed. Pick a durable `--stage` (for example `prod`). Omitting it falls back to `live_$USER`.
 
 ```sh
-pnpm exec alchemy plan   --config alchemy.run.ts --stage prod --env-file .env --profile emailer
-pnpm exec alchemy deploy --config alchemy.run.ts --stage prod --env-file .env --profile emailer --yes --no-input
+pnpm exec alchemy plan   --config alchemy.run.ts --stage prod --env-file .env.prod --profile emailer
+pnpm exec alchemy deploy --config alchemy.run.ts --stage prod --env-file .env.prod --profile emailer --yes --no-input
 ```
 
 Do not pass `--detailed`: it prints bound secrets, including `EMAILER_API_TOKEN` and the signing keys. Treat a secret you have printed as exposed and replace it.
@@ -183,7 +185,7 @@ The three Function URLs are public (`authType: NONE`): the API authorizes with t
 Outputs: `apiUrl`, `unsubscribeUrl`, `previewUrl`, `alertsTopicArn`. Put `apiUrl` in `EMAILER_API_URL`.
 
 ```sh
-pnpm exec alchemy destroy --config alchemy.run.ts --stage prod --env-file .env --profile emailer --yes --no-input
+pnpm exec alchemy destroy --config alchemy.run.ts --stage prod --env-file .env.prod --profile emailer --yes --no-input
 ```
 
 Destroying a stage deletes its resources and rotates the unsubscribe and preview keys, so every unsubscribe link already sent stops working. The sending identity and Alchemy bootstrap/state buckets stay.
@@ -192,7 +194,7 @@ Stage `prod` keeps its DynamoDB table when destroyed, because it holds every opt
 
 ## Use
 
-`pnpm emailer` runs the CLI with the `.env` in the repository root; variables already set in your shell take precedence. To use another file, run Node directly, e.g. `node --env-file=.env.test apps/cli/src/main.ts …`.
+`pnpm emailer` runs the CLI with the `.env.prod` in the repository root; variables already set in your shell take precedence. To use another file, run Node directly, e.g. `node --env-file=.env.test apps/cli/src/main.ts …`.
 
 ```sh
 pnpm emailer --help
@@ -437,7 +439,7 @@ The account suppression list survives `alchemy destroy`. A test run can leave `s
 
 The live integration suite runs against an ephemeral stage. Automated sends go only to SES mailbox-simulator addresses. One case temporarily disables the stage's dispatcher event-source mapping, so never point the suite at a real stage.
 
-1. Deploy a throwaway stage with `.env.test`, which holds the same deploy keys as `.env` (API token, sender identity, From address, postal address, Region) plus the test keys:
+1. Deploy a throwaway stage with `.env.test`, which holds the same deploy keys as `.env.prod` (API token, sender identity, From address, postal address, Region) plus the test keys:
 
    ```sh
    pnpm exec alchemy deploy --config alchemy.run.ts --stage test --env-file .env.test --profile emailer --yes --no-input
