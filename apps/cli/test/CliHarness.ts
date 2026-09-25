@@ -1,5 +1,5 @@
 import { NodeHttpServer, NodeServices } from "@effect/platform-node";
-import { AdminAuthorization, EmailerApi } from "@emailer/api/Api";
+import { AdminAuthorization, EmailerApi, SubscriptionAuthorization } from "@emailer/api/Api";
 import * as Errors from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
 import {
@@ -124,6 +124,15 @@ export const fakeService = (seed: Seed = {}) => {
         return credential === token ? httpEffect : Effect.fail(new Errors.Unauthorized());
       },
     }),
+  );
+
+  // The CLI holds the admin token, so it never reaches the sign-up endpoints.
+  const scopedKeys = Layer.succeed(SubscriptionAuthorization)(
+    SubscriptionAuthorization.of({ bearer: () => Effect.fail(new Errors.Unauthorized()) }),
+  );
+
+  const subscriptionsGroup = HttpApiBuilder.group(EmailerApi, "subscriptions", (handlers) =>
+    handlers.handleAll({ subscribe: unused("subscriptions.subscribe") }),
   );
 
   const contactsGroup = HttpApiBuilder.group(EmailerApi, "contacts", (handlers) =>
@@ -316,9 +325,16 @@ export const fakeService = (seed: Seed = {}) => {
 
   const routes = HttpApiBuilder.layer(EmailerApi).pipe(
     Layer.provide(
-      Layer.mergeAll(contactsGroup, listsGroup, campaignsGroup, addressesGroup, keysGroup),
+      Layer.mergeAll(
+        contactsGroup,
+        listsGroup,
+        campaignsGroup,
+        addressesGroup,
+        keysGroup,
+        subscriptionsGroup,
+      ),
     ),
-    Layer.provide(authorization),
+    Layer.provide(Layer.mergeAll(authorization, scopedKeys)),
     Layer.provide(HttpServer.layerServices),
   );
 

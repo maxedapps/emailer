@@ -318,6 +318,27 @@ describe("makeSend", () => {
     }),
   );
 
+  it.effect("sends a confirmation with its own message, no unsubscribe headers and no tags", () =>
+    Effect.gen(function* () {
+      const transport = transportReplying(() => awsJson(200, acceptedBody));
+      const confirmUrl = "https://www.example.com/confirm?token=t";
+
+      yield* sending(transport, Mail.Confirmation({ listName: "News", confirmUrl }));
+
+      expect(yield* parseJson(transport.sent[0]?.body ?? "{}")).toMatchObject({
+        Destination: { ToAddresses: ["sam@example.com"] },
+        Content: {
+          Simple: {
+            Subject: { Data: "Please confirm your subscription to News" },
+            Headers: [],
+          },
+        },
+      });
+      expect(transport.sent[0]?.body).toContain(confirmUrl);
+      expect(transport.sent[0]?.body).not.toContain("EmailTags");
+    }),
+  );
+
   it.effect.each([
     ["a campaign send", campaignMail(), { mail: "Campaign", campaignId, sendId }],
     ["a test send", Mail.Test({ content, unsubscribeUrl }), { mail: "Test" }],

@@ -30,6 +30,17 @@ export class ApiKeyNotFound extends Schema.TaggedError<ApiKeyNotFound>()(
   }
 }
 
+/** A scoped key may not act on the list the request names. */
+export class Forbidden extends Schema.TaggedError<Forbidden>()(
+  "Forbidden",
+  {},
+  { httpApiStatus: 403 },
+) {
+  override get [ErrorReporter.ignore]() {
+    return true;
+  }
+}
+
 export class ContactNotFound extends Schema.TaggedError<ContactNotFound>()(
   "ContactNotFound",
   {},
@@ -113,6 +124,20 @@ export class CampaignStateConflict extends Schema.TaggedError<CampaignStateConfl
   "CampaignStateConflict",
   { state: CampaignState },
   { httpApiStatus: 409 },
+) {
+  override get [ErrorReporter.ignore]() {
+    return true;
+  }
+}
+
+/**
+ * The address refuses mail: the mail system reported it suppressed, or it is bouncing. It cannot
+ * sign up until the operator unsuppresses it.
+ */
+export class AddressUndeliverable extends Schema.TaggedError<AddressUndeliverable>()(
+  "AddressUndeliverable",
+  { reason: Schema.Literals(["suppressed", "bouncing"]) },
+  { httpApiStatus: 422 },
 ) {
   override get [ErrorReporter.ignore]() {
     return true;

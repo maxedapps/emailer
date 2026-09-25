@@ -9,7 +9,7 @@ import { memberKey } from "./Membership.ts";
 import type { ReadPrimitives, StoredItem, WritePrimitives } from "./Primitives.ts";
 
 /** How long a confirmation link works. DynamoDB's TTL removes the pending item after it. */
-const confirmationLifetime = Duration.days(7);
+export const confirmationLifetime = Duration.days(7);
 
 /** At most one confirmation mail per address and list within this window. */
 const resendInterval = Duration.hours(1);

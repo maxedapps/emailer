@@ -274,8 +274,38 @@ class KeysGroup extends HttpApiGroup.make("keys")
   .prefix("/keys") {}
 
 /**
+ * What an integrating site calls with its scoped key: a sign-up, confirmed through the link it
+ * mails. Every answer means the same to the subscriber — check your inbox — so a site can show one
+ * message for all of them.
+ */
+class SubscriptionsGroup extends HttpApiGroup.make("subscriptions")
+  .add(
+    HttpApiEndpoint.post("subscribe", "/", {
+      payload: Schemas.SubscribePayload,
+      success: [
+        Schemas.ConfirmationSent.pipe(HttpApiSchema.status(202)),
+        Schemas.AlreadySubscribed,
+      ],
+      // A confirmation mail checks the account and the reputation alarms before it goes out.
+      error: [
+        ...storage,
+        Errors.Forbidden,
+        Errors.ListNotFound,
+        Errors.AddressUndeliverable,
+        Errors.ConfirmationRecentlySent,
+        Errors.SendingPaused,
+        Errors.EmailServiceUnavailable,
+        Errors.AlarmsUnavailable,
+      ],
+    }),
+  )
+  .prefix("/subscriptions")
+  .middleware(SubscriptionAuthorization) {}
+
+/**
  * `middleware` applies to the groups added before it and to none added after, so the order is the
- * access rule: everything above takes the admin token only.
+ * access rule: everything above it takes the admin token only, and the sign-up endpoints after it
+ * take a scoped key only.
  */
 export class EmailerApi extends HttpApi.make("emailer")
   .add(ContactsGroup)
@@ -283,4 +313,5 @@ export class EmailerApi extends HttpApi.make("emailer")
   .add(CampaignsGroup)
   .add(AddressesGroup)
   .add(KeysGroup)
-  .middleware(AdminAuthorization) {}
+  .middleware(AdminAuthorization)
+  .add(SubscriptionsGroup) {}

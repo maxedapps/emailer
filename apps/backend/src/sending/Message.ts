@@ -1,5 +1,7 @@
 import * as Schemas from "@emailer/api/Schemas";
-import { Config, Data, Effect, Encoding, Option, Schema } from "effect";
+import { Config, Data, Duration, Effect, Encoding, Option, Schema } from "effect";
+
+import { confirmationLifetime } from "../storage/Subscriptions.ts";
 
 /**
  * What a message says before it is addressed to anyone: a campaign's stored draft, or a test copy
@@ -154,3 +156,43 @@ export const compose = (
     { name: "List-Unsubscribe-Post", value: "List-Unsubscribe=One-Click" },
   ],
 });
+
+const confirmationFont = "-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
+
+/**
+ * The double opt-in mail: neutral, in English, text and HTML. It carries no unsubscribe headers,
+ * since it subscribes no one until its link is used.
+ */
+export const composeConfirmation = (
+  listName: string,
+  confirmUrl: string,
+  postal: string,
+): ComposedMessage => {
+  const days = Duration.toDays(confirmationLifetime);
+  const expiry = `The link works for ${days} days.`;
+  const ignore = "If you didn't ask for this, ignore this email and you won't be added.";
+
+  return {
+    subject: `Please confirm your subscription to ${listName}`,
+    text: [
+      `Someone asked to subscribe this address to ${listName}. To confirm, open this link:`,
+      "",
+      confirmUrl,
+      "",
+      `${expiry} ${ignore}`,
+      "",
+      "---",
+      postal,
+    ].join("\n"),
+    html: [
+      `<div style="max-width:600px;margin:0 auto;padding:24px;font-family:${confirmationFont};font-size:16px;line-height:1.5;color:#111827;">`,
+      `<p>Someone asked to subscribe this address to <strong>${escapeHtml(listName)}</strong>.</p>`,
+      `<p><a href="${escapeHtml(confirmUrl)}" style="display:inline-block;padding:12px 20px;background-color:#111827;color:#ffffff;text-decoration:none;border-radius:6px;">Confirm my subscription</a></p>`,
+      `<p>Or open this link: <a href="${escapeHtml(confirmUrl)}">${escapeHtml(confirmUrl)}</a></p>`,
+      `<p>${escapeHtml(expiry)} ${escapeHtml(ignore)}</p>`,
+      `<p style="font-size:12px;color:#6b7280;">${escapeHtml(postal)}</p>`,
+      `</div>`,
+    ].join("\n"),
+    headers: [],
+  };
+};

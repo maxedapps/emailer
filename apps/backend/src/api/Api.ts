@@ -13,6 +13,7 @@ import { CampaignSchedule } from "../campaigns/CampaignSchedule.ts";
 import * as Campaigns from "../campaigns/Campaigns.ts";
 import { PreviewFunction, previewLink, previewSecret } from "../campaigns/Previews.ts";
 import { sendTest } from "../campaigns/TestSends.ts";
+import * as Subscriptions from "../consent/Subscriptions.ts";
 import { UnsubscribeFunction, unsubscribeSecret } from "../consent/Unsubscribe.ts";
 import { functionServicesLayer, lambdaBasics } from "../Lambda.ts";
 import { respondingToFailures } from "../Reporting.ts";
@@ -111,6 +112,12 @@ const keysHandlers = HttpApiBuilder.group(EmailerApi, "keys", (handlers) =>
   }),
 );
 
+const subscriptionsHandlers = HttpApiBuilder.group(EmailerApi, "subscriptions", (handlers) =>
+  handlers.handleAll({
+    subscribe: (request) => Subscriptions.subscribe(request.payload),
+  }),
+);
+
 const apiProps = Effect.gen(function* () {
   const basics = yield* lambdaBasics("Api", "api");
 
@@ -156,6 +163,7 @@ export const makeApiHandler = (token: Redacted.Redacted<string>) =>
             campaignsHandlers,
             addressesHandlers,
             keysHandlers,
+            subscriptionsHandlers,
           ),
         ),
         Layer.provide(Layer.mergeAll(adminAuthorization(token), subscriptionAuthorization)),

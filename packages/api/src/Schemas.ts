@@ -588,6 +588,30 @@ export const CreatedApiKey = Schema.Struct({ ...ApiKey.fields, key: Schema.Strin
 
 export type CreatedApiKey = typeof CreatedApiKey.Type;
 
+/** What the subscriber agreed to, and where: the form, page or campaign the site names. */
+const Consent = Schema.Struct({ source: EntityName, wording: ConsentWording });
+
+/**
+ * A sign-up from an integrating site. `ip` is the subscriber's address as the site saw it, kept as
+ * consent evidence.
+ */
+export const SubscribePayload = Schema.Struct({
+  listId: EntityId,
+  email: EmailAddress,
+  name: Schema.optional(EntityName),
+  attributes: Schema.optional(ContactAttributes),
+  consent: Consent,
+  ip: IpAddress,
+});
+
+export type SubscribePayload = typeof SubscribePayload.Type;
+
+/** A confirmation mail went out; the subscriber joins once they use its link. */
+export const ConfirmationSent = Schema.TaggedStruct("ConfirmationSent", {});
+
+/** The address is already on the list, so no mail went out. */
+export const AlreadySubscribed = Schema.TaggedStruct("AlreadySubscribed", {});
+
 /** A short-lived public link to a campaign's rendered preview. */
 export const PreviewLink = Schema.Struct({ url: Schema.String, expiresAt: Timestamp });
 

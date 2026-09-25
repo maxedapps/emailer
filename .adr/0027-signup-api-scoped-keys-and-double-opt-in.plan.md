@@ -210,7 +210,12 @@ Deviations:
 
 ### T6 — `POST /subscriptions`
 
-Status: To do
+Status: Done
+
+Deviations:
+
+- `POST /subscriptions` also declares `AlarmsUnavailable`. The send guard reads the reputation alarms, exactly as it does for test sends.
+- The mail's link expiry comes from the storage module's `confirmationLifetime`, the value that sets `ttl`.
 
 - **Contract:**
   - group `subscriptions`, with `.middleware(SubscriptionAuthorization)`, added after `AdminAuthorization`.

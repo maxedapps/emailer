@@ -35,6 +35,7 @@ import { SendGuard } from "../sending/SendGuard.ts";
 import { ApiKeyStore } from "../storage/ApiKeys.ts";
 import { AudienceStore } from "../storage/Audience.ts";
 import { CampaignStore } from "../storage/Campaigns.ts";
+import { SubscriptionState } from "../storage/Subscriptions.ts";
 import { unusedAudience, unusedCampaigns } from "../storage/Testing.ts";
 
 import type { ApiKeyOperations, StoredApiKey } from "../storage/ApiKeys.ts";
@@ -205,9 +206,9 @@ const api = Effect.fnUntraced(function* (stubs: Stubs = {}) {
   const fetch = HttpEffect.toWebHandler(handle);
 
   /** Runs the generated client against the application. */
-  const call = <A, E>(use: (client: EmailerClient) => Effect.Effect<A, E>) =>
+  const call = <A, E>(use: (client: EmailerClient) => Effect.Effect<A, E>, credential = token) =>
     Effect.gen(function* () {
-      return yield* use(yield* makeEmailerClient(baseUrl, Redacted.make(token)));
+      return yield* use(yield* makeEmailerClient(baseUrl, Redacted.make(credential)));
     }).pipe(
       Effect.provide(
         Layer.provide(
@@ -725,6 +726,123 @@ describe("keys", () => {
   );
 });
 
+describe("subscriptions", () => {
+  const scoped = { authorization: `Bearer ${scopedKey}` };
+
+  const subscribing = (fields: { readonly listId?: string; readonly consent?: undefined } = {}) =>
+    send(
+      "POST",
+      "/subscriptions",
+      JSON.stringify({
+        listId,
+        email,
+        consent: { source: "Website footer", wording: "Send me the newsletter." },
+        ip: "203.0.113.7",
+        ...fields,
+      }),
+      scoped,
+    );
+
+  const signUp = (
+    state: SubscriptionState,
+    requestSubscription: AudienceOperations["requestSubscription"] = () => Effect.void,
+  ): Stubs => ({
+    audience: {
+      getList: () => Effect.succeed(list),
+      subscriptionState: () => Effect.succeed(state),
+      requestSubscription,
+    },
+    guard: { current: Effect.succeed({ limit: 14 }), slot: () => Effect.succeed(Duration.zero) },
+    mailer: { send: () => Effect.succeed("message-1") },
+  });
+
+  it.effect(
+    "answers a sign-up with 202 when the mail went out and 200 when already subscribed",
+    () =>
+      Effect.gen(function* () {
+        const sent = yield* api(signUp(SubscriptionState.NotSubscribed()));
+        const already = yield* api(signUp(SubscriptionState.Subscribed()));
+
+        const accepted = yield* sent.respond(subscribing());
+        const repeated = yield* already.respond(subscribing());
+
+        expect([accepted.status, accepted.body]).toStrictEqual([
+          202,
+          `{"_tag":"ConfirmationSent"}`,
+        ]);
+        expect([repeated.status, repeated.body]).toStrictEqual([
+          200,
+          `{"_tag":"AlreadySubscribed"}`,
+        ]);
+      }),
+  );
+
+  it.effect.each([
+    [
+      "a list outside the key",
+      signUp(SubscriptionState.NotSubscribed()),
+      { listId: campaignId },
+      403,
+      "Forbidden",
+    ],
+    [
+      "an undeliverable address",
+      signUp(SubscriptionState.Undeliverable({ reason: "suppressed" })),
+      {},
+      422,
+      "AddressUndeliverable",
+    ],
+    [
+      "a sign-up within the hour",
+      signUp(SubscriptionState.NotSubscribed(), () =>
+        Effect.fail(new Errors.ConfirmationRecentlySent({ retryAfter: createdAt })),
+      ),
+      {},
+      429,
+      "ConfirmationRecentlySent",
+    ],
+    [
+      "a sign-up without consent",
+      signUp(SubscriptionState.NotSubscribed()),
+      { consent: undefined },
+      400,
+      undefined,
+    ],
+  ] as const)("answers %s with its status and tag", ([_label, stubs, fields, status, tag]) =>
+    Effect.gen(function* () {
+      const { respond } = yield* api(stubs);
+      const response = yield* respond(subscribing(fields));
+
+      expect(response.status).toBe(status);
+
+      if (tag !== undefined) {
+        expect(response.body).toContain(`"_tag":"${tag}"`);
+      }
+    }),
+  );
+
+  it.effect("decodes both answers through the typed client, holding the scoped key", () =>
+    Effect.gen(function* () {
+      const { call } = yield* api(signUp(SubscriptionState.NotSubscribed()));
+
+      const answer = yield* call(
+        (client) =>
+          client.subscriptions.subscribe({
+            payload: {
+              listId,
+              email,
+              consent: { source: "Website footer", wording: "Send me the newsletter." },
+              ip: "203.0.113.7",
+            },
+          }),
+        scopedKey,
+      );
+
+      expect(answer).toStrictEqual(Schemas.ConfirmationSent.make({}));
+    }),
+  );
+});
+
 describe("public errors", () => {
   const conflict = { state: "sending", runToken, startedAt: createdAt } as const;
 
@@ -1017,6 +1135,32 @@ describe("authorization", () => {
       );
 
       expect(endpoints.length).toBeGreaterThan(30);
+      expect(answered).toStrictEqual(endpoints.map(({ method, path }) => `${method} ${path} 401`));
+    }),
+  );
+
+  it.effect("refuses the admin token on every sign-up endpoint", () =>
+    Effect.gen(function* () {
+      const { respond } = yield* api();
+      const endpoints: Array<{ readonly method: string; readonly path: string }> = [];
+
+      HttpApi.reflect(EmailerApi, {
+        onGroup: () => undefined,
+        onEndpoint: ({ group, endpoint }) => {
+          if (group.identifier === "subscriptions") {
+            endpoints.push({ method: endpoint.method, path: endpoint.path });
+          }
+        },
+      });
+
+      const answered = yield* Effect.forEach(endpoints, ({ method, path }) =>
+        Effect.map(
+          respond(new Request(`${baseUrl}${path}`, { method, headers: authorized() })),
+          (response) => `${method} ${path} ${response.status}`,
+        ),
+      );
+
+      expect(endpoints.length).toBeGreaterThan(0);
       expect(answered).toStrictEqual(endpoints.map(({ method, path }) => `${method} ${path} 401`));
     }),
   );

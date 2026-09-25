@@ -6,7 +6,7 @@ import { Context, Data, Duration, Effect, Layer } from "effect";
 
 import { describeCause } from "../Errors.ts";
 import { sendingIdentity } from "../identity/SendingIdentity.ts";
-import { compose, fromHeader, senderSettings } from "./Message.ts";
+import { compose, composeConfirmation, fromHeader, senderSettings } from "./Message.ts";
 
 import type { MessageContent } from "./Message.ts";
 import type { SubmissionOutcome } from "../storage/Campaigns.ts";
@@ -24,7 +24,8 @@ export const submissionTimeout = Duration.seconds(8);
 
 /**
  * What goes out, and why. A campaign mail is tagged so its feedback lands on the campaign's
- * counters; a test copy carries no tags, so its bounces and complaints never reach them.
+ * counters; a test copy and a sign-up's confirmation carry no tags, so their bounces and complaints
+ * never reach them.
  */
 export type Mail = Data.TaggedEnum<{
   Campaign: {
@@ -34,6 +35,7 @@ export type Mail = Data.TaggedEnum<{
     readonly sendId: string;
   };
   Test: { readonly content: MessageContent; readonly unsubscribeUrl: string };
+  Confirmation: { readonly listName: string; readonly confirmUrl: string };
 }>;
 
 export const Mail = Data.taggedEnum<Mail>();
@@ -108,7 +110,7 @@ export const feedbackPublishing = Effect.gen(function* () {
 
 /**
  * A mail as SES is sent it: the composed message, its tags, and what a log line may say about it.
- * The log names neither the recipient nor the link, which is the opt-out's whole authorization.
+ * The log names neither the recipient nor a link: each is its action's whole authorization.
  */
 const prepare = (mail: Mail, postal: string) =>
   Mail.$match(mail, {
@@ -124,6 +126,11 @@ const prepare = (mail: Mail, postal: string) =>
       message: compose(content, unsubscribeUrl, postal),
       tags: [],
       logged: { mail: "Test" },
+    }),
+    Confirmation: ({ listName, confirmUrl }) => ({
+      message: composeConfirmation(listName, confirmUrl, postal),
+      tags: [],
+      logged: { mail: "Confirmation" },
     }),
   });
 
