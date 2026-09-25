@@ -110,6 +110,8 @@ const record = {
   status: "mailable" as const,
   optOuts: [],
   transientBounces: [],
+  consents: [],
+  pending: [],
   accountSuppression: null,
 };
 

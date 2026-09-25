@@ -20,6 +20,9 @@ export const dataTable = AWS.DynamoDB.Table(tableLogicalId, {
   sortKey: "sk",
   attributes: { pk: "S", sk: "S", gsi1pk: "S", gsi1sk: "S" },
   billingMode: "PAY_PER_REQUEST",
+  // Pending sign-ups expire through it, at no cost. Its own attribute, in epoch seconds: the rate
+  // limiter's `expiresAt` is in milliseconds, which TTL would read as a date far in the future.
+  timeToLiveSpecification: { AttributeName: "ttl", Enabled: true },
   globalSecondaryIndexes: [
     {
       indexName: listingIndexName,

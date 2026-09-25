@@ -149,7 +149,29 @@ const writePrimitives = (operations: Pick<TableOperations, "putItem">) => {
       Effect.asVoid,
     );
 
-  return { recordOnce } as const;
+  /**
+   * A conditional put. A failed condition is `refused`, given the stored item if the request asked
+   * for it (`ALL_OLD`); any other error, including a timeout, is unavailable. As with `updateIf`,
+   * the condition must also hold for this same request landing twice.
+   */
+  const putIf = Effect.fnUntraced(function* <E>(
+    operation: string,
+    request: AWS.DynamoDB.PutItemRequest,
+    refused: Refuse<E>,
+  ) {
+    const outcome = yield* operations.putItem(request).pipe(
+      Effect.as(Result.succeed(undefined)),
+      Effect.catchTag("ConditionalCheckFailedException", (failure) =>
+        decodeStoredItem(failure.Item).pipe(corrupt(operation), Effect.map(Result.fail)),
+      ),
+      Effect.timeout(operationTimeout),
+      Effect.mapError(storageUnavailable(operation)),
+    );
+
+    return Result.isSuccess(outcome) ? undefined : yield* refused(outcome.failure);
+  });
+
+  return { recordOnce, putIf } as const;
 };
 
 export type WritePrimitives = ReturnType<typeof writePrimitives>;

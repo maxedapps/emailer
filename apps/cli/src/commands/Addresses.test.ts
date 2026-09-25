@@ -20,6 +20,8 @@ describe("address status and un-suppress from the command line", () => {
         optOuts: [listId],
         suppression: { reason: "bounce", suppressedAt: createdAt },
         transientBounces: [],
+        consents: [],
+        pending: [],
         accountSuppression: { reason: "bounce", lastUpdateTime: createdAt },
       });
     }),
@@ -40,6 +42,8 @@ describe("address status and un-suppress from the command line", () => {
         status: "mailable",
         optOuts: [],
         transientBounces: [],
+        consents: [],
+        pending: [],
         accountSuppression: null,
       });
     }),

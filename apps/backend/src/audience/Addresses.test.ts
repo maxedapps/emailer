@@ -14,6 +14,8 @@ const local = {
   status: "suppressed" as const,
   optOuts: [],
   transientBounces: [],
+  consents: [],
+  pending: [],
   accountSuppression: null,
 };
 

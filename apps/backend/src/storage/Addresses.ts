@@ -19,6 +19,38 @@ export const addressKey = (email: string) => ({
 });
 
 /**
+ * A sign-up waiting for confirmation, one per address and list: a newer request replaces an older
+ * one, and its link with it. DynamoDB's TTL deletes it once `ttl` has passed.
+ */
+export const pendingKey = (email: string, listId: string) => ({
+  pk: addressKey(email).pk,
+  sk: str(`PENDING#${listId}`),
+});
+
+/**
+ * A pending sign-up: whom to add and how, the consent evidence so far, and the hash of its link's
+ * secret. `ttl` is in epoch seconds, as DynamoDB's TTL reads it.
+ */
+export const PendingSubscription = Schema.Struct({
+  email: Schemas.NormalizedEmailAddress,
+  listId: Schemas.EntityId,
+  name: Schema.optional(Schemas.EntityName),
+  attributes: Schema.optional(Schemas.ContactAttributes),
+  source: Schemas.EntityName,
+  wording: Schemas.ConsentWording,
+  ip: Schemas.IpAddress,
+  requestedAt: Schemas.Timestamp,
+  secretHash: Schema.String,
+  ttl: Schema.Int,
+});
+
+export type PendingSubscription = typeof PendingSubscription.Type;
+
+export const readPending = itemReader(PendingSubscription);
+
+const readConsent = itemReader(Schemas.ConsentRecord);
+
+/**
  * Whichever write creates the item, it stamps the version and the mailbox: each write is an update
  * that may be the item's first.
  */
@@ -59,13 +91,13 @@ const readStatus = itemReader(
 );
 
 /** The whole item, as `addresses status` reports it. */
-const readRecord = itemReader(
-  Schema.Struct({
-    optOuts: Schema.optionalKey(Schemas.AddressRecord.fields.optOuts),
-    suppression: Schemas.AddressRecord.fields.suppression,
-    transientBounces: Schema.optionalKey(Schema.Array(Schema.String)),
-  }),
-);
+const AddressItem = Schema.Struct({
+  optOuts: Schema.optionalKey(Schemas.AddressRecord.fields.optOuts),
+  suppression: Schemas.AddressRecord.fields.suppression,
+  transientBounces: Schema.optionalKey(Schema.Array(Schema.String)),
+});
+
+const readRecord = itemReader(AddressItem);
 
 /** An occurrence is `<receivedAt>#<feedbackId>`; one that does not parse is outside the window. */
 const occurredSince = (occurrence: string, windowStart: DateTime.Utc): boolean => {
@@ -156,49 +188,91 @@ export const unsubscribeWrites = (primitives: Pick<UpdatePrimitives, "update">) 
   return { optOut } as const;
 };
 
-export const addressReads = (primitives: ReadPrimitives & QueryPrimitives) => {
-  const { readItem, runQuery } = primitives;
+/** The address item as a send or a sign-up decides on it. */
+interface AddressState {
+  readonly optOuts: ReadonlyArray<string>;
+  readonly mailbox: Schemas.MailboxStatus;
+}
 
-  /**
-   * One strongly consistent read. An opt-out from this list is the human's decision and answers
-   * ahead of the mail system's reports; a mailbox nothing was ever recorded for is mailable.
-   */
+/** A mailbox nothing was ever recorded for. */
+const unrecorded: AddressState = { optOuts: [], mailbox: "mailable" };
+
+/**
+ * The lists an address left, and whether its mailbox takes mail at all: one strongly consistent
+ * read.
+ */
+export const readAddressState = Effect.fnUntraced(function* (
+  primitives: ReadPrimitives,
+  operation: string,
+  email: string,
+) {
+  const { Item } = yield* primitives.readItem(operation, addressKey(email));
+
+  if (Item === undefined) {
+    return unrecorded;
+  }
+
+  const stored = yield* readStatus(operation, Item);
+
+  return {
+    optOuts: stored.optOuts ?? [],
+    mailbox: mailboxStatusOf(stored, yield* DateTime.now),
+  } satisfies AddressState;
+});
+
+/** The Unix time `ttl` holds, as the timestamp it is. */
+const expiryOf = (ttl: number): string => DateTime.formatIso(DateTime.makeUnsafe(ttl * 1000));
+
+export const addressReads = (primitives: ReadPrimitives & QueryPrimitives) => {
+  const { runQuery } = primitives;
+
+  /** An opt-out from this list is the human's decision and answers ahead of the mail system's. */
   const addressStatus = Effect.fn("Storage.addressStatus")(function* (
     email: string,
     listId: string,
   ) {
-    const { Item } = yield* readItem("addressStatus", addressKey(email));
+    const state = yield* readAddressState(primitives, "addressStatus", email);
 
-    if (Item === undefined) {
-      return "mailable" as const;
-    }
-
-    const stored = yield* readStatus("addressStatus", Item);
-
-    return stored.optOuts?.includes(listId) === true
-      ? ("unsubscribed" as const)
-      : mailboxStatusOf(stored, yield* DateTime.now);
+    return state.optOuts.includes(listId) ? ("unsubscribed" as const) : state.mailbox;
   });
 
-  /** The address's whole partition in one strongly consistent query, which holds its item. */
+  /**
+   * The address's whole partition in one strongly consistent query: its item, its consent records
+   * and its pending sign-ups.
+   */
   const addressRecord = Effect.fn("Storage.addressRecord")(function* (email: string) {
-    const { pk, sk } = addressKey(email);
+    const key = addressKey(email);
 
     const partition = yield* runQuery("addressRecord", "base-table", {
       KeyConditionExpression: "pk = :pk",
-      ExpressionAttributeValues: { ":pk": pk },
+      ExpressionAttributeValues: { ":pk": key.pk },
     });
 
-    const item = partition.Items?.find((entry) => entry.sk?.S === sk.S);
+    let stored: typeof AddressItem.Type = {};
+    const consents: Array<Schemas.ConsentRecord> = [];
+    const pending: Array<Schemas.PendingConfirmation> = [];
 
-    const stored =
-      item === undefined ? { transientBounces: [] } : yield* readRecord("addressRecord", item);
+    for (const item of partition.Items ?? []) {
+      const sk = item.sk?.S ?? "";
+
+      if (sk === key.sk.S) {
+        stored = yield* readRecord("addressRecord", item);
+      } else if (sk.startsWith("CONSENT#")) {
+        consents.push(yield* readConsent("addressRecord", item));
+      } else if (sk.startsWith("PENDING#")) {
+        const { listId, requestedAt, ttl } = yield* readPending("addressRecord", item);
+
+        pending.push({ listId, requestedAt, expiresAt: expiryOf(ttl) });
+      }
+    }
 
     const record = {
       email,
       status: mailboxStatusOf(stored, yield* DateTime.now),
       optOuts: stored.optOuts ?? [],
       transientBounces: stored.transientBounces ?? [],
+      consents,
+      pending,
       accountSuppression: null,
     };
 

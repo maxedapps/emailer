@@ -54,7 +54,7 @@ const decodeMemberCursor = Schema.decodeUnknownEffect(
   keyCodec(Schema.Struct({ sk: Schema.String.check(Schema.isStartsWith("MEMBER#")) })),
 );
 
-const memberKey = (listId: string, contactId: string) => ({
+export const memberKey = (listId: string, contactId: string) => ({
   pk: str(`LIST#${listId}`),
   sk: str(`MEMBER#${contactId}`),
 });
@@ -69,6 +69,135 @@ const memberKey = (listId: string, contactId: string) => ({
 const memberOfKey = (contactId: string, listId: string) => ({
   pk: str(`CONTACT#${contactId}`),
   sk: str(`LISTOF#${listId}`),
+});
+
+const joinMember = (
+  key: dynamodb.AttributeMap,
+  listId: string,
+  contactId: string,
+  addedAt: string,
+) => ({
+  Update: {
+    Table: tableLogicalId,
+    Key: key,
+    UpdateExpression:
+      "SET v = :v, listId = :listId, contactId = :contactId, addedAt = if_not_exists(addedAt, :addedAt)",
+    ExpressionAttributeValues: {
+      ":v": num(recordVersion),
+      ":listId": str(listId),
+      ":contactId": str(contactId),
+      ":addedAt": str(addedAt),
+    },
+  },
+});
+
+/**
+ * Which contact holds each candidate's address, by mailbox, read strongly consistently. The read is
+ * advice only — a strong read still does not make a later write atomic — which `joinActions`
+ * turns into conditions its transaction asserts.
+ */
+const readHolders = Effect.fnUntraced(function* (
+  primitives: Pick<BatchPrimitives, "readItems">,
+  operation: string,
+  candidates: ReadonlyArray<Schemas.Contact>,
+) {
+  const reserved = yield* primitives.readItems(
+    operation,
+    candidates.map((candidate) => reservationKey(candidate.email)),
+  );
+
+  const holders = new Map<string, string>();
+
+  for (const item of reserved) {
+    const entry = yield* readHeldReservation(operation, item);
+
+    holders.set(entry.pk.slice("EMAIL#".length), entry.contactId);
+  }
+
+  return holders;
+});
+
+/**
+ * The actions that join each candidate to a list, creating the contact where no one holds its
+ * address, and the converged result they leave. Members are written with `Update` rather than
+ * `Put`: a conditional `Put` would fail for anyone already in the list and cancel the whole batch,
+ * where an upsert makes a re-run a no-op. `addedAt` is kept through `if_not_exists`, so joining
+ * again does not rewrite when somebody joined.
+ *
+ * The transaction's own conditions are the authority over `holders`: every existing contact carries
+ * a `ConditionCheck`, so a join racing that contact's deletion fails rather than resurrecting a
+ * membership; and each new address is reserved conditionally, so losing a race to a concurrent
+ * creation fails too. Both races answer `ContactChanged`, which a caller retries from a fresh read.
+ */
+const joinActions = Effect.fnUntraced(function* (
+  listId: string,
+  candidates: ReadonlyArray<Schemas.Contact>,
+  holders: ReadonlyMap<string, string>,
+  addedAt: string,
+) {
+  const actions: Array<Action<ContactChanged>> = [];
+
+  const contacts: Array<Schemas.ImportContactsResult["contacts"][number]> = [];
+
+  for (const candidate of candidates) {
+    const held = holders.get(Schemas.mailboxKey(candidate.email));
+    const contactId = held ?? candidate.id;
+
+    if (held === undefined) {
+      actions.push(
+        {
+          Put: {
+            Table: tableLogicalId,
+            Item: yield* contactItem(candidate),
+            ConditionExpression: "attribute_not_exists(pk)",
+          },
+        },
+        // A concurrent creation took the address since it was read.
+        {
+          Put: {
+            Table: tableLogicalId,
+            Item: yield* reservationItem(candidate.email, contactId),
+            ConditionExpression: "attribute_not_exists(pk)",
+          },
+          refused: () => new ContactChanged(),
+        },
+      );
+    } else {
+      actions.push(
+        {
+          ConditionCheck: {
+            Table: tableLogicalId,
+            Key: contactKey(contactId),
+            ConditionExpression: "attribute_exists(pk)",
+          },
+          refused: () => new ContactChanged(),
+        },
+        // The holder was read before the transaction, so it is advice, not a fact. Between the
+        // read and the commit the contact can be moved to another address, or deleted and the
+        // address reassigned — and then this join would add a contact to the list under an
+        // address it no longer holds. Asserting the reservation still names this contact makes
+        // that a refusal instead, atomically with the membership writes rather than before them.
+        {
+          ConditionCheck: {
+            Table: tableLogicalId,
+            Key: reservationKey(candidate.email),
+            ConditionExpression: "contactId = :holder",
+            ExpressionAttributeValues: { ":holder": str(contactId) },
+          },
+          refused: () => new ContactChanged(),
+        },
+      );
+    }
+
+    actions.push(
+      joinMember(memberKey(listId, contactId), listId, contactId, addedAt),
+      joinMember(memberOfKey(contactId, listId), listId, contactId, addedAt),
+    );
+
+    contacts.push({ email: candidate.email, contactId, member: true });
+  }
+
+  return { actions, result: { contacts } satisfies Schemas.ImportContactsResult };
 });
 
 export const membershipOperations = (
@@ -94,26 +223,6 @@ export const membershipOperations = (
       ConditionExpression: "attribute_exists(pk)",
     },
     refused: () => new ListNotFound(),
-  });
-
-  const joinMember = (
-    key: dynamodb.AttributeMap,
-    listId: string,
-    contactId: string,
-    addedAt: string,
-  ) => ({
-    Update: {
-      Table: tableLogicalId,
-      Key: key,
-      UpdateExpression:
-        "SET v = :v, listId = :listId, contactId = :contactId, addedAt = if_not_exists(addedAt, :addedAt)",
-      ExpressionAttributeValues: {
-        ":v": num(recordVersion),
-        ":listId": str(listId),
-        ":contactId": str(contactId),
-        ":addedAt": str(addedAt),
-      },
-    },
   });
 
   /**
@@ -337,10 +446,7 @@ export const membershipOperations = (
   });
 
   /**
-   * Loads a batch of contacts into a list in one transaction. Members are written with `Update`
-   * rather than `Put`: a conditional `Put` would fail for anyone already in the list and cancel the
-   * whole batch, where an upsert makes a re-run a no-op. `addedAt` is kept through `if_not_exists`,
-   * so re-importing does not rewrite when somebody joined.
+   * Loads a batch of contacts into a list in one transaction, joined as `joinActions` joins them.
    *
    * The list is read, not checked inside the transaction. Its `META` shares a partition with every
    * member item, so a transactional check would lock the one partition a large import already
@@ -349,24 +455,17 @@ export const membershipOperations = (
    * memberships behind — the leftover ADR-0005 already accepts for an import during a delete
    * cascade; every later batch reads the list as missing.
    *
-   * The reservation pre-read is advisory only — a strong read still does not make a later write
-   * atomic. The transaction's own conditions are the authority: every existing contact carries a
-   * `ConditionCheck`, so an import racing that contact's deletion fails rather than resurrecting a
-   * membership; and each new address is reserved conditionally, so losing a race to a concurrent
-   * creation fails too. Both races are retried from a fresh pre-read, which then sees the new state.
+   * A lost race is retried from a fresh pre-read, which then sees the new state.
    */
   const importContacts = Effect.fn("Storage.importContacts")(function* (
     listId: string,
     candidates: ReadonlyArray<Schemas.Contact>,
     addedAt: string,
   ) {
-    const [list, reserved] = yield* Effect.all(
+    const [list, holders] = yield* Effect.all(
       [
         readItem("importContacts", listKey(listId)),
-        readItems(
-          "importContacts",
-          candidates.map((candidate) => reservationKey(candidate.email)),
-        ),
+        readHolders(primitives, "importContacts", candidates),
       ],
       { concurrency: 2 },
     );
@@ -375,79 +474,11 @@ export const membershipOperations = (
       return yield* new ListNotFound();
     }
 
-    const holders = new Map<string, string>();
+    const joined = yield* joinActions(listId, candidates, holders, addedAt);
 
-    for (const item of reserved) {
-      const entry = yield* readHeldReservation("importContacts", item);
+    yield* transact("importContacts", joined.actions);
 
-      holders.set(entry.pk.slice("EMAIL#".length), entry.contactId);
-    }
-
-    const actions: Array<Action<ContactChanged>> = [];
-
-    const imported: Array<Schemas.ImportContactsResult["contacts"][number]> = [];
-
-    for (const candidate of candidates) {
-      const held = holders.get(Schemas.mailboxKey(candidate.email));
-      const contactId = held ?? candidate.id;
-
-      if (held === undefined) {
-        actions.push(
-          {
-            Put: {
-              Table: tableLogicalId,
-              Item: yield* contactItem(candidate),
-              ConditionExpression: "attribute_not_exists(pk)",
-            },
-          },
-          // A concurrent creation took the address since it was read.
-          {
-            Put: {
-              Table: tableLogicalId,
-              Item: yield* reservationItem(candidate.email, contactId),
-              ConditionExpression: "attribute_not_exists(pk)",
-            },
-            refused: () => new ContactChanged(),
-          },
-        );
-      } else {
-        actions.push(
-          {
-            ConditionCheck: {
-              Table: tableLogicalId,
-              Key: contactKey(contactId),
-              ConditionExpression: "attribute_exists(pk)",
-            },
-            refused: () => new ContactChanged(),
-          },
-          // The holder was read before the transaction, so it is advice, not a fact. Between the
-          // read and the commit the contact can be moved to another address, or deleted and the
-          // address reassigned — and then this import would add a contact to the list under an
-          // address it no longer holds. Asserting the reservation still names this contact makes
-          // that a refusal instead, atomically with the membership writes rather than before them.
-          {
-            ConditionCheck: {
-              Table: tableLogicalId,
-              Key: reservationKey(candidate.email),
-              ConditionExpression: "contactId = :holder",
-              ExpressionAttributeValues: { ":holder": str(contactId) },
-            },
-            refused: () => new ContactChanged(),
-          },
-        );
-      }
-
-      actions.push(
-        joinMember(memberKey(listId, contactId), listId, contactId, addedAt),
-        joinMember(memberOfKey(contactId, listId), listId, contactId, addedAt),
-      );
-
-      imported.push({ email: candidate.email, contactId, member: true });
-    }
-
-    yield* transact("importContacts", actions);
-
-    return { contacts: imported } satisfies Schemas.ImportContactsResult;
+    return joined.result;
   }, retryLostRace);
 
   return {

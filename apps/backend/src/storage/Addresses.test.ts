@@ -243,36 +243,76 @@ describe("addressStatus", () => {
 });
 
 describe("addressRecord", () => {
-  it.effect("reads the address's partition and reports every fact the item holds", () =>
-    Effect.gen(function* () {
-      yield* TestClock.setTime(now);
+  it.effect(
+    "reads the address's partition and reports its item, consents and pending sign-ups",
+    () =>
+      Effect.gen(function* () {
+        yield* TestClock.setTime(now);
 
-      const occurrences = [bounce(now - day, "a"), bounce(now - 2 * day, "b")];
+        const occurrences = [bounce(now - day, "a"), bounce(now - 2 * day, "b")];
 
-      const table = scriptedTable({
-        query: [
-          Effect.succeed({
-            Items: [stored({ ...optedOut, ...suppressed, ...bounces(...occurrences) })],
-          }),
-        ],
-      });
+        const consent = {
+          listId,
+          source: "Website footer",
+          wording: "Send me the newsletter.",
+          ip: "203.0.113.7",
+          requestedAt: createdAt,
+          confirmedAt: "2026-09-11T10:05:00.000Z",
+          confirmIp: "203.0.113.8",
+        };
 
-      expect(yield* operationsFor(table).addressRecord("User@Example.com")).toStrictEqual({
-        email: "User@Example.com",
-        status: "suppressed",
-        optOuts: [listId],
-        suppression: { reason: "bounce", suppressedAt: createdAt, bounceSubType: "General" },
-        transientBounces: occurrences,
-        accountSuppression: null,
-      });
-      expect(table.queryRequests).toStrictEqual([
-        {
-          KeyConditionExpression: "pk = :pk",
-          ExpressionAttributeValues: { ":pk": key.pk },
-          ConsistentRead: true,
-        },
-      ]);
-    }),
+        const table = scriptedTable({
+          query: [
+            Effect.succeed({
+              Items: [
+                stored({ ...optedOut, ...suppressed, ...bounces(...occurrences) }),
+                {
+                  pk: key.pk,
+                  sk: { S: `CONSENT#${listId}#${consent.confirmedAt}` },
+                  v: { N: "1" },
+                  ...Object.fromEntries(
+                    Object.entries(consent).map(([name, value]) => [name, { S: value }]),
+                  ),
+                },
+                {
+                  pk: key.pk,
+                  sk: { S: `PENDING#${otherListId}` },
+                  v: { N: "1" },
+                  email: { S: email },
+                  listId: { S: otherListId },
+                  source: { S: "Website footer" },
+                  wording: { S: "Send me the newsletter." },
+                  ip: { S: "203.0.113.7" },
+                  requestedAt: { S: createdAt },
+                  secretHash: { S: "0".repeat(64) },
+                  // 2026-09-18T10:00:00.000Z
+                  ttl: { N: "1789725600" },
+                },
+              ],
+            }),
+          ],
+        });
+
+        expect(yield* operationsFor(table).addressRecord("User@Example.com")).toStrictEqual({
+          email: "User@Example.com",
+          status: "suppressed",
+          optOuts: [listId],
+          suppression: { reason: "bounce", suppressedAt: createdAt, bounceSubType: "General" },
+          transientBounces: occurrences,
+          consents: [consent],
+          pending: [
+            { listId: otherListId, requestedAt: createdAt, expiresAt: "2026-09-18T10:00:00.000Z" },
+          ],
+          accountSuppression: null,
+        });
+        expect(table.queryRequests).toStrictEqual([
+          {
+            KeyConditionExpression: "pk = :pk",
+            ExpressionAttributeValues: { ":pk": key.pk },
+            ConsistentRead: true,
+          },
+        ]);
+      }),
   );
 
   it.effect("reports a mailbox nothing was recorded for as mailable and empty", () =>
@@ -282,6 +322,8 @@ describe("addressRecord", () => {
         status: "mailable",
         optOuts: [],
         transientBounces: [],
+        consents: [],
+        pending: [],
         accountSuppression: null,
       });
     }),

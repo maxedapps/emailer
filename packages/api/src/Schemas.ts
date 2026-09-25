@@ -309,6 +309,42 @@ export const SuppressionReason = Schema.Literals(["bounce", "complaint"]);
 
 export type SuppressionReason = typeof SuppressionReason.Type;
 
+const maxConsentWordingLength = 1000;
+
+/** IPv6 in its longest textual form, with an embedded IPv4 address, is 45 characters. */
+const maxIpLength = 45;
+
+/** What the subscriber agreed to, exactly as the site showed it. */
+export const ConsentWording = Schema.String.check(
+  Schema.isNonEmpty(),
+  Schema.isMaxLength(maxConsentWordingLength),
+);
+
+/** An address as the calling site saw it, kept as consent evidence rather than parsed. */
+export const IpAddress = Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(maxIpLength));
+
+/** The evidence of one confirmed opt-in: what was asked, where and from where, and when. */
+export const ConsentRecord = Schema.Struct({
+  listId: EntityId,
+  source: EntityName,
+  wording: ConsentWording,
+  ip: IpAddress,
+  requestedAt: Timestamp,
+  confirmedAt: Timestamp,
+  confirmIp: IpAddress,
+});
+
+export type ConsentRecord = typeof ConsentRecord.Type;
+
+/** A sign-up waiting for its confirmation link to be used. */
+export const PendingConfirmation = Schema.Struct({
+  listId: EntityId,
+  requestedAt: Timestamp,
+  expiresAt: Timestamp,
+});
+
+export type PendingConfirmation = typeof PendingConfirmation.Type;
+
 /**
  * Account-list presence is always reported: `null` means SES has no entry. `optOuts` names the
  * lists the address left; the local suppression is an optional key because it may not exist.
@@ -327,6 +363,8 @@ export const AddressRecord = Schema.Struct({
     }),
   ),
   transientBounces: Schema.Array(Schema.String),
+  consents: Schema.Array(ConsentRecord),
+  pending: Schema.Array(PendingConfirmation),
   accountSuppression: Schema.NullOr(
     Schema.Struct({
       reason: SuppressionReason,

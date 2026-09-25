@@ -119,6 +119,17 @@ export class CampaignStateConflict extends Schema.TaggedError<CampaignStateConfl
   }
 }
 
+/** A confirmation mail went to this address for this list within the hour. */
+export class ConfirmationRecentlySent extends Schema.TaggedError<ConfirmationRecentlySent>()(
+  "ConfirmationRecentlySent",
+  { retryAfter: Timestamp },
+  { httpApiStatus: 429 },
+) {
+  override get [ErrorReporter.ignore]() {
+    return true;
+  }
+}
+
 /** The test list has more members than a test send may reach. */
 export class TestAudienceTooLarge extends Schema.TaggedError<TestAudienceTooLarge>()(
   "TestAudienceTooLarge",

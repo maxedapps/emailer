@@ -174,7 +174,15 @@ Deviations:
 
 ### T5 — Subscription records and TTL
 
-Status: To do
+Status: Done
+
+Deviations:
+
+- The pending and consent records' keys and codecs live in `storage/Addresses.ts`, the module for the `ADDRESS#` partition. `addressRecord` reads them there, and `storage/Subscriptions.ts` imports them, so no import cycle arises. The consent key lands in T7, its first user.
+- The pending item also stores `listId`, so `addressRecord` reads it without parsing the sort key.
+- `requestSubscription(request)` takes the request, whose `requestedAt` is now, and derives `ttl` itself.
+- A new `putIf` primitive gives the conditional `Put` its typed refusal. `recordOnce` swallows a failed condition, and a one-action transaction would bill twice.
+- The condition also accepts the same `secretHash`, so the same request landing twice after a lost response is not refused by its own first landing.
 
 - **Table (`apps/backend/src/storage/Table.ts`):** `timeToLiveSpecification: { AttributeName: "ttl", Enabled: true }`.
 - **Import steps (`storage/Membership.ts`):** extract from `importContacts` two helpers without changing its behaviour:

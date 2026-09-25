@@ -45,7 +45,7 @@ const Reservation = Schema.Struct({ contactId: Schemas.EntityId });
 
 const writeReservation = itemWriter(Reservation);
 
-const readReservation = itemReader(Reservation);
+export const readReservation = itemReader(Reservation);
 
 /** Builds a contact with its absent fields omitted rather than set to `undefined`. */
 export const contactOf = (
