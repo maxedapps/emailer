@@ -80,7 +80,7 @@ Status: Done. As built: the README's "Configure" section also says why no plain 
 
 ### T3 — One typed `AWS.providers()`
 
-Status: Done. As built: `stacks/providers.ts` exports `awsProviders`. The prod plan runs with T5's, because the SSO session expired before it could run here.
+Status: Done. As built: `stacks/providers.ts` exports `awsProviders`. With it, the plan for the `shared` identity stack shows all 7 resources as `noop`, and the prod Emailer plan is as T5 records it.
 
 - **Where:** `alchemy.run.ts:22` (a lint-disable comment) and `stacks/sending-identity.ts:34–39` (a typed const).
 - **Change:** the typed `awsProviders` moves into one small module under `stacks/`. Both stacks import it, and so does T13's test entry. The lint-disable comment goes.
@@ -115,7 +115,7 @@ Status: Done in code; the live check runs in T15.
 
 ### T5 — Queue-backlog alarm helper
 
-Status: Done in code. As built: `alerting` holds the props every alarm shares, `queueBacklogAlarm` and `reputationAlarm` build on it, and `reputationAlarms` is `Effect.all` over the four. The two dead-letter queues are no longer exported. The prod plan (with T3's) waits for a fresh SSO session.
+Status: Done. As built: `alerting` holds the props every alarm shares, `queueBacklogAlarm` and `reputationAlarm` build on it, and `reputationAlarms` is `Effect.all` over the four. The two dead-letter queues are no longer exported. `alchemy plan --stage prod` shows 57 `noop` rows and 5 `update` rows, one per function, for their code and T4's dropped env var. Nothing is created, replaced or deleted.
 
 - **Where:**
   - the `FeedbackFailuresVisible` and `DispatchFailuresVisible` alarms in `alchemy.run.ts`;
@@ -499,21 +499,20 @@ Status: Done. As built: a probe file still drew `anti-slop(no-reflect-get)` and 
 
 ### T15 — Live gate
 
-Status: Not started
+Status: Blocked, waiting on the user's call. Checked so far:
 
-- With `.env.test` holding deploy inputs only, run `pnpm test:integration`.
+- The prod plans are done (see T3 and T5).
+- The harness deployed stage `test_max`, and all five log groups had 7-day retention.
+- The stage's `Api` create then failed with Lambda's "reserved keys … AWS_SESSION_TOKEN, AWS_REGION, AWS_ACCESS_KEY_ID". All 37 tests were skipped. `afterAll` destroyed the stage, and neither the account nor Alchemy's state holds anything for `test_max`.
 
-**Verify:**
+Cause, confirmed with a minimal reproduction on unmodified Alchemy beta.79:
 
-- deploy, the test bodies and destroy all authenticate with the documented credentials;
-- the harness deploys stage `test_<user>`, or `ALCHEMY_TEST_STAGE`, and every live case passes;
-- with `ALCHEMY_TEST_STAGE=prod` the entry file refuses to start, before any deploy;
-- during the run, all five `/aws/lambda/emailer-<stage>-*` log groups have 7-day retention;
-- after the run, the stage has no table, function, queue, log group, schedule group or state left;
-- the account suppression list holds no labelled simulator entries;
-- the alert inbox received nothing from the test stage.
-
-**Cost:** one ephemeral stage for the length of the run.
+- Alchemy pins every config key a function's init reads during plan into that function's env (`Platform.ts`, the `phase === "plan"` branch).
+- `AWSEnvironment` resolves its credentials lazily, through `Config`, on first use.
+- `Scheduler.CreateSchedule`'s deploy-time half evaluates `AWSEnvironment.current` inside the host function's init (`Scheduler/BindingHttp.ts`, `scheduleArnPattern`).
+- Under `Test.make`, that is the run's first evaluation, so the deployer's `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` and `AWS_REGION` are pinned into the function's env. Planning our stack through the harness, with a stop before apply, showed that only `Api` pins them, and only through `CampaignSchedule.layer`.
+- One function whose init binds `CreateSchedule`, deployed with the documented `Test.make` pattern, fails with the same Lambda error. The same stack's `alchemy plan --detailed` shows only the binding outputs in its env.
+- Reading `AWS.AWSEnvironment.current` in the stack body before yielding the function makes the harness deploy pass.
 
 ### T16 — Prod rollout
 

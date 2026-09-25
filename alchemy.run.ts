@@ -25,6 +25,12 @@ export default Stack(
     state: AWS.state(),
   },
   Effect.gen(function* () {
+    // Resolve the AWS environment before any function's init does. Alchemy beta.79 pins every
+    // config read made during a function's init into that function's env, and the Scheduler
+    // binding the API holds is otherwise the first to resolve it under the test harness, which
+    // pins the deployer's credentials: https://github.com/alchemy-run/alchemy/issues/1842
+    yield* AWS.AWSEnvironment.current;
+
     const api = yield* ApiFunction;
 
     const unsubscribe = yield* UnsubscribeFunction;
