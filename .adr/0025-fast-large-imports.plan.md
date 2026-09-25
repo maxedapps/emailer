@@ -64,7 +64,7 @@ Status: Done
 
 ### T2 — The import file schema
 
-Status: Not started
+Status: Done. As built: the entry schema is exported in T5, its first user outside the module, so knip stays clean in between.
 
 - **Where:** `packages/api/src/Schemas.ts`.
 - **`ImportContactsFile`:** the same entry schema, non-empty, no address twice anywhere, and no size cap.

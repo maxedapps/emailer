@@ -434,18 +434,24 @@ const ImportContactEntry = Schema.Struct({
   attributes: Schema.optional(ContactAttributes),
 });
 
+const importEntries = Schema.Array(ImportContactEntry).check(Schema.isNonEmpty());
+
 /**
- * Two entries sharing a mailbox key are rejected here rather than at the database: they would
- * become two actions against one item, which `TransactWriteItems` refuses outright.
+ * Two entries sharing a mailbox key are rejected rather than sent: in one call they would become two
+ * actions against one item, which `TransactWriteItems` refuses outright, and across calls the second
+ * would only repeat the first.
  */
-export const ImportContactsPayload = Schema.Struct({
-  contacts: Schema.Array(ImportContactEntry).check(
-    Schema.isNonEmpty(),
-    Schema.isMaxLength(maxImportEntries),
-  ),
-}).check(
-  Schema.makeFilter((payload) => distinctMailboxes(payload.contacts.map((entry) => entry.email))),
+const eachMailboxOnce = Schema.makeFilter(
+  (file: { readonly contacts: ReadonlyArray<{ readonly email: string }> }) =>
+    distinctMailboxes(file.contacts.map((entry) => entry.email)),
 );
+
+/** A whole import file as the CLI reads it, of any size; it sends the file in payloads. */
+export const ImportContactsFile = Schema.Struct({ contacts: importEntries }).check(eachMailboxOnce);
+
+export const ImportContactsPayload = Schema.Struct({
+  contacts: importEntries.check(Schema.isMaxLength(maxImportEntries)),
+}).check(eachMailboxOnce);
 
 export type ImportContactsPayload = typeof ImportContactsPayload.Type;
 
