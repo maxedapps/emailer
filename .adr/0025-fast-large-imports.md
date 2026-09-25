@@ -1,11 +1,13 @@
 # ADR-0025: Fast imports of large contact files
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-09-24
 - Authority: On 2026-09-24 the user asked for lists of tens of thousands of contacts to import as fast as possible. After measurements on ephemeral stages, they chose:
   - parallel batches from the CLI;
   - a list read instead of the transactional list check;
   - CSV files beside JSON, with extra columns as attributes.
+
+  They approved this record and its plan on 2026-09-25 by asking for the implementation.
 - Supersedes in part, once implemented: [ADR-0005](0005-contact-identity-and-membership-access-paths.md): "larger imports are a client-side loop" (the CLI runs the loop), and the import transaction's list check.
 - Plan: [0025-fast-large-imports.plan.md](0025-fast-large-imports.plan.md)
 
@@ -26,7 +28,7 @@
   - **Every import transaction checks the list's `META`.**
     - That check costs 2 write units per call, on the same hot partition.
     - Parallel calls collide on it. The store's conflict retry absorbs the cancellations, but they are billed: about 16% more write units.
-  - **Under throttling some calls answered an empty 500.** The AWS client could not decode DynamoDB's error reply ("incorrect header check").
+  - **Under throttling some calls answered an empty 500.** The AWS client could not decode DynamoDB's error reply ("incorrect header check"). ADR-0024's T12 has since fixed that.
 - **Cost per new contact:**
   - 8 table write units, 1 index write unit and about 1 read unit;
   - about $0.29 per 50,000 contacts at on-demand prices.
@@ -53,7 +55,9 @@
    - A missing list answers `ListNotFound` before any write.
    - The transaction holds four actions per contact and nothing else, so parallel calls touch disjoint items.
    - There is still one check per call, because any caller may call the API. It is now 1 read unit instead of 2 write units on the hot partition plus billed collisions.
-5. **A throttled call answers a retryable 503,** through [ADR-0024](0024-typed-errors-and-cost-neutral-storage.md)'s capped AWS retry. The throttle-reply decode fix belongs there too: typed-errors T7 owns the AWS transport.
+5. **A throttled call answers a retryable 503,** through [ADR-0024](0024-typed-errors-and-cost-neutral-storage.md):
+   - its capped AWS retry (T7);
+   - uncompressed AWS replies (T12).
 
 ## Alternatives
 
@@ -85,7 +89,6 @@
   - Every later call answers `ListNotFound`.
   - This is the same class of leftover that ADR-0005 accepts for an import during a delete cascade.
 - **An interrupted import** leaves the finished calls in place. Running the same file again completes it.
-- **Until typed-errors T7 fixes the throttle-reply decode,** some throttles still answer an empty 500. The CLI retries those like a 503.
 - **CSV headers become attribute keys verbatim.**
   - Export columns the operator does not want must be removed before importing.
   - A file with more than 20 other columns fails on every row.

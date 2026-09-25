@@ -1,6 +1,6 @@
 # Plan: Fast imports of large contact files
 
-- Status: Draft
+- Status: In progress
 - Decision: [ADR-0025](0025-fast-large-imports.md)
 
 ## Goal
@@ -18,15 +18,16 @@
 - the member key layout;
 - `addMember` and `removeMember`, which keep their transactional list check;
 - asynchronous import jobs;
-- the throttle-reply decode fix (the empty 500), which belongs to typed-errors T7.
+- the throttle-reply decode fix (the empty 500), done in typed-errors T12.
 
 ## Before starting
 
-- This plan builds on typed-errors ([ADR-0024](0024-typed-errors-and-cost-neutral-storage.md)). Its T7 turns a throttled AWS call into a retryable 503. The branch was cut from typed-errors at its T5 (`9376bd0`).
-- Implementation starts after typed-errors has merged into `main`:
-  1. merge `main` into `fast-import`;
-  2. check that `0025` is still the next free ADR number;
-  3. run `pnpm check`.
+- This plan builds on typed-errors ([ADR-0024](0024-typed-errors-and-cost-neutral-storage.md)):
+  - its T7 caps the AWS retry, so a throttled call ends as a retryable 503;
+  - its T12 asks for uncompressed AWS replies, so a throttle no longer answers an empty 500.
+- typed-errors had not reached `main` when this work started on 2026-09-25, a deviation from the plan approved earlier.
+  - `fast-import` merged typed-errors at `80dc784`, with `pnpm check` green.
+  - It merges `main` once typed-errors lands there, and again before its own merge.
 
 ## Rules for every task
 
@@ -181,7 +182,7 @@ Status: Not started
   - Limits: `lists import` takes any file size, sends 20 contacts per API call, and rejects an address appearing twice in a file;
   - Behavior: about 200 contacts a second per list; transient failures are retried; after an interruption, running the same file again completes it.
 - **ADR-0005:** add a "Superseded in part" line pointing to ADR-0025 for the client-side loop and the import's list check.
-- **ADR-0025:** Accepted, with the date of the user's approval.
+- **ADR-0025:** add as-built notes where the implementation differs from the record.
 
 **Verify:** `pnpm check` (format).
 
@@ -235,7 +236,6 @@ Status: Not started
 None. On 2026-09-24 the user settled:
 
 - **Formats:** CSV is supported beside JSON, with extra columns as attributes.
-- **The empty 500 under throttling** belongs to typed-errors T7.
+- **The empty 500 under throttling** was fixed in typed-errors T12.
   - **The bug:** a throttled `TransactWriteItems` sometimes fails to decode DynamoDB's error reply ("HttpClientError: Decode error (400 POST dynamodb) … incorrect header check" from undici's gunzip), and the API answers an empty 500.
   - **Reproduction:** 16 imports in flight into one fresh list throttle within seconds.
-  - **Here:** this plan relies only on the CLI retrying 500s.
