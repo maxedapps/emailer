@@ -5,10 +5,10 @@ import { Config, Effect, Layer, Option } from "effect";
 import ApiFunction from "./apps/backend/src/api/Api.ts";
 import PreviewPage from "./apps/backend/src/campaigns/PreviewPage.ts";
 import { PreviewFunction } from "./apps/backend/src/campaigns/Previews.ts";
-import { dispatchFailures } from "./apps/backend/src/sending/Dispatch.ts";
+import { dispatchFailuresAlarm } from "./apps/backend/src/sending/Dispatch.ts";
 import DispatcherFunction from "./apps/backend/src/sending/Dispatcher.ts";
 import FeedbackFunction, {
-  feedbackFailures,
+  feedbackFailuresAlarm,
   feedbackRouting,
 } from "./apps/backend/src/feedback/Feedback.ts";
 import { feedbackPublishing } from "./apps/backend/src/sending/Mailer.ts";
@@ -32,8 +32,8 @@ export default Stack(
 
     yield* FeedbackFunction;
     yield* DispatcherFunction;
-    const failures = yield* feedbackFailures;
-    const failedDispatches = yield* dispatchFailures;
+    yield* feedbackFailuresAlarm;
+    yield* dispatchFailuresAlarm;
 
     yield* feedbackPublishing;
     yield* feedbackRouting;
@@ -50,39 +50,6 @@ export default Stack(
         endpoint: alertEmail.value,
       });
     }
-
-    // Deploy-time only, from attributes the composition has already resolved. Building these
-    // inside the function's own props would run them at every cold start and resolve the function
-    // from inside its own construction.
-    yield* AWS.CloudWatch.Alarm("FeedbackFailuresVisible", {
-      AlarmDescription: "Feedback events Lambda could not process are waiting to be redriven.",
-      Namespace: "AWS/SQS",
-      MetricName: "ApproximateNumberOfMessagesVisible",
-      Dimensions: [{ Name: "QueueName", Value: failures.queueName }],
-      Statistic: "Maximum",
-      Period: 60,
-      EvaluationPeriods: 1,
-      Threshold: 1,
-      ComparisonOperator: "GreaterThanOrEqualToThreshold",
-      TreatMissingData: "notBreaching",
-      AlarmActions: [topic.topicArn],
-      OKActions: [topic.topicArn],
-    });
-
-    yield* AWS.CloudWatch.Alarm("DispatchFailuresVisible", {
-      AlarmDescription: "Dispatch wake-ups Lambda could not process are waiting to be redriven.",
-      Namespace: "AWS/SQS",
-      MetricName: "ApproximateNumberOfMessagesVisible",
-      Dimensions: [{ Name: "QueueName", Value: failedDispatches.queueName }],
-      Statistic: "Maximum",
-      Period: 60,
-      EvaluationPeriods: 1,
-      Threshold: 1,
-      ComparisonOperator: "GreaterThanOrEqualToThreshold",
-      TreatMissingData: "notBreaching",
-      AlarmActions: [topic.topicArn],
-      OKActions: [topic.topicArn],
-    });
 
     return {
       apiUrl: api.functionUrl,

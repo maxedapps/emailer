@@ -115,7 +115,7 @@ Status: Done in code; the live check runs in T15.
 
 ### T5 — Queue-backlog alarm helper
 
-Status: Not started
+Status: Done in code. As built: `alerting` holds the props every alarm shares, `queueBacklogAlarm` and `reputationAlarm` build on it, and `reputationAlarms` is `Effect.all` over the four. The two dead-letter queues are no longer exported. The prod plan (with T3's) waits for a fresh SSO session.
 
 - **Where:**
   - the `FeedbackFailuresVisible` and `DispatchFailuresVisible` alarms in `alchemy.run.ts`;

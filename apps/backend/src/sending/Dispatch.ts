@@ -4,6 +4,7 @@ import * as AWS from "alchemy/AWS";
 import { Context, Duration, Effect, Layer, Schema } from "effect";
 
 import { unavailable } from "../Errors.ts";
+import { queueBacklogAlarm } from "./Reputation.ts";
 
 /**
  * Campaign wake-up queue, message and sender. This module must not grow a Function class: the API
@@ -17,10 +18,17 @@ import { unavailable } from "../Errors.ts";
  * the campaign `sending`. Recovery is an SQS redrive of that message, not a resume. Fourteen days
  * is the maximum SQS allows, and the point here is retention rather than throughput.
  */
-export const dispatchFailures = AWS.SQS.Queue("DispatchFailures", {
+const dispatchFailures = AWS.SQS.Queue("DispatchFailures", {
   messageRetentionPeriod: Duration.days(14),
   sqsManagedSseEnabled: true,
 });
+
+/** Deploy-time only: the stack yields it, no function does. */
+export const dispatchFailuresAlarm = queueBacklogAlarm(
+  "DispatchFailuresVisible",
+  "Dispatch wake-ups Lambda could not process are waiting to be redriven.",
+  dispatchFailures,
+);
 
 /**
  * Standard queue of campaign wake-ups. Visibility is 30 minutes so a 5-minute dispatcher

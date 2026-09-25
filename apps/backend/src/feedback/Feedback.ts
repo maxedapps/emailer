@@ -8,6 +8,7 @@ import { nowIso } from "../Identifiers.ts";
 import { FunctionServicesLive, lambdaBasics } from "../Lambda.ts";
 import { failingInvocation } from "../Reporting.ts";
 import { configurationSet } from "../sending/Mailer.ts";
+import { queueBacklogAlarm } from "../sending/Reputation.ts";
 import { FeedbackStore, FeedbackStoreLive } from "../storage/Feedback.ts";
 
 import type { EmailEvent } from "./FeedbackClassification.ts";
@@ -21,10 +22,17 @@ const invocationTimeout = Duration.seconds(30);
  * that message. Fourteen days is the maximum SQS allows, and the point here is retention rather
  * than throughput.
  */
-export const feedbackFailures = AWS.SQS.Queue("FeedbackFailures", {
+const feedbackFailures = AWS.SQS.Queue("FeedbackFailures", {
   messageRetentionPeriod: Duration.days(14),
   sqsManagedSseEnabled: true,
 });
+
+/** Deploy-time only: the stack yields it, no function does. */
+export const feedbackFailuresAlarm = queueBacklogAlarm(
+  "FeedbackFailuresVisible",
+  "Feedback events Lambda could not process are waiting to be redriven.",
+  feedbackFailures,
+);
 
 /** Named, so the queue policy below can state the queue's ARN without waiting on the queue. */
 const feedbackEventsName = Effect.map(Stack, ({ stage }) => `emailer-${stage}-feedback-events`);
