@@ -285,7 +285,7 @@ Each command below is run as `pnpm emailer <command>`. `[…]` marks an optional
 
 | Command                                                                                                | What it does                                             |
 | ------------------------------------------------------------------------------------------------------ | -------------------------------------------------------- |
-| `contacts create --email <address> [--name <name>]`                                                    | Create a contact                                         |
+| `contacts create --email <address> [--name <name>] [--attr key=value …]`                               | Create a contact                                         |
 | `contacts get <contactId>`                                                                             | Show a contact                                           |
 | `contacts by-email --email <address>`                                                                  | Find the contact that holds an address                   |
 | `contacts list [--limit <n>] [--cursor <cursor>]`                                                      | List contacts in the order they were created             |

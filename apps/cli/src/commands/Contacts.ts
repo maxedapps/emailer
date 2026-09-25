@@ -5,6 +5,19 @@ import { Command, Flag } from "effect/unstable/cli";
 import { report, withClient } from "../Client.ts";
 import { entityPageFlags, idArgument, pageQuery } from "../Flags.ts";
 
+/**
+ * An attribute map as repeated `key=value` pairs. The same bounds the service enforces apply at
+ * parsing: too many entries or an oversized key is refused here with a usable message rather than
+ * as a 400 after a round trip. The typed client still validates, so this narrows the moment of
+ * refusal, not the rule.
+ */
+const attributesFlag = (description: string) =>
+  Flag.KeyValuePair("attr").pipe(
+    Flag.withDescription(description),
+    Flag.withSchema(Schemas.ContactAttributes),
+    Flag.optional,
+  );
+
 const contactsCreate = Command.make(
   "create",
   {
@@ -17,19 +30,30 @@ const contactsCreate = Command.make(
       Flag.withSchema(Schemas.EntityName),
       Flag.optional,
     ),
+    attr: attributesFlag("The contact's attributes, as repeated key=value pairs"),
   },
   Effect.fn(function* (input) {
     const created = yield* withClient((client) =>
       client.contacts.create({
-        payload: Option.isSome(input.name)
-          ? { email: input.email, name: input.name.value }
-          : { email: input.email },
+        payload: {
+          email: input.email,
+          name: Option.getOrUndefined(input.name),
+          attributes: Option.getOrUndefined(input.attr),
+        },
       }),
     );
 
     yield* report(created);
   }),
-).pipe(Command.withDescription("Create a contact"));
+).pipe(
+  Command.withDescription("Create a contact"),
+  Command.withExamples([
+    {
+      command: "emailer contacts create --email sam@example.com --attr plan=pro --attr city=Berlin",
+      description: "Create a contact with two attributes",
+    },
+  ]),
+);
 
 const contactsGet = Command.make(
   "get",
@@ -116,14 +140,7 @@ const contactsUpdate = Command.make(
       Flag.withDescription("Remove the display name"),
       Flag.withDefault(false),
     ),
-    attr: Flag.KeyValuePair("attr").pipe(
-      Flag.withDescription("Replace the whole attribute map, as repeated key=value pairs"),
-      // The same bounds the service enforces, applied at parsing: too many entries or an
-      // oversized key is refused here with a usable message rather than as a 400 after a round
-      // trip. The typed client still validates, so this narrows the moment of refusal, not the rule.
-      Flag.withSchema(Schemas.ContactAttributes),
-      Flag.optional,
-    ),
+    attr: attributesFlag("Replace the whole attribute map, as repeated key=value pairs"),
   },
   Effect.fn(function* (input) {
     const payload = contactChange(input.email, input.name, input.clearName, input.attr);

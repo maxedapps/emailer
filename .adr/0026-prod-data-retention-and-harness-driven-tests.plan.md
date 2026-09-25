@@ -175,7 +175,7 @@ Status: Done.
 
 ### T8 — `contacts create --attr`
 
-Status: Not started
+Status: Done. As built: create and update share one `attributesFlag`, and `contacts create` gains an example.
 
 - **Where:** `contactsCreate` in `apps/cli/src/commands/Contacts.ts`.
 - **Change:** the repeatable `--attr` flag from `contacts update`, with the same schema.

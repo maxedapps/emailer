@@ -2,9 +2,41 @@ import { NodeServices } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect } from "effect";
 
-import { contactId, inMemoryService, runCli, token, withService } from "../../test/CliHarness.ts";
+import {
+  contactId,
+  inMemoryService,
+  parseJson,
+  runCli,
+  token,
+  withService,
+} from "../../test/CliHarness.ts";
 
 describe("contact management from the command line", () => {
+  it.live("creates a contact with repeated --attr pairs as one attribute map", () =>
+    Effect.gen(function* () {
+      const service = inMemoryService(token);
+
+      const result = yield* withService(service, (baseUrl) =>
+        runCli(baseUrl, token, [
+          "contacts",
+          "create",
+          "--email",
+          "sam@example.com",
+          "--attr",
+          "plan=pro",
+          "--attr",
+          "city=Berlin",
+        ]),
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(yield* parseJson(result.stdout)).toMatchObject({
+        email: "sam@example.com",
+        attributes: { plan: "pro", city: "Berlin" },
+      });
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
   it.live("merges repeated --attr pairs into one attribute map", () =>
     Effect.gen(function* () {
       const service = inMemoryService(token);
