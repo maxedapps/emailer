@@ -139,7 +139,12 @@ Status: Done. As built: the one-address-twice test was widened to 30 entries wit
 
 ### T5 — CSV files
 
-Status: Not started
+Status: Done. As built:
+
+- **`info` output:** `csv-parse` types its output as string rows whatever the options, so the `info` output is decoded with a Schema rather than cast.
+- **Parser errors:** its messages, such as an unclosed quote or a row with the wrong number of cells, already name the line.
+- **The row shape** is a named `RowEntry` built in separate statements, as the lint rules ask.
+- **The CLI harness** records each import call's contacts rather than only its size, so the CSV test can see the attributes that arrive.
 
 - **Dependency:** `csv-parse` (7.0.2, no dependencies, bundled types), added to the catalog and to `apps/cli`.
 - **Where:** a new `apps/cli/src/CsvContacts.ts`. `lists import`'s file flag reads a `.csv` path through it; any other path stays JSON.

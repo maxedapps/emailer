@@ -27,8 +27,8 @@ interface Service {
   readonly campaignUpdates: Array<Schemas.UpdateCampaignPayload>;
   readonly testSends: Array<Schemas.TestSendPayload>;
   readonly startedAt: Map<string, string>;
-  /** How many contacts each import call carried, in arrival order, refused calls included. */
-  readonly importBatches: Array<number>;
+  /** The contacts each import call carried, in arrival order, refused calls included. */
+  readonly importCalls: Array<Schemas.ImportContactsPayload["contacts"]>;
   /** A list named "Readers" at `listId` whose members hold these addresses. */
   readonly seedList: (emails: ReadonlyArray<string>) => void;
 }
@@ -64,7 +64,7 @@ export const inMemoryService = (
   const campaignUpdates: Array<Schemas.UpdateCampaignPayload> = [];
   const testSends: Array<Schemas.TestSendPayload> = [];
   const startedAt = new Map<string, string>();
-  const importBatches: Array<number> = [];
+  const importCalls: Array<Schemas.ImportContactsPayload["contacts"]> = [];
   let importedContacts = 0;
 
   const authorization = Layer.succeed(Authorization)(
@@ -239,9 +239,9 @@ export const inMemoryService = (
         }),
       import: (request) =>
         Effect.gen(function* () {
-          importBatches.push(request.payload.contacts.length);
+          importCalls.push(request.payload.contacts);
 
-          if (options.importUnavailableOnce === true && importBatches.length === 1) {
+          if (options.importUnavailableOnce === true && importCalls.length === 1) {
             return yield* new Errors.StorageUnavailable({
               operation: "importContacts",
               failure: "ThrottlingException",
@@ -568,7 +568,7 @@ export const inMemoryService = (
     campaignUpdates,
     testSends,
     startedAt,
-    importBatches,
+    importCalls,
     seedList,
   };
 };

@@ -3,6 +3,7 @@ import { Array as Arr, Console, Effect, FileSystem, Schema } from "effect";
 import { CliError, Command, Flag } from "effect/unstable/cli";
 
 import { report, withClient } from "../Client.ts";
+import { decodeCsvContacts } from "../CsvContacts.ts";
 import { entityPageFlags, idArgument, memberPageFlags, pageQuery } from "../Flags.ts";
 
 const listsCreate = Command.make(
@@ -128,15 +129,19 @@ const count = (value: number) => value.toLocaleString("en-US");
 /**
  * Read and decoded here rather than through `Flag.FileSchema`, whose decode drops keys the contract
  * does not declare: a misspelled `attributs` would vanish and its contact would be imported without
- * attributes. Rejecting the key names it before any request is made.
+ * attributes. Rejecting the key names it before any request is made. A `.csv` file is a CSV export
+ * instead, whose columns name the fields.
  */
 const importFile = Flag.File("file", { mustExist: true }).pipe(
-  Flag.withDescription("A JSON file holding the contacts to load"),
+  Flag.withDescription("A JSON or CSV (.csv) file holding the contacts to load"),
   Flag.mapEffect((path) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
+      const text = yield* fs.readFileString(path);
 
-      return yield* decodeImportFile(yield* fs.readFileString(path));
+      return path.toLowerCase().endsWith(".csv")
+        ? yield* decodeCsvContacts(text)
+        : yield* decodeImportFile(text);
     }).pipe(
       Effect.mapError(
         (error) =>
@@ -198,6 +203,11 @@ const listsImport = Command.make(
     {
       command: "emailer lists import 0195f0a0-1111-4222-8333-44444444109e --file contacts.json",
       description: "Load every contact in the file, reusing any that already hold their address",
+    },
+    {
+      command: "emailer lists import 0195f0a0-1111-4222-8333-44444444109e --file export.csv",
+      description:
+        "Load a CSV export: an email column, an optional name, other columns as attributes",
     },
   ]),
 );

@@ -100,7 +100,9 @@ describe("list management from the command line", () => {
       );
 
       expect(result.exitCode).toBe(0);
-      expect(service.importBatches.toSorted((a, b) => a - b)).toStrictEqual([5, 20, 20]);
+      expect(
+        service.importCalls.map((call) => call.length).toSorted((a, b) => a - b),
+      ).toStrictEqual([5, 20, 20]);
       expect(yield* parseJson(result.stdout)).toMatchObject({
         contacts: contacts.map((contact) => ({ email: contact.email, member: true })),
       });
@@ -122,7 +124,7 @@ describe("list management from the command line", () => {
       );
 
       expect(result.exitCode).toBe(0);
-      expect(service.importBatches).toStrictEqual([1, 1]);
+      expect(service.importCalls).toHaveLength(2);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
@@ -137,11 +139,32 @@ describe("list management from the command line", () => {
       );
 
       expect(result.exitCode).not.toBe(0);
-      expect(service.importBatches).toStrictEqual([1]);
+      expect(service.importCalls).toHaveLength(1);
       expect(result.stderr).toContain("ListNotFound");
       expect(result.stderr).toContain(
         "Stopped after 0 of 1 contacts were imported; running the same file again is safe",
       );
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.live("imports a CSV export, taking extra columns as attributes", () =>
+    Effect.gen(function* () {
+      const service = inMemoryService(token);
+
+      const file = yield* tempFile("csv", "Email,Name,plan\nada@example.com,Ada,pro\n");
+
+      const result = yield* withService(service, (baseUrl) =>
+        Effect.gen(function* () {
+          yield* runCli(baseUrl, token, ["lists", "create", "--name", "Readers"]);
+
+          return yield* runCli(baseUrl, token, ["lists", "import", listId, "--file", file]);
+        }),
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(service.importCalls).toMatchObject([
+        [{ email: "ada@example.com", name: "Ada", attributes: { plan: "pro" } }],
+      ]);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 

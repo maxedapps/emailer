@@ -6,6 +6,7 @@
   "dependencies": {
     "@effect/platform-node": "catalog:",
     "@emailer/api": "workspace:*",
+    "csv-parse": "catalog:",
     "effect": "catalog:",
     "marked": "catalog:"
   }

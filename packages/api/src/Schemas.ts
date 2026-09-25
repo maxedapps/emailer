@@ -428,7 +428,7 @@ export const page = <Item extends Schema.Top, Cursor extends Schema.Top>(
   cursor: Cursor,
 ) => Schema.Struct({ items: Schema.Array(item), nextCursor: Schema.optional(cursor) });
 
-const ImportContactEntry = Schema.Struct({
+export const ImportContactEntry = Schema.Struct({
   email: EmailAddress,
   name: Schema.optional(EntityName),
   attributes: Schema.optional(ContactAttributes),
