@@ -26,7 +26,7 @@ import { AudienceStore } from "../storage/Audience.ts";
 import { CampaignStore, RunSuperseded, SettlementNotApplied } from "../storage/Campaigns.ts";
 import { unusedAudience, unusedCampaigns } from "../storage/Testing.ts";
 
-import type { AddressStatus, PauseReason, SkipReason } from "@emailer/api/Schemas";
+import type { MailboxStatus, PauseReason, SkipReason } from "@emailer/api/Schemas";
 import type { SendError, SendPurpose } from "./Mailer.ts";
 import type { MessageContent } from "./Message.ts";
 import type { SendAllowance } from "./SendGuard.ts";
@@ -101,7 +101,9 @@ interface World {
   readonly listMissing: boolean;
   readonly members: ReadonlyArray<Schemas.Contact>;
   readonly nextCursor: string | undefined;
-  readonly statuses: ReadonlyMap<string, AddressStatus>;
+  readonly statuses: ReadonlyMap<string, MailboxStatus>;
+  /** Each opt-out as `<email> <listId>`. */
+  readonly optOuts: ReadonlySet<string>;
   readonly rows: Map<string, RecipientRow>;
   readonly counters: { accepted: number; rejected: number; uncertain: number; skipped: number };
   readonly claims: Array<string>;
@@ -145,11 +147,13 @@ const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> 
             ? { items }
             : { items, nextCursor: world.nextCursor };
         }),
-      addressStatus: (email) =>
+      addressStatus: (email, list) =>
         Effect.sync(() => {
           world.statusCalls.push(email);
 
-          return world.statuses.get(email) ?? ("mailable" as const);
+          return world.optOuts.has(`${email} ${list}`)
+            ? ("unsubscribed" as const)
+            : (world.statuses.get(email) ?? ("mailable" as const));
         }),
     }),
     Layer.succeed(CampaignStore)({
@@ -364,7 +368,8 @@ interface Scenario {
   readonly beginOutcome?: "running" | "stale";
   readonly checkpointOutcome?: "updated" | "condition-failed";
   readonly listMissing?: boolean;
-  readonly statuses?: ReadonlyArray<readonly [string, AddressStatus]>;
+  readonly statuses?: ReadonlyArray<readonly [string, MailboxStatus]>;
+  readonly optOuts?: ReadonlyArray<readonly [email: string, listId: string]>;
   /** Members a previous delivery of the slice already claimed. */
   readonly claimed?: ReadonlyArray<Schemas.Contact>;
   readonly guard?: SendAllowance;
@@ -394,6 +399,7 @@ const fixture = (scenario: Scenario = {}): Fixture => {
     members: scenario.members ?? [memberA],
     nextCursor: scenario.nextCursor,
     statuses: new Map(scenario.statuses ?? []),
+    optOuts: new Set((scenario.optOuts ?? []).map(([email, list]) => `${email} ${list}`)),
     rows: new Map(
       (scenario.claimed ?? []).map((member): [string, RecipientRow] => [
         member.id,
@@ -530,7 +536,7 @@ describe("runSlice", () => {
           { kind: "campaign", campaignId, sendId: fix.world.rows.get(memberB.id)?.sendId },
         ]);
         expect(fix.mailer.sent[0]?.unsubscribeUrl).toBe(
-          yield* unsubscribeLink(memberA.email).pipe(
+          yield* unsubscribeLink({ mailbox: memberA.email, listId }).pipe(
             Effect.provide(configurationOf(unsubscribeEnv)),
           ),
         );
@@ -584,8 +590,8 @@ describe("runSlice", () => {
     Effect.gen(function* () {
       const fix = fixture({
         members: [memberA, memberB, memberC],
+        optOuts: [[memberA.email, listId]],
         statuses: [
-          [memberA.email, "unsubscribed"],
           [memberB.email, "suppressed"],
           [memberC.email, "bouncing"],
         ],
@@ -602,6 +608,17 @@ describe("runSlice", () => {
       expect(fix.world.claims).toHaveLength(0);
       expect(fix.mailer.sent).toHaveLength(0);
       expect(fix.world.completed).toBe(1);
+    }),
+  );
+
+  it.effect("sends to a member who opted out of another list only", () =>
+    Effect.gen(function* () {
+      const fix = fixture({ optOuts: [[memberA.email, "0195f0a0-1111-4222-8333-44444444209e"]] });
+
+      successOf(yield* runSliceNow(fix));
+
+      expect(fix.world.skips).toHaveLength(0);
+      expect(fix.mailer.sent).toHaveLength(1);
     }),
   );
 

@@ -273,6 +273,7 @@ export const fakeService = (seed: Seed = {}) => {
           Effect.as({
             email: request.query.email,
             status: "suppressed" as const,
+            optOuts: [listId],
             suppression: { reason: "bounce" as const, suppressedAt: createdAt },
             transientBounces: [],
             accountSuppression: { reason: "bounce" as const, lastUpdateTime: createdAt },
@@ -283,6 +284,7 @@ export const fakeService = (seed: Seed = {}) => {
           Effect.as({
             email: request.payload.email,
             status: "mailable" as const,
+            optOuts: [],
             transientBounces: [],
             accountSuppression: null,
           }),

@@ -1,16 +1,17 @@
 import * as Schemas from "@emailer/api/Schemas";
 import { Data, DateTime, Effect, Option, Predicate, Record, Schema } from "effect";
 
-import { itemReader, num, recordVersion, str, strMap } from "./Items.ts";
+import { itemReader, num, recordVersion, str, strMap, strSet } from "./Items.ts";
 
-import type { ReadPrimitives, UpdatePrimitives } from "./Primitives.ts";
+import type { QueryPrimitives, ReadPrimitives, UpdatePrimitives } from "./Primitives.ts";
 
 /**
- * What is known about a mailbox independently of any contact, and outliving one: that its owner
- * opted out, that the mail system reported it undeliverable, and its recent transient bounces. One
- * item holds all three, so the status before each send is one read. It is keyed by mailbox rather
- * than by contact, so deleting and re-creating a contact escapes none of it. The `EMAIL#`
- * reservation is keyed by address too, but it is contact identity and belongs to `Contacts.ts`.
+ * What is known about a mailbox independently of any contact, and outliving one: the lists its
+ * owner opted out of, that the mail system reported it undeliverable, and its recent transient
+ * bounces. One item holds all three, so the status before each send is one read. It is keyed by
+ * mailbox rather than by contact, so deleting and re-creating a contact escapes none of it. The
+ * `EMAIL#` reservation is keyed by address too, but it is contact identity and belongs to
+ * `Contacts.ts`.
  */
 export const addressKey = (email: string) => ({
   pk: str(`ADDRESS#${Schemas.mailboxKey(email)}`),
@@ -39,18 +40,19 @@ export interface AddressSuppression {
   readonly suppressedAt: string;
 }
 
-export interface AddressUnsubscribe {
+/** An opt-out from one list. */
+export interface AddressOptOut {
   readonly email: string;
-  readonly unsubscribedAt: string;
+  readonly listId: string;
 }
 
 /**
- * The status reads an opt-out or a suppression by its presence alone, so one that is malformed
- * still keeps its recipient from being mailed; only the transient window is decoded.
+ * The status reads a suppression by its presence alone, so one that is malformed still keeps its
+ * recipient from being mailed; the opt-outs and the transient window are decoded.
  */
 const readStatus = itemReader(
   Schema.Struct({
-    unsubscribedAt: Schema.optionalKey(Schema.Unknown),
+    optOuts: Schema.optionalKey(Schema.Array(Schema.String)),
     suppression: Schema.optionalKey(Schema.Unknown),
     transientBounces: Schema.optionalKey(Schema.Array(Schema.String)),
   }),
@@ -59,7 +61,7 @@ const readStatus = itemReader(
 /** The whole item, as `addresses status` reports it. */
 const readRecord = itemReader(
   Schema.Struct({
-    unsubscribedAt: Schemas.AddressRecord.fields.unsubscribedAt,
+    optOuts: Schema.optionalKey(Schemas.AddressRecord.fields.optOuts),
     suppression: Schemas.AddressRecord.fields.suppression,
     transientBounces: Schema.optionalKey(Schema.Array(Schema.String)),
   }),
@@ -77,18 +79,11 @@ const occurredSince = (occurrence: string, windowStart: DateTime.Utc): boolean =
   );
 };
 
-const statusOf = (
-  stored: {
-    readonly unsubscribedAt?: unknown;
-    readonly suppression?: unknown;
-    readonly transientBounces?: ReadonlyArray<string>;
-  },
+/** Whether the mailbox takes mail at all, whichever list it is sent from. */
+const mailboxStatusOf = (
+  stored: { readonly suppression?: unknown; readonly transientBounces?: ReadonlyArray<string> },
   now: DateTime.Utc,
-): Schemas.AddressStatus => {
-  if (stored.unsubscribedAt !== undefined) {
-    return "unsubscribed";
-  }
-
+): Schemas.MailboxStatus => {
   if (stored.suppression !== undefined) {
     return "suppressed";
   }
@@ -139,65 +134,76 @@ export const suppressionWrites = (primitives: Pick<UpdatePrimitives, "update">) 
 };
 
 /**
- * The public unsubscribe function's whole persistence need: one update that records the first
- * opt-out and keeps it, and so one DynamoDB permission. It is split from the reader and from
+ * The public unsubscribe function's whole persistence need: one update that adds the list to the
+ * mailbox's opt-outs, and so one DynamoDB permission. It is split from the reader and from
  * suppression precisely so the one unauthenticated surface in the system cannot read, query or
  * delete anything.
  */
 export const unsubscribeWrites = (primitives: Pick<UpdatePrimitives, "update">) => {
   const { update } = primitives;
 
-  const unsubscribeAddress = Effect.fn("Storage.unsubscribeAddress")((
-    unsubscribe: AddressUnsubscribe,
-  ) => {
-    const stamp = stamped(unsubscribe.email);
+  /** Adding to a set is idempotent, so a repeated opt-out changes nothing. */
+  const optOut = Effect.fn("Storage.optOut")((request: AddressOptOut) => {
+    const stamp = stamped(request.email);
 
-    return update("unsubscribeAddress", {
-      Key: addressKey(unsubscribe.email),
-      UpdateExpression: `SET ${stamp.expression}, unsubscribedAt = if_not_exists(unsubscribedAt, :at)`,
-      ExpressionAttributeValues: { ...stamp.values, ":at": str(unsubscribe.unsubscribedAt) },
+    return update("optOut", {
+      Key: addressKey(request.email),
+      UpdateExpression: `SET ${stamp.expression} ADD optOuts :list`,
+      ExpressionAttributeValues: { ...stamp.values, ":list": strSet([request.listId]) },
     });
   });
 
-  return { unsubscribeAddress } as const;
+  return { optOut } as const;
 };
 
-export const addressReads = (primitives: ReadPrimitives) => {
-  const { readItem } = primitives;
+export const addressReads = (primitives: ReadPrimitives & QueryPrimitives) => {
+  const { readItem, runQuery } = primitives;
 
-  /** One strongly consistent read; a mailbox nothing was ever recorded for is mailable. */
-  const addressStatus = Effect.fn("Storage.addressStatus")(function* (email: string) {
+  /**
+   * One strongly consistent read. An opt-out from this list is the human's decision and answers
+   * ahead of the mail system's reports; a mailbox nothing was ever recorded for is mailable.
+   */
+  const addressStatus = Effect.fn("Storage.addressStatus")(function* (
+    email: string,
+    listId: string,
+  ) {
     const { Item } = yield* readItem("addressStatus", addressKey(email));
 
     if (Item === undefined) {
       return "mailable" as const;
     }
 
-    return statusOf(yield* readStatus("addressStatus", Item), yield* DateTime.now);
+    const stored = yield* readStatus("addressStatus", Item);
+
+    return stored.optOuts?.includes(listId) === true
+      ? ("unsubscribed" as const)
+      : mailboxStatusOf(stored, yield* DateTime.now);
   });
 
+  /** The address's whole partition in one strongly consistent query, which holds its item. */
   const addressRecord = Effect.fn("Storage.addressRecord")(function* (email: string) {
-    const { Item } = yield* readItem("addressRecord", addressKey(email));
+    const { pk, sk } = addressKey(email);
+
+    const partition = yield* runQuery("addressRecord", "base-table", {
+      KeyConditionExpression: "pk = :pk",
+      ExpressionAttributeValues: { ":pk": pk },
+    });
+
+    const item = partition.Items?.find((entry) => entry.sk?.S === sk.S);
 
     const stored =
-      Item === undefined ? { transientBounces: [] } : yield* readRecord("addressRecord", Item);
+      item === undefined ? { transientBounces: [] } : yield* readRecord("addressRecord", item);
 
     const record = {
       email,
-      status: statusOf(stored, yield* DateTime.now),
+      status: mailboxStatusOf(stored, yield* DateTime.now),
+      optOuts: stored.optOuts ?? [],
       transientBounces: stored.transientBounces ?? [],
       accountSuppression: null,
     };
 
-    const unsubscribed =
-      stored.unsubscribedAt === undefined
-        ? record
-        : { ...record, unsubscribedAt: stored.unsubscribedAt };
-
     return (
-      stored.suppression === undefined
-        ? unsubscribed
-        : { ...unsubscribed, suppression: stored.suppression }
+      stored.suppression === undefined ? record : { ...record, suppression: stored.suppression }
     ) satisfies Schemas.AddressRecord;
   });
 
@@ -211,8 +217,8 @@ export const addressWrites = (primitives: Pick<UpdatePrimitives, "updateIf">) =>
   const { updateIf } = primitives;
 
   /**
-   * Clears the suppression and the transient window. An opt-out stays: it is the recipient's
-   * decision, not a delivery fault. Conditioned on the item existing, so a mailbox with nothing
+   * Clears the suppression and the transient window. Opt-outs stay: they are the recipient's
+   * decisions, not delivery faults. Conditioned on the item existing, so a mailbox with nothing
    * recorded does not gain an empty item.
    */
   const unsuppress = Effect.fn("Storage.unsuppress")((email: string) =>

@@ -130,7 +130,7 @@ export const runSlice = Effect.fn("Dispatching.runSlice")(
         continue;
       }
 
-      const status = yield* audience.addressStatus(member.email);
+      const status = yield* audience.addressStatus(member.email, listId);
       const now = yield* nowIso;
 
       if (status !== "mailable") {
@@ -163,7 +163,9 @@ export const runSlice = Effect.fn("Dispatching.runSlice")(
 
       // Minted before the claim: a claimed row is only ever settled by a submission, so a link that
       // cannot be minted must stop the slice while the member is still unclaimed.
-      const unsubscribeUrl = yield* unsubscribeLink(member.email).pipe(Effect.orDie);
+      const unsubscribeUrl = yield* unsubscribeLink({ mailbox: member.email, listId }).pipe(
+        Effect.orDie,
+      );
 
       const sendId = yield* newIdentifier;
 

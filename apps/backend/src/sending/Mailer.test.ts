@@ -117,7 +117,7 @@ const unsubscribeSecret = "8f14e45fceea167a5a36dedd4bea2543a1b2c3d4e5f60718293a4
 
 const recipient = "sam@example.com";
 
-const unsubscribeUrl = `${unsubscribeBase}/unsubscribe/${mintToken(Redacted.make(unsubscribeSecret), recipient)}`;
+const unsubscribeUrl = `${unsubscribeBase}/unsubscribe/${mintToken(Redacted.make(unsubscribeSecret), { mailbox: recipient, listId: "0195f0a0-1111-4222-8333-44444444109e" })}`;
 
 const postalAddress = "Example GmbH, Example Street 1, 12345 Example City, Germany";
 

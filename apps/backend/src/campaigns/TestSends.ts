@@ -56,14 +56,20 @@ export const sendTest = Effect.fn("TestSends.sendTest")(function* (
   const outcomes: Array<Schemas.TestSendOutcome> = [];
 
   for (const email of recipients) {
-    const status = yield* audience.addressStatus(email);
+    // The campaign's list, not the one a test may be sent to: the copy stands in for the
+    // campaign's mail, and its unsubscribe link must work as the campaign's would.
+    const status = yield* audience.addressStatus(email, campaign.listId);
 
     if (status !== "mailable") {
       outcomes.push({ email, outcome: "skipped", reason: status });
       continue;
     }
 
-    const unsubscribeUrl = yield* unsubscribeLink(email).pipe(Effect.orDie);
+    const unsubscribeUrl = yield* unsubscribeLink({
+      mailbox: email,
+      listId: campaign.listId,
+    }).pipe(Effect.orDie);
+
     const delay = yield* guard.slot(allowance.limit);
 
     yield* Effect.sleep(delay);

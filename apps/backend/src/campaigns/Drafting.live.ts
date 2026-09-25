@@ -237,7 +237,9 @@ export const draftingSuite = (test: LiveTest) => {
         const result = yield* testToSimulators(client, campaign.id, { to: [bounce] });
 
         expect(result.recipients[0]?.outcome).toBe("accepted");
-        expect(yield* awaitAddressStatus(storage, bounce, "suppressed")).toBe("suppressed");
+        expect(yield* awaitAddressStatus(storage, bounce, list.id, "suppressed")).toBe(
+          "suppressed",
+        );
 
         const meta = yield* campaignMeta(campaign.id);
 

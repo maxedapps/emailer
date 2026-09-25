@@ -21,11 +21,13 @@ import { unusedAudience, unusedCampaigns } from "../storage/Testing.ts";
 import type { SendError, SendPurpose } from "../sending/Mailer.ts";
 import type { MessageContent } from "../sending/Message.ts";
 import type { SendAllowance } from "../sending/SendGuard.ts";
-import type { AddressStatus } from "@emailer/api/Schemas";
+import type { MailboxStatus } from "@emailer/api/Schemas";
 
 const campaignId = "0195f0a0-1111-4222-8333-4444444ca409";
 
 const listId = "0195f0a0-1111-4222-8333-44444444109e";
+
+const otherListId = "0195f0a0-1111-4222-8333-44444444209e";
 
 const campaign: Schemas.Campaign = {
   id: campaignId,
@@ -54,7 +56,8 @@ const member = (n: number): Schemas.Contact => ({
 
 interface Scenario {
   readonly allowance?: SendAllowance;
-  readonly statuses?: ReadonlyArray<readonly [string, AddressStatus]>;
+  readonly statuses?: ReadonlyArray<readonly [string, MailboxStatus]>;
+  readonly optOuts?: ReadonlyArray<readonly [email: string, listId: string]>;
   /** How SES answers each send in turn: an error, or acceptance once they run out. */
   readonly failures?: ReadonlyArray<SendError>;
   readonly members?: ReadonlyArray<Schemas.Contact>;
@@ -78,6 +81,7 @@ const fixture = (scenario: Scenario = {}) => {
   const pageRequests: Array<number> = [];
   const failures = [...(scenario.failures ?? [])];
   const statuses = new Map(scenario.statuses ?? []);
+  const optOuts = new Set((scenario.optOuts ?? []).map(([email, list]) => `${email} ${list}`));
 
   const layer = Layer.mergeAll(
     configuration,
@@ -97,7 +101,12 @@ const fixture = (scenario: Scenario = {}) => {
             ? { items }
             : { items, nextCursor: scenario.nextCursor };
         }),
-      addressStatus: (email) => Effect.succeed(statuses.get(email) ?? ("mailable" as const)),
+      addressStatus: (email, list) =>
+        Effect.succeed(
+          optOuts.has(`${email} ${list}`)
+            ? ("unsubscribed" as const)
+            : (statuses.get(email) ?? ("mailable" as const)),
+        ),
     }),
     Layer.succeed(CampaignStore)({
       ...unusedCampaigns,
@@ -158,7 +167,7 @@ describe("sendTest", () => {
         const recipients = ["b@example.com", "a@example.com"];
 
         const links = yield* Effect.forEach(recipients, (recipient) =>
-          unsubscribeLink(recipient).pipe(Effect.provide(configuration)),
+          unsubscribeLink({ mailbox: recipient, listId }).pipe(Effect.provide(configuration)),
         );
 
         expect(fix.sent).toStrictEqual(
@@ -189,8 +198,8 @@ describe("sendTest", () => {
   it.effect("skips addresses that are not mailable, without taking a slot", () =>
     Effect.gen(function* () {
       const fix = fixture({
+        optOuts: [["gone@example.com", listId]],
         statuses: [
-          ["gone@example.com", "unsubscribed"],
           ["hard@example.com", "suppressed"],
           ["soft@example.com", "bouncing"],
         ],
@@ -248,6 +257,32 @@ describe("sendTest", () => {
         { email: "member1@example.com", outcome: "accepted", messageId: "message-1" },
         { email: "member2@example.com", outcome: "accepted", messageId: "message-2" },
       ]);
+    }),
+  );
+
+  // A test copy stands in for the campaign's mail, so the campaign's list decides, whichever list
+  // the copy goes to.
+  it.effect("skips members who left the campaign's list, not the list the test went to", () =>
+    Effect.gen(function* () {
+      const fix = fixture({
+        members: [member(1), member(2)],
+        optOuts: [
+          ["member1@example.com", listId],
+          ["member2@example.com", otherListId],
+        ],
+      });
+
+      const attempt = yield* run(fix, { listId: otherListId });
+
+      expect(Result.isSuccess(attempt) && attempt.success.recipients).toStrictEqual([
+        { email: "member1@example.com", outcome: "skipped", reason: "unsubscribed" },
+        { email: "member2@example.com", outcome: "accepted", messageId: "message-1" },
+      ]);
+      expect(fix.sent[0]?.unsubscribeUrl).toBe(
+        yield* unsubscribeLink({ mailbox: "member2@example.com", listId }).pipe(
+          Effect.provide(configuration),
+        ),
+      );
     }),
   );
 

@@ -79,6 +79,7 @@ const draft: CampaignControl = { state: "draft" };
 const record = {
   email,
   status: "mailable" as const,
+  optOuts: [],
   transientBounces: [],
   accountSuppression: null,
 };

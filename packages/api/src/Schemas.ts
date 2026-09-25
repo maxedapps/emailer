@@ -286,6 +286,12 @@ export const Campaign = Schema.Struct({ ...CampaignSummary.fields, ...CampaignBo
 
 export type Campaign = typeof Campaign.Type;
 
+/** Whether a mailbox takes mail at all, whichever list sends it. */
+export const MailboxStatus = Schema.Literals(["mailable", "suppressed", "bouncing"]);
+
+export type MailboxStatus = typeof MailboxStatus.Type;
+
+/** Whether a mailbox takes mail from one list: `unsubscribed` means it opted out of that list. */
 export const AddressStatus = Schema.Literals([
   "mailable",
   "unsubscribed",
@@ -304,13 +310,13 @@ export const SuppressionReason = Schema.Literals(["bounce", "complaint"]);
 export type SuppressionReason = typeof SuppressionReason.Type;
 
 /**
- * Account-list presence is always reported: `null` means SES has no entry. Local unsubscribe and
- * suppression rows are optional keys because they may not exist.
+ * Account-list presence is always reported: `null` means SES has no entry. `optOuts` names the
+ * lists the address left; the local suppression is an optional key because it may not exist.
  */
 export const AddressRecord = Schema.Struct({
   email: ListedEmailAddress,
-  status: AddressStatus,
-  unsubscribedAt: Schema.optionalKey(Timestamp),
+  status: MailboxStatus,
+  optOuts: Schema.Array(EntityId),
   suppression: Schema.optionalKey(
     Schema.Struct({
       reason: SuppressionReason,

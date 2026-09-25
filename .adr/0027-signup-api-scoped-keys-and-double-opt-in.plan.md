@@ -1,6 +1,6 @@
 # Plan: A sign-up API with scoped keys, double opt-in and per-list opt-out
 
-- Status: Ready
+- Status: In progress
 - Decision: [ADR-0027](0027-signup-api-scoped-keys-and-double-opt-in.md)
 
 ## Goal
@@ -34,7 +34,7 @@
 
 ### T1 — Per-list opt-out
 
-Status: To do
+Status: Done
 
 - **Storage (`apps/backend/src/storage/Addresses.ts`):**
   - Replace `unsubscribedAt` with `optOuts`, a string set of list ids, decoded by the status reader.

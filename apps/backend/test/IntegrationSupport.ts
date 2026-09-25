@@ -758,8 +758,13 @@ export type LiveStorage = ReturnType<typeof audienceOperations> &
 
 const statusDeadline = "60 seconds";
 
-export const awaitAddressStatus = (storage: LiveStorage, email: string, expected: AddressStatus) =>
-  storage.addressStatus(email).pipe(
+export const awaitAddressStatus = (
+  storage: LiveStorage,
+  email: string,
+  listId: string,
+  expected: AddressStatus,
+) =>
+  storage.addressStatus(email, listId).pipe(
     Effect.repeat({
       schedule: Schedule.spaced("3 seconds"),
       until: (status: AddressStatus) => status === expected,
