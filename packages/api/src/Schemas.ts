@@ -51,8 +51,8 @@ export const normalizeEmailAddress = (value: string): string => {
 };
 
 /**
- * The one address derivation every address-keyed item uses: `EMAIL#` uniqueness reservations,
- * `SUPPRESSION#`, and consent. Uniqueness and consent are therefore case-insensitive, while a
+ * The one address derivation every address-keyed item uses: `EMAIL#` uniqueness reservations and
+ * the `ADDRESS#` item holding consent and suppression. Both are therefore case-insensitive, while a
  * stored `email` keeps its local-part case.
  */
 export const mailboxKey = (email: string): string => email.trim().toLowerCase();

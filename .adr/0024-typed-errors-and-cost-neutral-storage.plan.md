@@ -156,7 +156,7 @@ Status: Done. As built:
 
 ### T4 — Item codec and the campaign record by state
 
-Status: Done except the prod decode scan, which waits for the user's go-ahead. As built:
+Status: Done. The prod decode scan ran on 2026-09-24 with the user's go-ahead: all 12 items the code reads decoded with the new records, none corrupt (2 contacts, 2 reservations, 1 list, 4 membership rows, 1 campaign, 1 body, 1 rate-limit window). The one other item, an old `UNSUBSCRIBE#` row, decoded under the migration's `--verify`, which reported it not yet merged, as expected before T11. As built:
 
 - `itemReader(record)` and `itemWriter(record)` take the contract schema as it is. The codec checks the version when it reads and stamps it when it writes, so no record declares `v`.
 - There is no `values()`. The codec is effectful, because the lint rules forbid synchronous schema calls, and building every expression through it would make every request builder effectful. Expression values keep `str`, `num`, `strMap` and `strSet`.
@@ -242,7 +242,14 @@ Status: Done. As built:
 
 ### T6 — One address item per mailbox
 
-Status: Not started
+Status: Done except the rehearsal, which is T10's. As built:
+
+- Every write is an update that may be the item's first, so each also sets `v = if_not_exists(v, :v), email = if_not_exists(email, :email)`. `updatePrimitives` gains an unconditional `update` for the unsubscribe and suppression writes.
+- The status reads `unsubscribedAt` and `suppression` by presence only; `addresses status` still decodes them in full.
+- `unsuppress` clears only what the item holds; a mailbox with no item is left without one.
+- The migration reads each old row strictly, so a row it cannot read stops it before anything is merged. `--verify` re-reads every address item strongly consistently, and `--delete-old` verifies again in the same run before it deletes.
+- After the deploy, the second pass waits until invocations of the old code have drained: at least the dispatcher's five-minute timeout.
+- The now unused `writePrimitives` export goes; `recordOnce` stays for campaign and list creation.
 
 - **The item:** `ADDRESS#<mailbox>` / `ADDRESS` holds `{ v, email, unsubscribedAt?, suppression?, transientBounces? }`. `suppression` is the current suppression fields as a string map; `transientBounces` is a string set.
 - **Writes:**
@@ -271,7 +278,7 @@ Status: Not started
   - The merge logic is a pure function with its own unit test.
   - The order at a switch closes the gap between old and new code:
     1. run it before the deploy;
-    2. run it again right after;
+    2. run it again once the old code's invocations have drained;
     3. `--verify`;
     4. `--delete-old`.
 
@@ -299,7 +306,13 @@ Status: Not started
 
 ### T7 — Send errors and retries as Schedules
 
-Status: Not started
+Status: Done. As built:
+
+- **The retry budget is not `upTo({ duration })`.** `upTo` compares only the elapsed time at a step with the limit, so the step at about 3.8 s still granted a further 4 s wait, and a persistent 500 ended as `TimeoutError`; the transport test showed it. The policy instead stops when the next delay would end past 4 s: `Schedule.while(({ elapsed, duration }) => elapsed + duration <= 4 s)`. That also gives up at once on a server retry-after hint longer than the budget.
+- The retry layer and `ReportingLive` are one `FunctionServicesLive` in `Lambda.ts`, which every function provides to each invocation; the client reads the policy from the calling fiber, so no binding layer needs it.
+- The mailer logs why an outcome is unknown where it classifies it, as before; `SubmissionUncertain` carries only the reason.
+- `accepted` and the `failureOutcomes` handlers map a send to what a send row or a test report records; the dispatcher and test sends share them. A handler object rather than one function, because `Effect.catchTags` cannot be typed over a generic error channel, and the dispatcher's attempt can also fail with the pacing slot's `StorageUnavailable`.
+- The throttle schedule reads the error with `Predicate.isTagged`, so it needs no input type.
 
 - **`Mailer.send`** answers the message ID, or fails with one of:
   - `SendRejected{code}`;
@@ -343,7 +356,7 @@ Status: Not started
 
 ### T8 — Stop subscribing to delivery delays
 
-Status: Not started
+Status: Done except the deploy-plan check, which is T10's. As built: `Classified` is now the one feedback shape. A delay event still queued at the deploy decodes as an event this system does not model and is logged as ignored, as any other would be.
 
 - **Remove:**
   - `DELIVERY_DELAY` from `feedbackPublishing`'s `matchingEventTypes` (`sending/Mailer.ts`);
@@ -361,7 +374,7 @@ Status: Not started
 
 ### T9 — Docs and ADRs
 
-Status: Not started
+Status: Done. As built: the README lists every public error by status under "What commands print" and gains "Upgrading a stage deployed before ADR-0024" with the migration order. ADR-0024 records the T7 retry-bound change as an amendment. The link check found no broken relative link; the leak check is clean on the branch.
 
 - **README:**
   - the error names in "What commands print" and "Behavior": 404 per entity, 503 per dependency, 409 `ContactChanged`, 400 for an oversized body;
@@ -377,7 +390,17 @@ Status: Not started
 
 ### T10 — Live gate
 
-Status: Not started
+Status: Done on 2026-09-24, on the ephemeral stage `test`, which was then destroyed. As run:
+
+- **Rehearsal:** `main` was deployed from a separate worktree. Through the old code, one simulator address opted out through its real link and one bounce-simulator test send was suppressed. One transient row with three recent bounces was seeded in the old shape. `addresses status` showed `unsubscribed`, `suppressed` and `bouncing`.
+  - Pass 1 merged 3 of 3 rows. A second opt-out then went through the old code, between the passes.
+  - The branch was deployed with `--force`; all five functions were redeployed. The event destination matches `BOUNCE` and `COMPLAINT` only, and the rule no longer routes delays (T8). With `--force` every resource reports "updated", so the check read the deployed configuration rather than the deploy log.
+  - Before pass 2 the new code reported the late opt-out as `mailable`, the gap the second pass exists for. Pass 2 ran right after the deploy, without the five-minute wait, because nothing else used the stage. It merged 4 of 4, `--verify` found none unmerged, and `--delete-old` deleted 4. Only `ADDRESS#` items remained.
+  - `addresses status` showed the same states, including the late opt-out. A campaign to six members completed with 2 accepted and 4 skipped.
+- **Full suite:** 5 files, 41 cases passed on the branch deployment.
+- **Privacy:** a contact with a marker address and a malformed `createdAt` answered 500 with an empty body. The API's log group held `operation failed { error: 'CorruptItem', operation: 'getContact' }` and no occurrence of the marker.
+- **Teardown:** destroy succeeded, and the account inventory showed no `test` function, table, queue, alarm, log group, rule, topic, configuration set, schedule group or role.
+- **Found:** the README's table lookup assumed an `emailer-<stage>-` prefix; the table is named `Emailer-EmailerData-<stage>-…`, so the lookup now matches `EmailerData-<stage>-`. The migration script reads credentials from the environment: the AWS CLI's SSO profile is not readable by the SDK's chain, so the commands used exported credentials, as the deploys do.
 
 - **Migration rehearsal:**
   - deploy an ephemeral stage from `main`;
@@ -394,6 +417,25 @@ Status: Not started
   - CloudWatch holds the reporter's line and no marker.
 - **Teardown:** destroy the stage; the inventory shows no leftovers.
 
+### T12 — Uncompressed AWS replies (added on the user's request; runs before T11)
+
+Status: Done on 2026-09-24. On the ephemeral stage `test`, 16 imports in flight into one list for 20 s answered 199 × 200 and 53 × 503 (`StorageUnavailable`: 29 `TransactionCanceledException`, 24 `ThrottlingException`), and no 500. The API's log group held no decode error, and the live suite passed (41 cases). The stage and the throwaway reproduction table were deleted, and the inventory is clean.
+
+- **The bug:** under throttling, some API calls answered an empty 500. Reproduced on a throwaway table with 16 parallel 25-item transactions:
+  - DynamoDB labelled its larger error replies (cancelled transactions of 5–9 KB) `Content-Encoding: gzip`, but the bodies were plain JSON;
+  - Node's fetch asks for gzip on its own, trusted the label and failed ("incorrect header check");
+  - the client surfaced that as a defect (`HttpClientError: Decode error`), which neither the retry policy nor the 503 mapping sees: 189 of 914 replies.
+- **The fix:** every function asks for AWS replies with `accept-encoding: identity`, as the AWS SDKs do (the Go SDK has gzip off by default for DynamoDB; the JS v3 Node client never asks). `FunctionServicesLive` gains a layer that maps the runtime's HTTP client; the client prefers the calling fiber's services, so it applies to every AWS call. With it, the same run gave no compressed reply and no defect, only typed `ThrottlingException` and `TransactionCanceledException` failures.
+- Throttled transactions stay a 503 without a store retry, as `transact` already documents.
+
+**Verify:**
+
+- the transport test asserts every request, retries included, asks for `identity` through `FunctionServicesLive`, and fails without the layer;
+- on an ephemeral stage, 16 parallel imports into one list answer only 200 or 503, never 500;
+- the live suite passes.
+
+**Cost:** none. Lambda and DynamoDB share a Region, so uncompressed replies add no transfer charge.
+
 ### T11 — Prod rollout (after merge, with the user's go-ahead)
 
 Status: Not started
@@ -402,10 +444,11 @@ Status: Not started
   - no campaign is `sending`, `queued` or `scheduled`;
   - no API use during the switch: no test sends and no contact updates;
   - `FeedbackFailures` and `DispatchFailures` are empty.
-- **Migrate first:** run the migration against prod.
+- **Migrate first:** run the migration against prod, with credentials and the Region exported as the README's upgrade section shows.
 - **Deploy** with `--force`, and confirm every function's `CodeSha256` changed.
+- **Wait** at least five minutes, the dispatcher's longest invocation, so no old code is still writing.
 - **Migrate again:** run the migration, then `--verify`, then `--delete-old`. Spot-check `addresses status` for a known opted-out and a known suppressed address.
-- **Clean up:** delete the migration script and its knip entry in a follow-up commit.
+- **Clean up** in a follow-up commit: delete the migration script, its test and its knip entry, and the README's "Upgrading a stage deployed before ADR-0024" section, which points at the script.
 
 ## Open questions
 

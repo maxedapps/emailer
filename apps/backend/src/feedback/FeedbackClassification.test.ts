@@ -129,25 +129,3 @@ describe("complaints", () => {
     });
   });
 });
-
-describe("delivery delays", () => {
-  it("carries the delay type and recipients and nothing to persist", () => {
-    expect(
-      classify({
-        eventType: "DeliveryDelay",
-        mail,
-        deliveryDelay: {
-          delayType: "SpamDetected",
-          delayedRecipients: [{ emailAddress: "late@example.com" }],
-          expirationTime: "2026-09-11T12:00:00.000Z",
-          timestamp: "2026-09-11T10:00:00.000Z",
-        },
-      }),
-    ).toStrictEqual({
-      classification: "delay",
-      recipients: ["late@example.com"],
-      delayType: "SpamDetected",
-      expirationTime: "2026-09-11T12:00:00.000Z",
-    });
-  });
-});

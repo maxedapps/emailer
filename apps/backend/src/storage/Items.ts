@@ -188,10 +188,6 @@ export const itemWriter = <A, I>(record: Schema.Codec<A, I>) => {
     );
 };
 
-/** Applies a domain rule to a string attribute: the wire kind and the rule in one schema. */
-export const attributeOf = <T>(domain: Schema.Codec<T, string>) =>
-  StringAttribute.pipe(Schema.decodeTo(domain, SchemaTransformation.passthrough()));
-
 /**
  * The index attributes of a listable entity. `gsi1sk` is `<createdAt>#<id>`, which gives created
  * order and *is* `Schemas.EntityCursor`, so a page resumes from a domain value rather than from a
@@ -201,38 +197,6 @@ export const listingAttributes = (kind: string, createdAt: string, id: string) =
   gsi1pk: str(kind),
   gsi1sk: str(`${createdAt}#${id}`),
 });
-
-type OptionalAttribute = readonly [name: string, value: string | undefined];
-
-export const withOptional = (
-  item: dynamodb.AttributeMap,
-  attributes: ReadonlyArray<OptionalAttribute>,
-): dynamodb.AttributeMap => {
-  const merged: dynamodb.AttributeMap = { ...item };
-
-  for (const [name, value] of attributes) {
-    if (value !== undefined) {
-      merged[name] = str(value);
-    }
-  }
-
-  return merged;
-};
-
-const StoredVersion = Schema.Literal(recordVersion);
-
-/** Every item carries the record version this code knows how to read; a different one is corrupt. */
-export const StoredVersionAttribute = Schema.Struct({
-  N: Schema.Literal(String(recordVersion)),
-}).pipe(
-  Schema.decodeTo(
-    StoredVersion,
-    SchemaTransformation.transform({
-      decode: () => recordVersion,
-      encode: () => ({ N: String(recordVersion) }),
-    }),
-  ),
-);
 
 export interface TableOperations {
   readonly getItem: (

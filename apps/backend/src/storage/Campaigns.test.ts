@@ -11,7 +11,7 @@ import {
   RunSuperseded,
   SettlementNotApplied,
 } from "./Campaigns.ts";
-import { str, strMap, tableLogicalId, withOptional } from "./Items.ts";
+import { str, strMap, tableLogicalId } from "./Items.ts";
 import {
   campaignId,
   cancelled,
@@ -23,6 +23,7 @@ import {
   primitivesFor,
   scriptedTable,
   serverError,
+  withOptional,
 } from "./Testing.ts";
 
 import type { Table } from "./Testing.ts";

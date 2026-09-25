@@ -3,8 +3,8 @@ import * as AWS from "alchemy/AWS";
 import { Clock, Duration, Effect, Layer, Stream } from "effect";
 
 import { UnsubscribeFunction, unsubscribeSecret } from "../consent/Unsubscribe.ts";
-import { lambdaBasics } from "../Lambda.ts";
-import { failingInvocation, ReportingLive } from "../Reporting.ts";
+import { FunctionServicesLive, lambdaBasics } from "../Lambda.ts";
+import { failingInvocation } from "../Reporting.ts";
 import { AudienceStoreLive } from "../storage/Audience.ts";
 import { CampaignStoreLive } from "../storage/Campaigns.ts";
 import { CampaignWakeLive, decodeDispatchMessage, dispatchQueue } from "./Dispatch.ts";
@@ -43,7 +43,7 @@ const DispatcherLive = Layer.mergeAll(
   MailerLive,
   SendGuardLive,
   CampaignWakeLive,
-  ReportingLive,
+  FunctionServicesLive,
 ).pipe(Layer.provideMerge(NodeCrypto.layer));
 
 export default class DispatcherFunction extends AWS.Lambda.Function<DispatcherFunction>()(

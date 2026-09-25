@@ -1,33 +1,29 @@
-import type * as dynamodb from "@distilled.cloud/aws/dynamodb";
 import * as Schemas from "@emailer/api/Schemas";
-import { Clock, Duration, Effect, Schema, Struct } from "effect";
+import { Clock, Data, Duration, Effect, Predicate, Record, Schema } from "effect";
 
-import { corrupt } from "../Errors.ts";
-import {
-  attributeOf,
-  num,
-  recordVersion,
-  str,
-  StoredVersionAttribute,
-  tableLogicalId,
-  withOptional,
-} from "./Items.ts";
+import { itemReader, num, recordVersion, str, strMap } from "./Items.ts";
 
-import type { BatchPrimitives, TransactionPrimitives, WritePrimitives } from "./Primitives.ts";
+import type { ReadPrimitives, UpdatePrimitives } from "./Primitives.ts";
 
-const suppressionKey = (email: string) => ({
-  pk: str(`SUPPRESSION#${Schemas.mailboxKey(email)}`),
-  sk: str("SUPPRESSION"),
+/**
+ * What is known about a mailbox independently of any contact, and outliving one: that its owner
+ * opted out, that the mail system reported it undeliverable, and its recent transient bounces. One
+ * item holds all three, so the status before each send is one read. It is keyed by mailbox rather
+ * than by contact, so deleting and re-creating a contact escapes none of it. The `EMAIL#`
+ * reservation is keyed by address too, but it is contact identity and belongs to `Contacts.ts`.
+ */
+export const addressKey = (email: string) => ({
+  pk: str(`ADDRESS#${Schemas.mailboxKey(email)}`),
+  sk: str("ADDRESS"),
 });
 
-export const unsubscribeKey = (email: string) => ({
-  pk: str(`UNSUBSCRIBE#${Schemas.mailboxKey(email)}`),
-  sk: str("UNSUBSCRIBE"),
-});
-
-export const transientKey = (email: string) => ({
-  pk: str(`SUPPRESSION#${Schemas.mailboxKey(email)}`),
-  sk: str("TRANSIENT"),
+/**
+ * Whichever write creates the item, it stamps the version and the mailbox: each write is an update
+ * that may be the item's first.
+ */
+export const stamped = (email: string) => ({
+  expression: "v = if_not_exists(v, :v), email = if_not_exists(email, :email)",
+  values: { ":v": num(recordVersion), ":email": str(Schemas.mailboxKey(email)) },
 });
 
 const transientWindow = { occurrences: 3, days: 30 } as const;
@@ -48,30 +44,26 @@ export interface AddressUnsubscribe {
   readonly unsubscribedAt: string;
 }
 
-const StoredUnsubscribe = Schema.Struct({
-  v: StoredVersionAttribute,
-  unsubscribedAt: attributeOf(Schemas.Timestamp),
-});
+/**
+ * The status reads an opt-out or a suppression by its presence alone, so one that is malformed
+ * still keeps its recipient from being mailed; only the transient window is decoded.
+ */
+const readStatus = itemReader(
+  Schema.Struct({
+    unsubscribedAt: Schema.optionalKey(Schema.Unknown),
+    suppression: Schema.optionalKey(Schema.Unknown),
+    transientBounces: Schema.optionalKey(Schema.Array(Schema.String)),
+  }),
+);
 
-const StoredSuppression = Schema.Struct({
-  v: StoredVersionAttribute,
-  reason: attributeOf(Schemas.SuppressionReason),
-  suppressedAt: attributeOf(Schemas.Timestamp),
-  bounceSubType: Schema.optionalKey(attributeOf(Schema.String)),
-  complaintFeedbackType: Schema.optionalKey(attributeOf(Schema.String)),
-  complaintSubType: Schema.optionalKey(attributeOf(Schema.String)),
-});
-
-const StoredTransient = Schema.Struct({
-  v: StoredVersionAttribute,
-  occurrences: Schema.optionalKey(Schema.Struct({ SS: Schema.Array(Schema.String) })),
-});
-
-const decodeStoredUnsubscribe = Schema.decodeUnknownEffect(StoredUnsubscribe);
-
-const decodeStoredSuppression = Schema.decodeUnknownEffect(StoredSuppression);
-
-const decodeStoredTransient = Schema.decodeUnknownEffect(StoredTransient);
+/** The whole item, as `addresses status` reports it. */
+const readRecord = itemReader(
+  Schema.Struct({
+    unsubscribedAt: Schemas.AddressRecord.fields.unsubscribedAt,
+    suppression: Schemas.AddressRecord.fields.suppression,
+    transientBounces: Schema.optionalKey(Schema.Array(Schema.String)),
+  }),
+);
 
 const inTransientWindow = (occurrence: string, now: number): boolean => {
   const separator = occurrence.indexOf("#");
@@ -88,159 +80,155 @@ const inTransientWindow = (occurrence: string, now: number): boolean => {
   );
 };
 
-/**
- * What is known about a mailbox independently of any contact, and outliving one: that the mail
- * system reported it undeliverable, and that its owner opted out. Both are keyed by mailbox rather
- * than by contact, so deleting and re-creating a contact escapes neither. The `EMAIL#` reservation is
- * keyed by address too, but it is contact identity and belongs to `Contacts.ts`.
- */
-export const suppressionWrites = (primitives: WritePrimitives) => {
-  const { recordOnce } = primitives;
+const statusOf = (
+  stored: {
+    readonly unsubscribedAt?: unknown;
+    readonly suppression?: unknown;
+    readonly transientBounces?: ReadonlyArray<string>;
+  },
+  now: number,
+): Schemas.AddressStatus => {
+  if (stored.unsubscribedAt !== undefined) {
+    return "unsubscribed";
+  }
 
-  const suppressAddress = Effect.fn("Storage.suppressAddress")((suppression: AddressSuppression) =>
-    recordOnce(
-      "suppressAddress",
-      withOptional(
-        {
-          ...suppressionKey(suppression.email),
-          v: num(recordVersion),
-          email: str(Schemas.mailboxKey(suppression.email)),
-          reason: str(suppression.reason),
-          messageId: str(suppression.messageId),
-          feedbackId: str(suppression.feedbackId),
-          suppressedAt: str(suppression.suppressedAt),
-        },
-        [
-          ["bounceSubType", suppression.bounceSubType],
-          ["complaintFeedbackType", suppression.complaintFeedbackType],
-          ["complaintSubType", suppression.complaintSubType],
-        ],
-      ),
+  if (stored.suppression !== undefined) {
+    return "suppressed";
+  }
+
+  const inWindow = (stored.transientBounces ?? []).filter((occurrence) =>
+    inTransientWindow(occurrence, now),
+  );
+
+  return inWindow.length >= transientWindow.occurrences ? "bouncing" : "mailable";
+};
+
+/** The suppression's fields as a string map, leaving out those the event did not carry. */
+const suppressionMap = (suppression: AddressSuppression) =>
+  strMap(
+    Record.filter(
+      {
+        reason: suppression.reason,
+        messageId: suppression.messageId,
+        feedbackId: suppression.feedbackId,
+        suppressedAt: suppression.suppressedAt,
+        bounceSubType: suppression.bounceSubType,
+        complaintFeedbackType: suppression.complaintFeedbackType,
+        complaintSubType: suppression.complaintSubType,
+      },
+      Predicate.isNotUndefined,
     ),
   );
+
+/** The first suppression stands: a later event for the same mailbox changes nothing. */
+export const suppressionWrites = (primitives: Pick<UpdatePrimitives, "update">) => {
+  const { update } = primitives;
+
+  const suppressAddress = Effect.fn("Storage.suppressAddress")((
+    suppression: AddressSuppression,
+  ) => {
+    const stamp = stamped(suppression.email);
+
+    return update("suppressAddress", {
+      Key: addressKey(suppression.email),
+      UpdateExpression: `SET ${stamp.expression}, suppression = if_not_exists(suppression, :s)`,
+      ExpressionAttributeValues: { ...stamp.values, ":s": suppressionMap(suppression) },
+    });
+  });
 
   return { suppressAddress } as const;
 };
 
 /**
- * The public unsubscribe function's whole persistence need: one conditional write, and so one
- * DynamoDB permission. It is split from the reader and from suppression precisely so the one
- * unauthenticated surface in the system cannot read, update, query or delete anything.
+ * The public unsubscribe function's whole persistence need: one update that records the first
+ * opt-out and keeps it, and so one DynamoDB permission. It is split from the reader and from
+ * suppression precisely so the one unauthenticated surface in the system cannot read, query or
+ * delete anything.
  */
-export const unsubscribeWrites = (primitives: WritePrimitives) => {
-  const { recordOnce } = primitives;
+export const unsubscribeWrites = (primitives: Pick<UpdatePrimitives, "update">) => {
+  const { update } = primitives;
 
-  const unsubscribeAddress = Effect.fn("Storage.unsubscribeAddress")(
-    (unsubscribe: AddressUnsubscribe) =>
-      recordOnce("unsubscribeAddress", {
-        ...unsubscribeKey(unsubscribe.email),
-        v: num(recordVersion),
-        email: str(Schemas.mailboxKey(unsubscribe.email)),
-        unsubscribedAt: str(unsubscribe.unsubscribedAt),
-      }),
-  );
+  const unsubscribeAddress = Effect.fn("Storage.unsubscribeAddress")((
+    unsubscribe: AddressUnsubscribe,
+  ) => {
+    const stamp = stamped(unsubscribe.email);
+
+    return update("unsubscribeAddress", {
+      Key: addressKey(unsubscribe.email),
+      UpdateExpression: `SET ${stamp.expression}, unsubscribedAt = if_not_exists(unsubscribedAt, :at)`,
+      ExpressionAttributeValues: { ...stamp.values, ":at": str(unsubscribe.unsubscribedAt) },
+    });
+  });
 
   return { unsubscribeAddress } as const;
 };
 
-export const addressReads = (primitives: BatchPrimitives) => {
-  const { readItems } = primitives;
+export const addressReads = (primitives: ReadPrimitives) => {
+  const { readItem } = primitives;
 
-  const bouncingStatus = (transient: dynamodb.AttributeMap | undefined, operationId: string) =>
-    Effect.gen(function* () {
-      if (transient === undefined) {
-        return "mailable" as const;
-      }
-
-      const stored = yield* decodeStoredTransient(transient).pipe(corrupt(operationId));
-
-      const now = yield* Clock.currentTimeMillis;
-
-      const inWindow = (stored.occurrences?.SS ?? []).filter((occurrence) =>
-        inTransientWindow(occurrence, now),
-      );
-
-      return inWindow.length >= transientWindow.occurrences
-        ? ("bouncing" as const)
-        : ("mailable" as const);
-    });
-
-  /**
-   * One mailbox's three rows, told apart by sort key, and the status they give. The status reads an
-   * unsubscribe or suppression row by its presence alone: the send path's check never decodes one,
-   * so a corrupt row still keeps its recipient from being mailed.
-   */
-  const loadAddressItems = (operationId: string, email: string) =>
-    Effect.gen(function* () {
-      const items = yield* readItems(operationId, [
-        unsubscribeKey(email),
-        suppressionKey(email),
-        transientKey(email),
-      ]);
-
-      const bySortKey = new Map(items.map((item) => [item.sk?.S, item] as const));
-      const unsubscribe = bySortKey.get("UNSUBSCRIBE");
-      const suppression = bySortKey.get("SUPPRESSION");
-      const transient = bySortKey.get("TRANSIENT");
-
-      const status =
-        unsubscribe !== undefined
-          ? ("unsubscribed" as const)
-          : suppression !== undefined
-            ? ("suppressed" as const)
-            : yield* bouncingStatus(transient, operationId);
-
-      return { unsubscribe, suppression, transient, status };
-    });
-
+  /** One strongly consistent read; a mailbox nothing was ever recorded for is mailable. */
   const addressStatus = Effect.fn("Storage.addressStatus")(function* (email: string) {
-    return (yield* loadAddressItems("addressStatus", email)).status;
+    const { Item } = yield* readItem("addressStatus", addressKey(email));
+
+    if (Item === undefined) {
+      return "mailable" as const;
+    }
+
+    return statusOf(yield* readStatus("addressStatus", Item), yield* Clock.currentTimeMillis);
   });
 
   const addressRecord = Effect.fn("Storage.addressRecord")(function* (email: string) {
-    const rows = yield* loadAddressItems("addressRecord", email);
+    const { Item } = yield* readItem("addressRecord", addressKey(email));
 
-    const unsubscribe =
-      rows.unsubscribe === undefined
-        ? undefined
-        : yield* decodeStoredUnsubscribe(rows.unsubscribe).pipe(corrupt("addressRecord"));
+    const stored =
+      Item === undefined ? { transientBounces: [] } : yield* readRecord("addressRecord", Item);
 
-    const suppression =
-      rows.suppression === undefined
-        ? undefined
-        : yield* decodeStoredSuppression(rows.suppression).pipe(corrupt("addressRecord"));
-
-    const transientBounces =
-      rows.transient === undefined
-        ? []
-        : ((yield* decodeStoredTransient(rows.transient).pipe(corrupt("addressRecord"))).occurrences
-            ?.SS ?? []);
-
-    const record = { email, status: rows.status, transientBounces, accountSuppression: null };
+    const record = {
+      email,
+      status: statusOf(stored, yield* Clock.currentTimeMillis),
+      transientBounces: stored.transientBounces ?? [],
+      accountSuppression: null,
+    };
 
     const unsubscribed =
-      unsubscribe === undefined
+      stored.unsubscribedAt === undefined
         ? record
-        : { ...record, unsubscribedAt: unsubscribe.unsubscribedAt };
+        : { ...record, unsubscribedAt: stored.unsubscribedAt };
 
     return (
-      suppression === undefined
+      stored.suppression === undefined
         ? unsubscribed
-        : { ...unsubscribed, suppression: Struct.omit(suppression, ["v"]) }
+        : { ...unsubscribed, suppression: stored.suppression }
     ) satisfies Schemas.AddressRecord;
   });
 
   return { addressStatus, addressRecord } as const;
 };
 
-export const addressWrites = (primitives: TransactionPrimitives) => {
-  const { transact } = primitives;
+/** No address item: there is nothing to clear. */
+class NothingStored extends Data.TaggedError("NothingStored") {}
 
+export const addressWrites = (primitives: Pick<UpdatePrimitives, "updateIf">) => {
+  const { updateIf } = primitives;
+
+  /**
+   * Clears the suppression and the transient window. An opt-out stays: it is the recipient's
+   * decision, not a delivery fault. Conditioned on the item existing, so a mailbox with nothing
+   * recorded does not gain an empty item.
+   */
   const unsuppress = Effect.fn("Storage.unsuppress")((email: string) =>
-    transact("unsuppress", [
-      { Delete: { Table: tableLogicalId, Key: suppressionKey(email) } },
-      { Delete: { Table: tableLogicalId, Key: transientKey(email) } },
-    ]),
+    updateIf(
+      "unsuppress",
+      {
+        Key: addressKey(email),
+        UpdateExpression: "REMOVE suppression, transientBounces",
+        ConditionExpression: "attribute_exists(pk)",
+      },
+      () => new NothingStored(),
+    ).pipe(
+      Effect.asVoid,
+      Effect.catchTag("NothingStored", () => Effect.void),
+    ),
   );
 
   return { unsuppress } as const;

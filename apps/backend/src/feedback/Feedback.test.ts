@@ -153,31 +153,6 @@ const complaintEvent = (
   },
 });
 
-const delayEvent = (
-  delayType: string,
-  recipients: ReadonlyArray<string> = ["late@example.com", "later@example.com"],
-  expirationTime?: string,
-  messageTags: Record<string, Array<string>> = tags(),
-): AWS.SES.EmailEventDetail => {
-  const delayedRecipients = recipients.map((emailAddress) => ({ emailAddress }));
-  const mail = { messageId, destination: [...recipients], tags: { ...messageTags } };
-  const timestamp = "2026-09-11T10:00:00.000Z";
-
-  if (expirationTime === undefined) {
-    return {
-      eventType: "DeliveryDelay",
-      mail,
-      deliveryDelay: { delayType, delayedRecipients, timestamp },
-    };
-  }
-
-  return {
-    eventType: "DeliveryDelay",
-    mail,
-    deliveryDelay: { delayType, delayedRecipients, expirationTime, timestamp },
-  };
-};
-
 /** The queue message the rule delivers: the whole EventBridge event, with SES's event as `detail`. */
 const envelope = (detail: AWS.SES.EmailEventDetail, envelopeId = "envelope-1") =>
   JSON.stringify({ version: "0", id: envelopeId, source: "aws.ses", detail });
@@ -476,78 +451,6 @@ describe("idempotence and the campaign tag", () => {
         // than a second record — which is what makes replaying safe.
         expect(world.suppressions.size).toBe(1);
         expect(world.repeated).toStrictEqual(["hard@example.com"]);
-      }),
-  );
-});
-
-describe("delivery delays", () => {
-  it.effect("logs a delivery delay once for two recipients and writes nothing", () =>
-    Effect.gen(function* () {
-      const world = yield* run(
-        delayEvent(
-          "SpamDetected",
-          ["late@example.com", "later@example.com"],
-          "2026-09-11T12:00:00.000Z",
-        ),
-      );
-
-      expect(world.suppressions.size).toBe(0);
-      expect(world.writes).toHaveLength(0);
-
-      const delayed = logsNamed(world, "delivery delayed");
-
-      expect(delayed).toHaveLength(1);
-      expect(delayed[0]?.level).toBe("Info");
-      expect(delayed[0]?.message).toStrictEqual([
-        "delivery delayed",
-        {
-          delayType: "SpamDetected",
-          recipients: 2,
-          campaignId,
-          messageId,
-          expirationTime: "2026-09-11T12:00:00.000Z",
-        },
-      ]);
-    }),
-  );
-
-  it.effect("logs a delivery delay without an expirationTime", () =>
-    Effect.gen(function* () {
-      const world = yield* run(delayEvent("MailboxFull"));
-
-      expect(world.writes).toHaveLength(0);
-      expect(logsNamed(world, "delivery delayed")[0]?.message).toEqual([
-        "delivery delayed",
-        expect.objectContaining({
-          delayType: "MailboxFull",
-          recipients: 2,
-          expirationTime: undefined,
-        }),
-      ]);
-    }),
-  );
-
-  it.effect(
-    "still logs a delivery delay when the event carries no campaign tag, and writes nothing",
-    () =>
-      Effect.gen(function* () {
-        const world = yield* run(
-          delayEvent("IPFailure", ["late@example.com"], "2026-09-11T12:00:00.000Z", {
-            "ses:configuration-set": [configurationSetName],
-          }),
-        );
-
-        expect(world.suppressions.size).toBe(0);
-        expect(world.writes).toHaveLength(0);
-        expect(logsNamed(world, "feedback without a campaign tag (a test send)")).toHaveLength(0);
-        expect(logsNamed(world, "delivery delayed")[0]?.message).toEqual([
-          "delivery delayed",
-          expect.objectContaining({
-            delayType: "IPFailure",
-            recipients: 1,
-            campaignId: undefined,
-          }),
-        ]);
       }),
   );
 });

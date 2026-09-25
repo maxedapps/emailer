@@ -11,6 +11,7 @@
 - Amended: campaign-listing (`work/campaign-listing.md`, in git history) — CampaignStore binds all six table operations
 - Amended: codebase-cleanup (`work/codebase-cleanup.md`, in git history) — `Table.ts` also holds `allTableOperations`, the one six-operation binding that AudienceStore and CampaignStore, which both perform every operation, share; every narrower capability still binds its own
 - Amended: 2026-09-24, on the user's decision in the simplification plan (`work/simplify.md` T3) — storage fails with the contract's expected errors, `NotFound`, `EmailAlreadyUsed` and `AddressOptedOut`, where a read or a condition detects them, and the API calls the stores directly for plain reads and writes. `StorageFailure` stays internal.
+- Superseded in part: [ADR-0024](0024-typed-errors-and-cost-neutral-storage.md) for the internal `StorageFailure` translated at entry points, since each failure is its own typed error classified where it happens, and for the `UnsubscribeStore` and `FeedbackStore` bindings.
 
 ## Context
 

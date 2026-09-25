@@ -5,8 +5,8 @@ import { Config, Duration, Effect, Layer, Schema, Stream } from "effect";
 
 import { classify, decodeEmailEvent } from "./FeedbackClassification.ts";
 import { nowIso } from "../Identifiers.ts";
-import { lambdaBasics } from "../Lambda.ts";
-import { failingInvocation, ReportingLive } from "../Reporting.ts";
+import { FunctionServicesLive, lambdaBasics } from "../Lambda.ts";
+import { failingInvocation } from "../Reporting.ts";
 import { configurationSet } from "../sending/Mailer.ts";
 import { FeedbackStore, FeedbackStoreLive } from "../storage/Feedback.ts";
 
@@ -58,7 +58,7 @@ const feedbackEvents = AWS.SQS.Queue(
 );
 
 /**
- * The default-bus rule that puts SES bounce, complaint and delivery-delay events on the queue, and
+ * The default-bus rule that puts SES bounce and complaint events on the queue, and
  * the queue policy that lets EventBridge send them. Deploy-time only, like `feedbackPublishing`:
  * `alchemy.run.ts` yields this and the function's constructor does not.
  *
@@ -78,7 +78,7 @@ export const feedbackRouting = Effect.gen(function* () {
     name: ruleName,
     eventPattern: {
       source: ["aws.ses"],
-      "detail-type": ["Email Bounced", "Email Complaint Received", "Email Delivery Delayed"],
+      "detail-type": ["Email Bounced", "Email Complaint Received"],
     },
     targets: [{ Id: "FeedbackEvents", Arn: queue.queueArn }],
   });
@@ -119,16 +119,6 @@ const record = (event: EmailEvent) =>
     const classified = classify(event);
     const campaignId = event.mail.tags?.[campaignTag]?.[0];
     const messageId = event.mail.messageId;
-
-    if (classified.classification === "delay") {
-      return yield* Effect.logInfo("delivery delayed", {
-        delayType: classified.delayType,
-        recipients: classified.recipients.length,
-        campaignId,
-        messageId,
-        expirationTime: classified.expirationTime,
-      });
-    }
 
     const storage = yield* FeedbackStore;
     const receivedAt = yield* nowIso;
@@ -252,7 +242,7 @@ const feedbackProps = Effect.gen(function* () {
 });
 
 /** Every service an event uses, bound once per instance. */
-const FeedbackLive = Layer.mergeAll(FeedbackStoreLive, ReportingLive).pipe(
+const FeedbackLive = Layer.mergeAll(FeedbackStoreLive, FunctionServicesLive).pipe(
   Layer.provideMerge(NodeCrypto.layer),
 );
 

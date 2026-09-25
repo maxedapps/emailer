@@ -8,7 +8,7 @@ import {
 import * as Schemas from "@emailer/api/Schemas";
 import { Effect, Predicate, Schema } from "effect";
 
-import { unsubscribeKey } from "./Addresses.ts";
+import { addressKey } from "./Addresses.ts";
 import { itemReader, itemWriter, listingAttributes, str, tableLogicalId } from "./Items.ts";
 
 import type {
@@ -187,8 +187,8 @@ export const contactOperations = (
               // opt-out landing mid-update cannot slip past.
               ConditionCheck: {
                 Table: tableLogicalId,
-                Key: unsubscribeKey(current.email),
-                ConditionExpression: "attribute_not_exists(pk)",
+                Key: addressKey(current.email),
+                ConditionExpression: "attribute_not_exists(unsubscribedAt)",
               },
               refused: () => new AddressOptedOut({ email: current.email }),
             },

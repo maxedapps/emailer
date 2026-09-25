@@ -1,10 +1,10 @@
 import type * as Schemas from "@emailer/api/Schemas";
-import { Clock, Data, Duration, Effect, ErrorReporter } from "effect";
+import { Clock, Data, Duration, Effect, ErrorReporter, Predicate, Schedule } from "effect";
 
 import { unsubscribeLink } from "../consent/Unsubscribe.ts";
 import { newIdentifier, nowIso } from "../Identifiers.ts";
 import { CampaignWake } from "./Dispatch.ts";
-import { Mailer, submissionTimeout } from "./Mailer.ts";
+import { accepted, failureOutcomes, Mailer, submissionTimeout } from "./Mailer.ts";
 import { SendGuard } from "./SendGuard.ts";
 import { AudienceStore } from "../storage/Audience.ts";
 import { CampaignStore } from "../storage/Campaigns.ts";
@@ -40,11 +40,11 @@ export class SliceOverrun extends Data.TaggedError("SliceOverrun") {
   }
 }
 
-const rateLimitedBackoffs = [
-  Duration.seconds(1),
-  Duration.seconds(2),
-  Duration.seconds(4),
-] as const;
+/** A throttled send backs off 1 s, 2 s and 4 s; any other answer is final. */
+const throttleBackoff = Schedule.exponential("1 second").pipe(
+  Schedule.upTo({ times: 3 }),
+  Schedule.while(({ input }) => Predicate.isTagged(input, "SendThrottled")),
+);
 
 const reservationFor = (delay: Duration.Duration) =>
   Duration.sum(delay, Duration.sum(submissionTimeout, Duration.times(operationTimeout, 2)));
@@ -235,42 +235,40 @@ const submitClaimed = Effect.fn("Dispatching.submitClaimed")(function* (input: {
   const { recipient, content, campaignId, sendId, contactId, runToken, limit } = input;
   const purpose: SendPurpose = { kind: "campaign", campaignId, sendId };
 
-  for (let attempt = 0; ; attempt += 1) {
-    const delay = attempt === 0 ? input.firstDelay : yield* guards.slot(limit);
+  // One attempt waits for its pacing slot and sends. The first attempt's slot is the one already
+  // checked against the time budget; a retry reserves its own once it has backed off.
+  const sendOnce = Effect.gen(function* () {
+    const { attempt } = yield* Schedule.CurrentMetadata;
 
-    yield* Effect.sleep(delay);
+    yield* Effect.sleep(attempt === 0 ? input.firstDelay : yield* guards.slot(limit));
 
-    const settlement = yield* mailer.send(recipient, content, input.unsubscribeUrl, purpose);
-    const finishedAt = yield* nowIso;
-    const backoff = rateLimitedBackoffs[attempt];
+    return yield* mailer.send(recipient, content, input.unsubscribeUrl, purpose);
+  });
 
-    if (
-      settlement.outcome === "rejected" &&
-      settlement.rejectionCode === "rate-limited" &&
-      backoff !== undefined
-    ) {
-      yield* Effect.sleep(backoff);
-      continue;
-    }
+  const settlement = yield* Effect.retry(sendOnce, throttleBackoff).pipe(
+    Effect.map(accepted),
+    Effect.catchTags(failureOutcomes),
+  );
 
-    // Another attempt settled this row, or the campaign is gone: the send happened either way.
-    yield* campaigns
-      .settleRecipient(campaignId, sendId, contactId, settlement, finishedAt)
-      .pipe(
-        Effect.catchTag("SettlementNotApplied", () =>
-          Effect.logWarning("settlement not applied", { campaignId, sendId }),
-        ),
-      );
+  const finishedAt = yield* nowIso;
 
-    if (
-      settlement.outcome === "rejected" &&
-      (settlement.rejectionCode === "rate-limited" || settlement.rejectionCode === "sending-paused")
-    ) {
-      yield* campaigns.pauseRun(campaignId, runToken, settlement.rejectionCode, contactId);
+  // Another attempt settled this row, or the campaign is gone: the send happened either way.
+  yield* campaigns
+    .settleRecipient(campaignId, sendId, contactId, settlement, finishedAt)
+    .pipe(
+      Effect.catchTag("SettlementNotApplied", () =>
+        Effect.logWarning("settlement not applied", { campaignId, sendId }),
+      ),
+    );
 
-      return "stop" as const;
-    }
+  if (
+    settlement.outcome === "rejected" &&
+    (settlement.rejectionCode === "rate-limited" || settlement.rejectionCode === "sending-paused")
+  ) {
+    yield* campaigns.pauseRun(campaignId, runToken, settlement.rejectionCode, contactId);
 
-    return "next" as const;
+    return "stop" as const;
   }
+
+  return "next" as const;
 });

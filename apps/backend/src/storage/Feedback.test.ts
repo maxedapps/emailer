@@ -87,11 +87,13 @@ const counterUpdate = (counter: "bounced" | "complained") => ({
 const transientUpdate = {
   Update: {
     Table: tableLogicalId,
-    Key: { pk: { S: `SUPPRESSION#${mailbox}` }, sk: { S: "TRANSIENT" } },
-    UpdateExpression: "SET v = if_not_exists(v, :v) ADD occurrences :set",
+    Key: { pk: { S: `ADDRESS#${mailbox}` }, sk: { S: "ADDRESS" } },
+    UpdateExpression:
+      "SET v = if_not_exists(v, :v), email = if_not_exists(email, :email) ADD transientBounces :bounce",
     ExpressionAttributeValues: {
       ":v": { N: "1" },
-      ":set": { SS: [`${createdAt}#${feedbackId}`] },
+      ":email": { S: mailbox },
+      ":bounce": { SS: [`${createdAt}#${feedbackId}`] },
     },
   },
 };
@@ -151,23 +153,25 @@ describe("recordFeedback", () => {
       }),
   );
 
-  it.effect("sets v, adds a string-set occurrence and touches no META for a transient write", () =>
-    Effect.gen(function* () {
-      const table = scriptedTable({});
+  it.effect(
+    "adds the bounce to the address item, stamping version and mailbox, and touches no META",
+    () =>
+      Effect.gen(function* () {
+        const table = scriptedTable({});
 
-      yield* operationsFor(table).recordFeedback(
-        { ...bounceRow, outcome: "recorded", bounceType: "Transient" },
-        transient,
-      );
+        yield* operationsFor(table).recordFeedback(
+          { ...bounceRow, outcome: "recorded", bounceType: "Transient" },
+          transient,
+        );
 
-      expect(table.transactionRequests[0]?.TransactItems).toStrictEqual([
-        historyPut("bounce", "recorded", {
-          bounceType: { S: "Transient" },
-          bounceSubType: { S: "General" },
-        }),
-        transientUpdate,
-      ]);
-    }),
+        expect(table.transactionRequests[0]?.TransactItems).toStrictEqual([
+          historyPut("bounce", "recorded", {
+            bounceType: { S: "Transient" },
+            bounceSubType: { S: "General" },
+          }),
+          transientUpdate,
+        ]);
+      }),
   );
 
   it.effect("omits every provider field that is undefined", () =>

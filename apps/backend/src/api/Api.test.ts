@@ -469,7 +469,7 @@ describe("campaigns", () => {
             Effect.sync(() => {
               sent.push(recipient);
 
-              return { outcome: "accepted" as const, messageId: `message-${sent.length}` };
+              return `message-${sent.length}`;
             }),
         },
       });

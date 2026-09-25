@@ -7,6 +7,7 @@
 - Superseded in part: [ADR-0011](0011-open-recipient-set-and-paced-dispatch.md) for the "acceptable while the recipient set is a configured allowlist" residual and for `Campaigns.send` refusing an unsubscribed address before SES. Sending moved to the dispatcher there. Since [ADR-0020](0020-drafts-previews-and-test-sends.md) each sender mints the recipient's link before it sends — the dispatcher for campaigns, the API for test sends — so both functions hold the signing key and the reference to the unsubscribe function's URL.
 - Amended: campaign-html-bodies (`work/campaign-html-bodies.md`, in git history) — the same footer applies to an optional HTML part; operator HTML is sent verbatim
 - Authority: The user asked for consent and unsubscribe handling as the slice preceding an open contact list, chose a separate unsubscribe Lambda over deriving a base URL from the request, declined both a `mailto:` entry and a `Reply-To` address on the evidence in [ADR-0002](0002-domain-sending-identity.md), deferred consent evidence and double opt-in (naming optional double opt-in as possible later work), and proposed `Alchemy.Random` for the signing key. The token construction, the GET/POST split and the storage shape are proposed here.
+- Superseded in part: [ADR-0024](0024-typed-errors-and-cost-neutral-storage.md) for unsubscribe as an item type separate from suppression. Both are now fields of one address item per mailbox. Unsubscribe is still not a suppression reason, `unsuppress` never clears it, and both stay keyed by the lowercased address.
 
 ## Context
 

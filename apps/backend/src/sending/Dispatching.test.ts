@@ -12,6 +12,7 @@ import {
   Fiber,
   Layer,
   Logger,
+  Predicate,
   Result,
 } from "effect";
 import { TestClock } from "effect/testing";
@@ -19,14 +20,20 @@ import { TestClock } from "effect/testing";
 import { unsubscribeLink } from "../consent/Unsubscribe.ts";
 import { memberPageSize, runSlice, SliceOverrun } from "./Dispatching.ts";
 import { CampaignWake } from "./Dispatch.ts";
-import { Mailer } from "./Mailer.ts";
+import {
+  Mailer,
+  SendingSuspended,
+  SendRejected,
+  SendThrottled,
+  SubmissionUncertain,
+} from "./Mailer.ts";
 import { SendGuard } from "./SendGuard.ts";
 import { AudienceStore } from "../storage/Audience.ts";
 import { CampaignStore, RunSuperseded, SettlementNotApplied } from "../storage/Campaigns.ts";
 import { unusedAudience, unusedCampaigns } from "../storage/Testing.ts";
 
 import type { AddressStatus, PauseReason, SkipReason } from "@emailer/api/Schemas";
-import type { SendPurpose } from "./Mailer.ts";
+import type { SendError, SendPurpose } from "./Mailer.ts";
 import type { MessageContent } from "./Message.ts";
 import type { SendAllowance } from "./SendGuard.ts";
 import type { SubmissionOutcome } from "../storage/Campaigns.ts";
@@ -310,16 +317,21 @@ interface MailerDouble {
   readonly sent: Array<SentMessage>;
 }
 
-const mailerDouble = (outcomes: ReadonlyArray<SubmissionOutcome> = []): MailerDouble => {
+/** SES's answer to a send: the message ID it accepted under, or the error it failed with. */
+type Answer = string | SendError;
+
+const mailerDouble = (answers: ReadonlyArray<Answer> = []): MailerDouble => {
   const sent: Array<SentMessage> = [];
-  const remaining = [...outcomes];
+  const remaining = [...answers];
 
   const layer = Layer.succeed(Mailer)({
     send: (recipient, content, unsubscribeUrl, purpose) =>
-      Effect.sync(() => {
+      Effect.suspend(() => {
         sent.push({ recipient, ...content, unsubscribeUrl, purpose });
 
-        return remaining.shift() ?? { outcome: "accepted" as const, messageId: "ses-message" };
+        const answer = remaining.shift() ?? "ses-message";
+
+        return Predicate.isString(answer) ? Effect.succeed(answer) : Effect.fail(answer);
       }),
   });
 
@@ -360,7 +372,7 @@ interface Scenario {
   readonly guard?: SendAllowance;
   readonly run?: RunFeedback;
   readonly delays?: ReadonlyArray<Duration.Duration>;
-  readonly outcomes?: ReadonlyArray<SubmissionOutcome>;
+  readonly answers?: ReadonlyArray<Answer>;
 }
 
 interface Fixture {
@@ -409,7 +421,7 @@ const fixture = (scenario: Scenario = {}): Fixture => {
   };
 
   const wake = wakeDouble();
-  const mailer = mailerDouble(scenario.outcomes);
+  const mailer = mailerDouble(scenario.answers);
   const guard = guardDouble(scenario.guard ?? defaultGuard, scenario.delays);
 
   return {
@@ -715,7 +727,7 @@ describe("runSlice", () => {
               fix.world.rows.set(memberA.id, { ...row, sendId: "another-attempt" });
             }
 
-            return { outcome: "accepted" as const, messageId: `message-${recipient}` };
+            return `message-${recipient}`;
           }),
       });
 
@@ -729,14 +741,14 @@ describe("runSlice", () => {
     }),
   );
 
-  it.effect("retries rate-limited submissions with 1s, 2s, 4s backoff then pauses", () =>
+  it.effect("retries throttled submissions with 1s, 2s, 4s backoff then pauses", () =>
     Effect.gen(function* () {
       const fix = fixture({
-        outcomes: [
-          { outcome: "rejected", rejectionCode: "rate-limited" },
-          { outcome: "rejected", rejectionCode: "rate-limited" },
-          { outcome: "rejected", rejectionCode: "rate-limited" },
-          { outcome: "rejected", rejectionCode: "rate-limited" },
+        answers: [
+          new SendThrottled(),
+          new SendThrottled(),
+          new SendThrottled(),
+          new SendThrottled(),
         ],
       });
 
@@ -760,18 +772,19 @@ describe("runSlice", () => {
     }),
   );
 
-  it.effect("recovers from one rate-limited submission after a 1s backoff", () =>
+  it.effect("backs a throttled submission off 1s, then reserves a slot and sends again", () =>
     Effect.gen(function* () {
-      const fix = fixture({
-        outcomes: [
-          { outcome: "rejected", rejectionCode: "rate-limited" },
-          { outcome: "accepted", messageId: "second" },
-        ],
-      });
+      const fix = fixture({ answers: [new SendThrottled(), "second"] });
 
       const fiber = yield* Effect.forkChild(runSliceNow(fix));
 
-      yield* TestClock.adjust("1 second");
+      yield* TestClock.adjust("999 millis");
+
+      // Sent once, and the retry has not yet reserved its slot: it backs off first.
+      expect(fix.mailer.sent).toHaveLength(1);
+      expect(fix.guard.slots).toHaveLength(1);
+
+      yield* TestClock.adjust("1 millis");
 
       successOf(yield* Fiber.join(fiber));
 
@@ -788,7 +801,7 @@ describe("runSlice", () => {
     Effect.gen(function* () {
       const fix = fixture({
         members: [memberA, memberB],
-        outcomes: [{ outcome: "uncertain" }],
+        answers: [new SubmissionUncertain({ reason: "timeout" })],
       });
 
       successOf(yield* runSliceNow(fix));
@@ -809,14 +822,14 @@ describe("runSlice", () => {
     }),
   );
 
-  it.effect("pauses on sending-paused after settling the recipient rejected", () =>
+  it.effect("pauses at once on a suspension, after settling the recipient rejected", () =>
     Effect.gen(function* () {
-      const fix = fixture({
-        outcomes: [{ outcome: "rejected", rejectionCode: "sending-paused" }],
-      });
+      const fix = fixture({ answers: [new SendingSuspended()] });
 
       successOf(yield* runSliceNow(fix));
 
+      expect(fix.mailer.sent).toHaveLength(1);
+      expect(fix.guard.slots).toHaveLength(1);
       expect(fix.world.counters.rejected).toBe(1);
       expect(fix.world.paused).toStrictEqual([{ reason: "sending-paused", cursor: memberA.id }]);
       expect(fix.wake.messages).toHaveLength(0);
@@ -920,10 +933,7 @@ describe("runSlice", () => {
       const fix = fixture({
         members: [memberA, memberB],
         guard: { limit: 3 },
-        outcomes: [
-          { outcome: "rejected", rejectionCode: "message-rejected" },
-          { outcome: "accepted", messageId: "ses-message" },
-        ],
+        answers: [new SendRejected({ code: "message-rejected" }), "ses-message"],
       });
 
       successOf(yield* runSliceNow(fix));
