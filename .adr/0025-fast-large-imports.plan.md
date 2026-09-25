@@ -28,6 +28,7 @@
 - typed-errors had not reached `main` when this work started on 2026-09-25, a deviation from the plan approved earlier.
   - `fast-import` merged typed-errors at `80dc784`, with `pnpm check` green.
   - It merges `main` once typed-errors lands there, and again before its own merge.
+  - typed-errors landed in `main` (#8) and in prod (its T11) on 2026-09-25. `fast-import` merged `main` at `4b0d3ed`, with `pnpm check` green. `main`'s changes since the gated base touch no runtime code: docs, tests, the deleted migration script and a comment.
 
 ## Rules for every task
 
