@@ -344,7 +344,21 @@ Fixes from the PR review, after T9:
 
 ### T10 — Prod rollout
 
-Status: To do (on the user's go)
+Status: Done on 2026-09-25, on the user's go, except step 5. As built:
+
+1. PR #9 merged into `main` as `267da06`. `alchemy plan --stage prod` showed `EmailerData` as an update (TTL on), not a replace. No other resource changed.
+2. Deployed with `--force`. All five functions' `CodeSha256` changed.
+3. `describe-time-to-live`: `ttl`, `ENABLED`.
+4. One address item held `unsubscribedAt`. It was removed with a conditional `REMOVE`, and a rescan found none.
+5. **Waiting for the user:** the site's key needs the real list and the site's confirm page URL.
+
+Verify, as run:
+
+- A temporary key on the prod test list signed up a readable test inbox (202).
+- The mail arrived with `dkim=pass`, `spf=pass` and `dmarc=pass`, with text and HTML parts and no unsubscribe headers.
+- Its token confirmed through the API (200 `Subscribed`), and a second use answered 404 `ConfirmationNotFound`.
+- `addresses status` showed the consent record, and the address was a member.
+- Afterwards the key was revoked, and the contact and its consent record were deleted, so prod holds no data from the check.
 
 1. `alchemy plan --stage prod`: `EmailerData` must be an update, never a replace.
 2. Deploy with `--force`, then check that every function's `CodeSha256` changed.
