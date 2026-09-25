@@ -21,15 +21,13 @@ export class AccountSuppression extends Context.Service<AccountSuppression>()(
       } as const;
     }),
   },
-) {}
-
-export const AccountSuppressionLive = Layer.effect(AccountSuppression)(
-  AccountSuppression.make,
-).pipe(
-  Layer.provide(
-    Layer.mergeAll(AWS.SES.GetSuppressedDestinationHttp, AWS.SES.DeleteSuppressedDestinationHttp),
-  ),
-);
+) {
+  static readonly layer = Layer.effect(AccountSuppression)(AccountSuppression.make).pipe(
+    Layer.provide(
+      Layer.mergeAll(AWS.SES.GetSuppressedDestinationHttp, AWS.SES.DeleteSuppressedDestinationHttp),
+    ),
+  );
+}
 
 const accountReason = (
   reason: sesv2.SuppressionListReason,

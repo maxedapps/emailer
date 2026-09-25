@@ -159,7 +159,7 @@ Status: Done. As built: the transient window compares each occurrence with `now`
 
 ### T7 — Layer naming
 
-Status: Not started
+Status: Done.
 
 - **Service classes gain `static readonly layer`, and their `…Live` constants go:**
   - `AudienceStore`, `CampaignStore`, `CampaignReader`, `UnsubscribeStore`, `FeedbackStore`;

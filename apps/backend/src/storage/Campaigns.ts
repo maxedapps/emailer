@@ -851,7 +851,18 @@ export type CampaignStoreOperations = ReturnType<typeof campaignStoreOperations>
 
 export class CampaignStore extends Context.Service<CampaignStore, CampaignStoreOperations>()(
   "emailer/backend/CampaignStore",
-) {}
+) {
+  static readonly layer = Layer.effect(CampaignStore)(
+    Effect.gen(function* () {
+      const operations = yield* allTableOperations;
+      const crypto = yield* Crypto.Crypto;
+
+      return CampaignStore.of(
+        campaignStoreOperations(operations, Effect.orDie(crypto.randomUUIDv4)),
+      );
+    }),
+  ).pipe(Layer.provide(AllTableOperationsHttp));
+}
 
 /**
  * Read-only access to one campaign by id. The public preview function holds this and `GetItem`
@@ -861,23 +872,14 @@ export type CampaignReads = ReturnType<typeof campaignReads>;
 
 export class CampaignReader extends Context.Service<CampaignReader, CampaignReads>()(
   "emailer/backend/CampaignReader",
-) {}
+) {
+  static readonly layer = Layer.effect(CampaignReader)(
+    Effect.gen(function* () {
+      const table = yield* dataTable;
 
-export const CampaignReaderLive = Layer.effect(CampaignReader)(
-  Effect.gen(function* () {
-    const table = yield* dataTable;
-
-    return CampaignReader.of(
-      campaignReads(readPrimitives({ getItem: yield* AWS.DynamoDB.GetItem(table) })),
-    );
-  }),
-).pipe(Layer.provide(AWS.DynamoDB.GetItemHttp));
-
-export const CampaignStoreLive = Layer.effect(CampaignStore)(
-  Effect.gen(function* () {
-    const operations = yield* allTableOperations;
-    const crypto = yield* Crypto.Crypto;
-
-    return CampaignStore.of(campaignStoreOperations(operations, Effect.orDie(crypto.randomUUIDv4)));
-  }),
-).pipe(Layer.provide(AllTableOperationsHttp));
+      return CampaignReader.of(
+        campaignReads(readPrimitives({ getItem: yield* AWS.DynamoDB.GetItem(table) })),
+      );
+    }),
+  ).pipe(Layer.provide(AWS.DynamoDB.GetItemHttp));
+}

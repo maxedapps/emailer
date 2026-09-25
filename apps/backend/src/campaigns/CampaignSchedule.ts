@@ -57,8 +57,8 @@ export class CampaignSchedule extends Context.Service<CampaignSchedule>()(
       );
     }),
   },
-) {}
-
-export const CampaignScheduleLive = Layer.effect(CampaignSchedule)(CampaignSchedule.make).pipe(
-  Layer.provide(AWS.Scheduler.CreateScheduleHttp),
-);
+) {
+  static readonly layer = Layer.effect(CampaignSchedule)(CampaignSchedule.make).pipe(
+    Layer.provide(AWS.Scheduler.CreateScheduleHttp),
+  );
+}

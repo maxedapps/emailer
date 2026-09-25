@@ -3,14 +3,14 @@ import * as AWS from "alchemy/AWS";
 import { Clock, Duration, Effect, Layer, Stream } from "effect";
 
 import { UnsubscribeFunction, unsubscribeSecret } from "../consent/Unsubscribe.ts";
-import { FunctionServicesLive, lambdaBasics } from "../Lambda.ts";
+import { functionServicesLayer, lambdaBasics } from "../Lambda.ts";
 import { failingInvocation } from "../Reporting.ts";
-import { AudienceStoreLive } from "../storage/Audience.ts";
-import { CampaignStoreLive } from "../storage/Campaigns.ts";
-import { CampaignWakeLive, decodeDispatchMessage, dispatchQueue } from "./Dispatch.ts";
+import { AudienceStore } from "../storage/Audience.ts";
+import { CampaignStore } from "../storage/Campaigns.ts";
+import { decodeDispatchMessage, dispatchQueue, CampaignWake } from "./Dispatch.ts";
 import { runSlice } from "./Dispatching.ts";
-import { MailerLive } from "./Mailer.ts";
-import { SendGuardLive } from "./SendGuard.ts";
+import { Mailer } from "./Mailer.ts";
+import { SendGuard } from "./SendGuard.ts";
 
 const invocationTimeout = Duration.minutes(5);
 
@@ -36,20 +36,20 @@ const dispatcherProps = Effect.gen(function* () {
 });
 
 /** Every service a slice uses, bound once per instance. */
-const DispatcherLive = Layer.mergeAll(
-  AudienceStoreLive,
-  CampaignStoreLive,
-  MailerLive,
-  SendGuardLive,
-  CampaignWakeLive,
-  FunctionServicesLive,
+const dispatcherLayer = Layer.mergeAll(
+  AudienceStore.layer,
+  CampaignStore.layer,
+  Mailer.layer,
+  SendGuard.layer,
+  CampaignWake.layer,
+  functionServicesLayer,
 ).pipe(Layer.provideMerge(NodeCrypto.layer));
 
 export default class DispatcherFunction extends AWS.Lambda.Function<DispatcherFunction>()(
   "Dispatcher",
   dispatcherProps,
   Effect.gen(function* () {
-    const services = yield* Layer.build(DispatcherLive);
+    const services = yield* Layer.build(dispatcherLayer);
 
     yield* AWS.SQS.consumeQueueMessages(yield* dispatchQueue, { batchSize: 1 }, (records) =>
       Stream.runForEach(records, (record) =>

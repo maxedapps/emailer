@@ -9,18 +9,18 @@ import { HttpApiBuilder } from "effect/unstable/httpapi";
 import * as Addresses from "../audience/Addresses.ts";
 import * as Contacts from "../audience/Contacts.ts";
 import * as Lists from "../audience/Lists.ts";
-import { CampaignScheduleLive } from "../campaigns/CampaignSchedule.ts";
+import { CampaignSchedule } from "../campaigns/CampaignSchedule.ts";
 import * as Campaigns from "../campaigns/Campaigns.ts";
 import { PreviewFunction, previewLink, previewSecret } from "../campaigns/Previews.ts";
 import { sendTest } from "../campaigns/TestSends.ts";
 import { UnsubscribeFunction, unsubscribeSecret } from "../consent/Unsubscribe.ts";
-import { FunctionServicesLive, lambdaBasics } from "../Lambda.ts";
+import { functionServicesLayer, lambdaBasics } from "../Lambda.ts";
 import { respondingToFailures } from "../Reporting.ts";
-import { CampaignWakeLive } from "../sending/Dispatch.ts";
-import { MailerLive } from "../sending/Mailer.ts";
-import { SendGuardLive } from "../sending/SendGuard.ts";
-import { AudienceStore, AudienceStoreLive } from "../storage/Audience.ts";
-import { CampaignStore, CampaignStoreLive } from "../storage/Campaigns.ts";
+import { CampaignWake } from "../sending/Dispatch.ts";
+import { Mailer } from "../sending/Mailer.ts";
+import { SendGuard } from "../sending/SendGuard.ts";
+import { AudienceStore } from "../storage/Audience.ts";
+import { CampaignStore } from "../storage/Campaigns.ts";
 import { apiToken, authorizationUsing } from "./Auth.ts";
 
 /**
@@ -155,15 +155,15 @@ export const makeApiHandler = (token: Redacted.Redacted<string>) =>
   );
 
 /** Every service the handlers use, bound once per instance. */
-const ApiLive = Layer.mergeAll(
-  AudienceStoreLive,
-  CampaignStoreLive,
-  Addresses.AccountSuppressionLive,
-  CampaignWakeLive,
-  CampaignScheduleLive,
-  MailerLive,
-  SendGuardLive,
-  FunctionServicesLive,
+const apiLayer = Layer.mergeAll(
+  AudienceStore.layer,
+  CampaignStore.layer,
+  Addresses.AccountSuppression.layer,
+  CampaignWake.layer,
+  CampaignSchedule.layer,
+  Mailer.layer,
+  SendGuard.layer,
+  functionServicesLayer,
 ).pipe(Layer.provideMerge(NodeCrypto.layer));
 
 export default class ApiFunction extends AWS.Lambda.Function<ApiFunction>()(
@@ -173,7 +173,7 @@ export default class ApiFunction extends AWS.Lambda.Function<ApiFunction>()(
     const token = yield* Effect.orDie(apiToken);
     // Built here rather than per request: the services are instance-lifetime, and the built
     // context carries no request scope into the handler.
-    const services = yield* Layer.build(ApiLive);
+    const services = yield* Layer.build(apiLayer);
     const handle = yield* makeApiHandler(token).pipe(Effect.provideContext(services));
 
     return { fetch: Effect.provideContext(handle, services) };

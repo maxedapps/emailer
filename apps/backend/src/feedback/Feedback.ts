@@ -5,11 +5,11 @@ import { Config, Duration, Effect, Layer, Schema, Stream } from "effect";
 
 import { classify, decodeEmailEvent } from "./FeedbackClassification.ts";
 import { nowIso } from "../Identifiers.ts";
-import { FunctionServicesLive, lambdaBasics } from "../Lambda.ts";
+import { functionServicesLayer, lambdaBasics } from "../Lambda.ts";
 import { failingInvocation } from "../Reporting.ts";
 import { configurationSet } from "../sending/Mailer.ts";
 import { queueBacklogAlarm } from "../sending/Reputation.ts";
-import { FeedbackStore, FeedbackStoreLive } from "../storage/Feedback.ts";
+import { FeedbackStore } from "../storage/Feedback.ts";
 
 import type { EmailEvent } from "./FeedbackClassification.ts";
 
@@ -248,7 +248,7 @@ const feedbackProps = Effect.gen(function* () {
 });
 
 /** Every service an event uses, bound once per instance. */
-const FeedbackLive = Layer.mergeAll(FeedbackStoreLive, FunctionServicesLive).pipe(
+const feedbackLayer = Layer.mergeAll(FeedbackStore.layer, functionServicesLayer).pipe(
   Layer.provideMerge(NodeCrypto.layer),
 );
 
@@ -256,7 +256,7 @@ export default class FeedbackFunction extends AWS.Lambda.Function<FeedbackFuncti
   "Feedback",
   feedbackProps,
   Effect.gen(function* () {
-    const services = yield* Layer.build(FeedbackLive);
+    const services = yield* Layer.build(feedbackLayer);
 
     yield* AWS.SQS.consumeQueueMessages(yield* feedbackEvents, { batchSize: 1 }, (records) =>
       Effect.gen(function* () {

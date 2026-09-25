@@ -4,7 +4,7 @@ import * as AWS from "alchemy/AWS";
 import { Duration, Effect, Layer, Schedule } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/unstable/http";
 
-import { ReportingLive } from "./Reporting.ts";
+import { reportingLayer } from "./Reporting.ts";
 
 const logRetention = Duration.days(7);
 
@@ -44,7 +44,7 @@ const retryBudget = Duration.seconds(4);
  * at least 500 ms after a throttle, except that it schedules no attempt past the budget: it stops
  * when the next delay would end beyond it, not once time has already run out.
  */
-const AwsRetryLive = Layer.succeed(Retry.Retry)((lastError) => {
+const awsRetryLayer = Layer.succeed(Retry.Retry)((lastError) => {
   const policy = Retry.makeDefault(lastError);
 
   return {
@@ -63,7 +63,7 @@ const AwsRetryLive = Layer.succeed(Retry.Retry)((lastError) => {
  * among them — `Content-Encoding: gzip` without compressing them. Fetch then fails to decode the
  * reply, and the client reports a defect in place of the error DynamoDB sent.
  */
-const UncompressedRepliesLive = Layer.effect(HttpClient.HttpClient)(
+const uncompressedRepliesLayer = Layer.effect(HttpClient.HttpClient)(
   Effect.map(
     HttpClient.HttpClient,
     HttpClient.mapRequest(HttpClientRequest.setHeader("accept-encoding", "identity")),
@@ -74,8 +74,8 @@ const UncompressedRepliesLive = Layer.effect(HttpClient.HttpClient)(
  * What every function provides to each invocation: failures reported once, the AWS retry policy,
  * and uncompressed AWS replies. The mailer turns retries off for its one call.
  */
-export const FunctionServicesLive = Layer.mergeAll(
-  ReportingLive,
-  AwsRetryLive,
-  UncompressedRepliesLive,
+export const functionServicesLayer = Layer.mergeAll(
+  reportingLayer,
+  awsRetryLayer,
+  uncompressedRepliesLayer,
 );

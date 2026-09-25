@@ -22,7 +22,7 @@ const reporter = ErrorReporter.make(({ error, severity, attributes, fiber }) =>
 );
 
 /** Part of every function's services, so every boundary inside them sees the reporter. */
-export const ReportingLive = ErrorReporter.layer([reporter]);
+export const reportingLayer = ErrorReporter.layer([reporter]);
 
 /**
  * The HTTP functions' boundary, inside their services. A failure gets the response Effect's own

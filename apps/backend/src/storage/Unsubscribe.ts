@@ -19,14 +19,14 @@ export type UnsubscribeOperations = ReturnType<typeof unsubscribeStoreOperations
 
 export class UnsubscribeStore extends Context.Service<UnsubscribeStore, UnsubscribeOperations>()(
   "emailer/backend/UnsubscribeStore",
-) {}
+) {
+  static readonly layer = Layer.effect(UnsubscribeStore)(
+    Effect.gen(function* () {
+      const table = yield* dataTable;
 
-export const UnsubscribeStoreLive = Layer.effect(UnsubscribeStore)(
-  Effect.gen(function* () {
-    const table = yield* dataTable;
-
-    return UnsubscribeStore.of(
-      unsubscribeStoreOperations({ updateItem: yield* AWS.DynamoDB.UpdateItem(table) }),
-    );
-  }),
-).pipe(Layer.provide(AWS.DynamoDB.UpdateItemHttp));
+      return UnsubscribeStore.of(
+        unsubscribeStoreOperations({ updateItem: yield* AWS.DynamoDB.UpdateItem(table) }),
+      );
+    }),
+  ).pipe(Layer.provide(AWS.DynamoDB.UpdateItemHttp));
+}

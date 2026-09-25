@@ -1,10 +1,10 @@
 import { Clock, Duration, Effect, Layer, Option } from "effect";
 import { HttpRouter, HttpServerResponse } from "effect/unstable/http";
 
-import { FunctionServicesLive, lambdaBasics } from "../Lambda.ts";
+import { functionServicesLayer, lambdaBasics } from "../Lambda.ts";
 import { respondingToFailures } from "../Reporting.ts";
 import { compose, escapeHtml, senderSettings } from "../sending/Message.ts";
-import { CampaignReader, CampaignReaderLive } from "../storage/Campaigns.ts";
+import { CampaignReader } from "../storage/Campaigns.ts";
 import {
   maxPreviewTokenLength,
   PreviewFunction,
@@ -174,8 +174,11 @@ export default PreviewFunction.make(
   previewProps,
   Effect.gen(function* () {
     const settings = yield* senderSettings;
+
     // GetItem on the one table, and nothing else.
-    const services = yield* Layer.build(Layer.mergeAll(CampaignReaderLive, FunctionServicesLive));
+    const services = yield* Layer.build(
+      Layer.mergeAll(CampaignReader.layer, functionServicesLayer),
+    );
 
     return { fetch: Effect.provideContext(yield* makePreviewHandler(settings), services) };
   }),

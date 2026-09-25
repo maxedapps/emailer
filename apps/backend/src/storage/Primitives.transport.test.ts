@@ -5,7 +5,7 @@ import { FetchHttpClient } from "effect/unstable/http";
 import { describe, expect, it } from "@effect/vitest";
 import { StorageUnavailable } from "@emailer/api/Errors";
 
-import { FunctionServicesLive } from "../Lambda.ts";
+import { functionServicesLayer } from "../Lambda.ts";
 import { str } from "./Items.ts";
 import { transactionPrimitives, updatePrimitives } from "./Primitives.ts";
 import { tokensFor } from "./Testing.ts";
@@ -104,7 +104,7 @@ const bindings = (transport: Transport) => {
       Layer.merge(AWS.DynamoDB.UpdateItemHttp, AWS.DynamoDB.TransactWriteItemsHttp),
       Layer.merge(credentials, http),
     ),
-    Layer.provide(FunctionServicesLive, http),
+    Layer.provide(functionServicesLayer, http),
   );
 };
 

@@ -117,7 +117,7 @@ export const rateLimitOperations = (primitives: Pick<UpdatePrimitives, "updateIf
 const rateLimitStore = (updateItem: TableOperations["updateItem"]) =>
   rateLimitOperations(updatePrimitives({ updateItem }));
 
-export const RateLimitStoreLive = Layer.effect(RateLimiter.RateLimiterStore)(
+export const rateLimitStoreLayer = Layer.effect(RateLimiter.RateLimiterStore)(
   Effect.gen(function* () {
     const table = yield* dataTable;
 

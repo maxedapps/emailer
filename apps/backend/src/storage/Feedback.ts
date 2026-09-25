@@ -149,23 +149,23 @@ export type FeedbackStoreOperations = ReturnType<typeof feedbackStoreOperations>
 
 export class FeedbackStore extends Context.Service<FeedbackStore, FeedbackStoreOperations>()(
   "emailer/backend/FeedbackStore",
-) {}
+) {
+  static readonly layer = Layer.effect(FeedbackStore)(
+    Effect.gen(function* () {
+      const table = yield* dataTable;
+      const crypto = yield* Crypto.Crypto;
 
-export const FeedbackStoreLive = Layer.effect(FeedbackStore)(
-  Effect.gen(function* () {
-    const table = yield* dataTable;
-    const crypto = yield* Crypto.Crypto;
-
-    return FeedbackStore.of(
-      feedbackStoreOperations(
-        {
-          updateItem: yield* AWS.DynamoDB.UpdateItem(table),
-          transactWriteItems: yield* AWS.DynamoDB.TransactWriteItems(table),
-        },
-        Effect.orDie(crypto.randomUUIDv4),
-      ),
-    );
-  }),
-).pipe(
-  Layer.provide(Layer.mergeAll(AWS.DynamoDB.UpdateItemHttp, AWS.DynamoDB.TransactWriteItemsHttp)),
-);
+      return FeedbackStore.of(
+        feedbackStoreOperations(
+          {
+            updateItem: yield* AWS.DynamoDB.UpdateItem(table),
+            transactWriteItems: yield* AWS.DynamoDB.TransactWriteItems(table),
+          },
+          Effect.orDie(crypto.randomUUIDv4),
+        ),
+      );
+    }),
+  ).pipe(
+    Layer.provide(Layer.mergeAll(AWS.DynamoDB.UpdateItemHttp, AWS.DynamoDB.TransactWriteItemsHttp)),
+  );
+}

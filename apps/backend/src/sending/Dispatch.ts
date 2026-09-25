@@ -130,8 +130,8 @@ export class CampaignWake extends Context.Service<CampaignWake>()("emailer/backe
         ),
     } as const;
   }),
-}) {}
-
-export const CampaignWakeLive = Layer.effect(CampaignWake)(CampaignWake.make).pipe(
-  Layer.provide(AWS.SQS.SendMessageHttp),
-);
+}) {
+  static readonly layer = Layer.effect(CampaignWake)(CampaignWake.make).pipe(
+    Layer.provide(AWS.SQS.SendMessageHttp),
+  );
+}

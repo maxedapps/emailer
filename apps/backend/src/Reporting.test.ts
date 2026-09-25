@@ -7,7 +7,7 @@ import { CorruptItem } from "./Errors.ts";
 import {
   failingInvocation,
   InvocationFailed,
-  ReportingLive,
+  reportingLayer,
   respondingToFailures,
 } from "./Reporting.ts";
 
@@ -21,7 +21,7 @@ interface Line {
 /** The reporter's lines as a logger receives them. */
 const capturing = (lines: Array<Line>) =>
   Layer.mergeAll(
-    ReportingLive,
+    reportingLayer,
     Logger.layer([
       Logger.make(({ logLevel, message }) => {
         lines.push({ level: logLevel, message });

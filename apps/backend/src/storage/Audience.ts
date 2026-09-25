@@ -36,13 +36,13 @@ export type AudienceOperations = ReturnType<typeof audienceOperations>;
 
 export class AudienceStore extends Context.Service<AudienceStore, AudienceOperations>()(
   "emailer/backend/AudienceStore",
-) {}
+) {
+  static readonly layer = Layer.effect(AudienceStore)(
+    Effect.gen(function* () {
+      const operations = yield* allTableOperations;
+      const crypto = yield* Crypto.Crypto;
 
-export const AudienceStoreLive = Layer.effect(AudienceStore)(
-  Effect.gen(function* () {
-    const operations = yield* allTableOperations;
-    const crypto = yield* Crypto.Crypto;
-
-    return AudienceStore.of(audienceOperations(operations, Effect.orDie(crypto.randomUUIDv4)));
-  }),
-).pipe(Layer.provide(AllTableOperationsHttp));
+      return AudienceStore.of(audienceOperations(operations, Effect.orDie(crypto.randomUUIDv4)));
+    }),
+  ).pipe(Layer.provide(AllTableOperationsHttp));
+}

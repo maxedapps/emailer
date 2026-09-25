@@ -184,8 +184,8 @@ export class Mailer extends Context.Service<Mailer>()("emailer/backend/Mailer", 
       ),
     } as const;
   }),
-}) {}
-
-export const MailerLive = Layer.effect(Mailer)(Mailer.make).pipe(
-  Layer.provide(AWS.SES.SendEmailHttp),
-);
+}) {
+  static readonly layer = Layer.effect(Mailer)(Mailer.make).pipe(
+    Layer.provide(AWS.SES.SendEmailHttp),
+  );
+}

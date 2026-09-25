@@ -12,7 +12,7 @@ import { RateLimiter } from "effect/unstable/persistence";
 
 import { unavailable } from "../Errors.ts";
 import { reputationAlarms } from "./Reputation.ts";
-import { RateLimitStoreLive } from "../storage/RateLimit.ts";
+import { rateLimitStoreLayer } from "../storage/RateLimit.ts";
 
 export interface SendAllowance {
   readonly limit: number;
@@ -110,10 +110,14 @@ export class SendGuard extends Context.Service<SendGuard>()("emailer/backend/Sen
       slot: makeSlot(limiter),
     } as const;
   }),
-}) {}
-
-export const SendGuardLive = Layer.effect(SendGuard)(SendGuard.make).pipe(
-  Layer.provide(
-    Layer.mergeAll(AWS.SES.GetAccountHttp, AWS.CloudWatch.DescribeAlarmsHttp, RateLimitStoreLive),
-  ),
-);
+}) {
+  static readonly layer = Layer.effect(SendGuard)(SendGuard.make).pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        AWS.SES.GetAccountHttp,
+        AWS.CloudWatch.DescribeAlarmsHttp,
+        rateLimitStoreLayer,
+      ),
+    ),
+  );
+}

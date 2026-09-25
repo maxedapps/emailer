@@ -26,7 +26,7 @@ import { makeApiHandler } from "./Api.ts";
 import { AccountSuppression } from "../audience/Addresses.ts";
 import { CampaignSchedule } from "../campaigns/CampaignSchedule.ts";
 import { verifyPreviewToken } from "../campaigns/Previews.ts";
-import { ReportingLive } from "../Reporting.ts";
+import { reportingLayer } from "../Reporting.ts";
 import { CampaignWake } from "../sending/Dispatch.ts";
 import { Mailer } from "../sending/Mailer.ts";
 import { SendGuard } from "../sending/SendGuard.ts";
@@ -139,7 +139,7 @@ const servicesFor = (stubs: Stubs) =>
       }),
     ),
     NodeCrypto.layer,
-    ReportingLive,
+    reportingLayer,
   );
 
 /**
