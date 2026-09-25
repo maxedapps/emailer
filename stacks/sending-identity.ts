@@ -14,7 +14,7 @@ import * as Cloudflare from "alchemy/Cloudflare";
 import * as Output from "alchemy/Output";
 import { Config, Effect, Layer, Option } from "effect";
 
-import type { Input, StackServices } from "alchemy";
+import type { Input } from "alchemy";
 
 import {
   dkimRecordAt,
@@ -30,13 +30,7 @@ import {
   senderLogicalId,
   sendingIdentityStack,
 } from "../apps/backend/src/identity/SendingIdentity.ts";
-
-type AwsProviders = Layer.Success<ReturnType<typeof AWS.providers>>;
-
-// `AWS.providers()` is typed with `any` requirements in Alchemy beta.79; naming what it actually
-// requires here keeps that `any` out of every layer built from it.
-// oxlint-disable-next-line typescript/no-unsafe-assignment
-const awsProviders: Layer.Layer<AwsProviders, never, StackServices> = AWS.providers();
+import { awsProviders } from "./providers.ts";
 
 const withCloudflare = Layer.merge(awsProviders, Cloudflare.providers());
 

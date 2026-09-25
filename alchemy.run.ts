@@ -15,12 +15,12 @@ import { feedbackPublishing } from "./apps/backend/src/sending/Mailer.ts";
 import { alertsTopic, reputationAlarms } from "./apps/backend/src/sending/Reputation.ts";
 import { UnsubscribeFunction } from "./apps/backend/src/consent/Unsubscribe.ts";
 import UnsubscribePage from "./apps/backend/src/consent/UnsubscribePage.ts";
+import { awsProviders } from "./stacks/providers.ts";
 
 export default Stack(
   "Emailer",
   {
-    // oxlint-disable-next-line effecttsgo/any-unknown-in-error-context, typescript/no-unsafe-assignment
-    providers: AWS.providers(),
+    providers: awsProviders,
     state: AWS.state(),
   },
   Effect.gen(function* () {

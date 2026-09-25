@@ -80,7 +80,7 @@ Status: Done. As built: the README's "Configure" section also says why no plain 
 
 ### T3 — One typed `AWS.providers()`
 
-Status: Not started
+Status: Done. As built: `stacks/providers.ts` exports `awsProviders`. The prod plan runs with T5's, because the SSO session expired before it could run here.
 
 - **Where:** `alchemy.run.ts:22` (a lint-disable comment) and `stacks/sending-identity.ts:34–39` (a typed const).
 - **Change:** the typed `awsProviders` moves into one small module under `stacks/`. Both stacks import it, and so does T13's test entry. The lint-disable comment goes.
