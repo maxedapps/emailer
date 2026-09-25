@@ -1,80 +1,105 @@
-import { NodeServices } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
-import { Effect } from "effect";
+import { Effect, Exit } from "effect";
 
 import {
   contactId,
-  inMemoryService,
+  createdAt,
+  fakeService,
   parseJson,
   runCli,
   token,
-  withService,
 } from "../../test/CliHarness.ts";
 
 describe("contact management from the command line", () => {
-  it.live("creates a contact with repeated --attr pairs as one attribute map", () =>
+  it.effect("creates a contact with repeated --attr pairs as one attribute map", () =>
     Effect.gen(function* () {
-      const service = inMemoryService(token);
+      const service = fakeService();
 
-      const result = yield* withService(service, (baseUrl) =>
-        runCli(baseUrl, token, [
-          "contacts",
-          "create",
-          "--email",
-          "sam@example.com",
-          "--attr",
-          "plan=pro",
-          "--attr",
-          "city=Berlin",
-        ]),
-      );
+      const run = yield* runCli(service, [
+        "contacts",
+        "create",
+        "--email",
+        "sam@example.com",
+        "--attr",
+        "plan=pro",
+        "--attr",
+        "city=Berlin",
+      ]);
 
-      expect(result.exitCode).toBe(0);
-      expect(yield* parseJson(result.stdout)).toMatchObject({
+      expect(Exit.isSuccess(run.exit)).toBe(true);
+      expect(service.payloadsOf("contacts.create")).toMatchObject([
+        { email: "sam@example.com", attributes: { plan: "pro", city: "Berlin" } },
+      ]);
+      expect(yield* parseJson(run.stdout)).toStrictEqual({
+        id: contactId,
         email: "sam@example.com",
         attributes: { plan: "pro", city: "Berlin" },
+        createdAt,
       });
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }),
   );
 
-  it.live("merges repeated --attr pairs into one attribute map", () =>
+  it.effect("attaches the configured credential to its requests", () =>
     Effect.gen(function* () {
-      const service = inMemoryService(token);
+      const service = fakeService();
 
-      const result = yield* withService(service, (baseUrl) =>
-        Effect.gen(function* () {
-          yield* runCli(baseUrl, token, ["contacts", "create", "--email", "sam@example.com"]);
+      yield* runCli(service, ["contacts", "create", "--email", "sam@example.com"]);
 
-          return yield* runCli(baseUrl, token, [
-            "contacts",
-            "update",
-            contactId,
-            "--attr",
-            "plan=pro",
-            "--attr",
-            "city=Berlin",
-          ]);
-        }),
-      );
-
-      expect(result.exitCode).toBe(0);
-      expect(service.updates).toStrictEqual([{ plan: "pro", city: "Berlin" }]);
-    }).pipe(Effect.provide(NodeServices.layer)),
+      expect(service.authorizations).toStrictEqual([token]);
+    }),
   );
 
-  it.live("refuses an attribute map the contract bounds, before any request", () =>
+  it.effect("reports a missing contact on stderr and prints nothing", () =>
     Effect.gen(function* () {
-      const service = inMemoryService(token);
+      const run = yield* runCli(fakeService(), ["contacts", "get", contactId]);
 
-      const oversized = ["--attr", `${"k".repeat(200)}=value`];
+      expect(Exit.isFailure(run.exit)).toBe(true);
+      expect(run.stdout).toBe("");
+      expect(run.stderr).toContain("ContactNotFound");
+    }),
+  );
 
-      const result = yield* withService(service, (baseUrl) =>
-        runCli(baseUrl, token, ["contacts", "update", contactId, ...oversized]),
-      );
+  it.effect("refuses an attribute map the contract bounds, naming --attr, before any request", () =>
+    Effect.gen(function* () {
+      const service = fakeService();
 
-      expect(result.exitCode).not.toBe(0);
-      expect(result.stdout.startsWith("{")).toBe(false);
-      expect(service.updates).toHaveLength(0);
-    }).pipe(Effect.provide(NodeServices.layer)),
+      const run = yield* runCli(service, [
+        "contacts",
+        "update",
+        contactId,
+        "--attr",
+        `${"k".repeat(200)}=value`,
+      ]);
+
+      expect(Exit.isFailure(run.exit)).toBe(true);
+      expect(run.stderr).toContain("--attr");
+      expect(service.received).toStrictEqual([]);
+    }),
+  );
+
+  it.effect("refuses a page size outside the contract, naming --limit, before any request", () =>
+    Effect.gen(function* () {
+      const service = fakeService();
+
+      const run = yield* runCli(service, ["contacts", "list", "--limit", "500"]);
+
+      expect(Exit.isFailure(run.exit)).toBe(true);
+      expect(run.stderr).toContain("--limit");
+      expect(service.received).toStrictEqual([]);
+    }),
+  );
+
+  // A page reports its cursor in the contract's own form, so the flag has to take exactly that
+  // string back. `Schemas.test.ts` pins that the value survives the wire unchanged.
+  it.effect("accepts the cursor form a page reports and sends it on", () =>
+    Effect.gen(function* () {
+      const service = fakeService();
+      const cursor = `${createdAt}#${contactId}`;
+
+      const run = yield* runCli(service, ["contacts", "list", "--cursor", cursor]);
+
+      expect(Exit.isSuccess(run.exit)).toBe(true);
+      expect(service.received).toStrictEqual([{ endpoint: "contacts.list", query: { cursor } }]);
+    }),
   );
 });

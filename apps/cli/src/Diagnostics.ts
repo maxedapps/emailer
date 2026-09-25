@@ -8,7 +8,7 @@ import { Cause, Console, Effect, Inspectable, Predicate, Runtime } from "effect"
  * marker has been rendered by whoever raised it — the CLI framework's own help and validation
  * output, or a command that printed something more specific than this reporter could.
  */
-export const shouldReport = (cause: Cause.Cause<unknown>): boolean =>
+const shouldReport = (cause: Cause.Cause<unknown>): boolean =>
   !Cause.hasInterruptsOnly(cause) && Runtime.getErrorReported(Cause.squash(cause));
 
 const messageOf = (cause: unknown): string =>

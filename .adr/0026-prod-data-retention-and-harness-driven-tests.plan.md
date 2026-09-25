@@ -370,7 +370,12 @@ Status: Done. As built: `Schemas.test.ts` went from 141 tests to 64 and `Client.
 
 ### T12 — CLI tests in-process
 
-Status: Not started
+Status: Done. As built:
+
+- **In-process runs:** `runCli` runs `Command.runWith` with the executable's `reporting`, reads the fake's routes through `HttpRouter.toWebHandler` as the `Fetch` reference, and captures a fresh `TestConsole` per run. A scripted `Terminal` answers prompts with one key, or ends its input as a closed stdin does.
+- **The fake:** it records every request and answers from seeded state. Only `campaigns delete` and `lists import` take scripted failures.
+- **Process tests:** seven. The TZ test is the seventh, because a process's timezone cannot be changed in-process.
+- **Counts:** the CLI suite went from 156 tests to 128. The unit run takes 25 s instead of about 36 s.
 
 **Where:** `apps/cli/test/CliHarness.ts`, `apps/cli/src/**/*.test.ts` and `apps/cli/src/Diagnostics.ts`.
 

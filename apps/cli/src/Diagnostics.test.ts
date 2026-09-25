@@ -4,7 +4,7 @@ import { Cause, Config, ConfigProvider, Data, Effect, Exit, Runtime, Schema } fr
 import { TestConsole } from "effect/testing";
 import { HttpClientError, HttpClientRequest } from "effect/unstable/http";
 
-import { reporting, shouldReport } from "./Diagnostics.ts";
+import { reporting } from "./Diagnostics.ts";
 
 class Refused extends Data.TaggedError("Refused")<{ readonly detail: string }> {}
 
@@ -28,27 +28,6 @@ const capturing = <A, E, R>(program: Effect.Effect<A, E, R>) =>
 
     return { exit, written, printed, text: written.join("\n") };
   });
-
-describe("shouldReport", () => {
-  it("reports an ordinary failure", () => {
-    expect(shouldReport(Cause.fail(new Refused({ detail: "boom" })))).toBe(true);
-  });
-
-  // Ctrl-C is the operator's own decision. A diagnostic would make it look like a fault.
-  it("stays quiet for an interruption", () => {
-    expect(shouldReport(Cause.interrupt())).toBe(false);
-  });
-
-  // The framework's help and validation output, and any command that printed something more
-  // specific, mark themselves reported. Saying it twice is worse than not saying it.
-  it("stays quiet for a failure that has already been rendered", () => {
-    expect(shouldReport(Cause.fail(new AlreadyRendered()))).toBe(false);
-  });
-
-  it("reports a defect, which nothing else will have rendered", () => {
-    expect(shouldReport(Cause.die(new Error("unexpected")))).toBe(true);
-  });
-});
 
 describe("reporting", () => {
   it.effect("writes one diagnostic to stderr and leaves the failure untouched", () =>
@@ -125,21 +104,6 @@ describe("reporting", () => {
       expect(text).toContain('"email": "sam@example.com"');
       // The reporting annotations live on the prototype, so they never print.
       expect(text).not.toContain("ErrorReporter");
-    }),
-  );
-
-  it.effect("reports a failure raised while services are still being provided", () =>
-    Effect.gen(function* () {
-      // The reporter wraps provisioning, not just the command body, so a missing configuration
-      // read is reported the same way a refused request is.
-      const provisioning = Effect.map(
-        Effect.fail(new Refused({ detail: "no config" })),
-        () => "never",
-      );
-
-      const { text } = yield* capturing(reporting(provisioning));
-
-      expect(text).toContain("no config");
     }),
   );
 

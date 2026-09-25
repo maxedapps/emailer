@@ -11,27 +11,30 @@ const text = (markdown: string) => renderMarkdown(markdown, "Subject").text;
 const newsletter = readFileSync(new URL("../test/newsletter.md", import.meta.url), "utf8");
 
 describe("renderMarkdown html", () => {
-  it.each([
-    ["# Title", `<h1 style="${styles.h1}">Title</h1>`],
-    ["## Section", `<h2 style="${styles.h2}">Section</h2>`],
-    ["### Detail", `<h3 style="${styles.h3}">Detail</h3>`],
-    ["#### Deeper", `<h4 style="${styles.h3}">Deeper</h4>`],
-    ["Plain words", `<p style="${styles.p}">Plain words</p>`],
-    ["[label](https://example.com)", `<a href="https://example.com" style="${styles.a}">label</a>`],
-    [
-      "- one\n- two",
-      `<ul style="${styles.list}">\n<li style="${styles.li}">one</li>\n<li style="${styles.li}">two</li>\n</ul>`,
-    ],
-    ["3. three\n4. four", `<ol start="3" style="${styles.list}">`],
-    [
-      "> quoted",
-      `<blockquote style="${styles.blockquote}">\n<p style="${styles.p}">quoted</p>\n</blockquote>`,
-    ],
-    ["`code`", `<code style="${styles.code}">code</code>`],
-    ["```\nblock\n```", `<pre style="${styles.pre}">block</pre>`],
-    ["---", `<hr style="${styles.hr}">`],
-  ])("styles %j inline", (markdown, expected) => {
-    expect(html(markdown)).toContain(expected);
+  // Gmail drops <style> for most accounts, so a rule that is not inline is not applied at all.
+  it("gives every block, link and table cell in the reference newsletter an inline style", () => {
+    const tags = [
+      // Outlook's conditional wrapper is sized by attributes, as only Outlook reads it.
+      ...html(newsletter)
+        .replaceAll(/<!--\[if mso\]>.*?<!\[endif\]-->/gs, "")
+        .matchAll(/<(h1|h2|p|a|ul|ol|li|blockquote|code|pre|hr|img|table|th|td)\b[^>]*>/g),
+    ];
+
+    expect(new Set(tags.map(([, name]) => name))).toStrictEqual(
+      new Set(["h1", "h2", "p", "a", "img", "ul", "li", "code", "blockquote", "ol", "pre"])
+        .add("table")
+        .add("th")
+        .add("td")
+        .add("hr"),
+    );
+
+    for (const [tag] of tags) {
+      expect(tag).toContain(' style="');
+    }
+  });
+
+  it("keeps an ordered list's start number", () => {
+    expect(html("3. three\n4. four")).toContain('<ol start="3"');
   });
 
   it("gives images the width attribute classic Outlook honours, and fluid CSS", () => {

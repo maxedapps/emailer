@@ -2,10 +2,30 @@ import { NodeHttpServer, NodeServices } from "@effect/platform-node";
 import { Authorization, EmailerApi } from "@emailer/api/Api";
 import * as Errors from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
-import { Effect, FileSystem, Layer, PlatformError, Redacted, Schema, Stream } from "effect";
-import { HttpRouter, HttpServer } from "effect/unstable/http";
+import {
+  Cause,
+  ConfigProvider,
+  Effect,
+  Exit,
+  FileSystem,
+  Layer,
+  Option,
+  PlatformError,
+  Queue,
+  Redacted,
+  Schema,
+  Stream,
+  Terminal,
+} from "effect";
+import { TestConsole } from "effect/testing";
+import { Command } from "effect/unstable/cli";
+import { FetchHttpClient, HttpRouter, HttpServer } from "effect/unstable/http";
 import { HttpApiBuilder } from "effect/unstable/httpapi";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { fileURLToPath } from "node:url";
+
+import { reporting } from "../src/Diagnostics.ts";
+import { emailer } from "../src/Emailer.ts";
 
 export const token = "3o4Xr7nJ1pQvKzB2sYtLwMhGfDcEaN9uRiVoP0qTzXY";
 
@@ -19,53 +39,76 @@ export const campaignId = "0195f0a0-1111-4222-8333-4444444ca409";
 
 export const createdAt = "2026-09-11T10:00:00.000Z";
 
-interface Service {
-  readonly routes: Layer.Layer<never, never, HttpRouter.HttpRouter>;
-  readonly authorizations: Array<string>;
-  readonly updates: Array<Schemas.ContactAttributes>;
-  readonly campaigns: Map<string, Schemas.Campaign>;
-  readonly campaignUpdates: Array<Schemas.UpdateCampaignPayload>;
-  readonly testSends: Array<Schemas.TestSendPayload>;
-  readonly startedAt: Map<string, string>;
-  /** The contacts each import call carried, in arrival order, refused calls included. */
-  readonly importCalls: Array<Schemas.ImportContactsPayload["contacts"]>;
-  /** A list named "Readers" at `listId` whose members hold these addresses. */
-  readonly seedList: (emails: ReadonlyArray<string>) => void;
+export const textBody = "Hello there";
+
+export const readers: Schemas.ContactList = { id: listId, name: "Readers", createdAt };
+
+export const draft: Schemas.Campaign = {
+  id: campaignId,
+  listId,
+  subject: "Release notes",
+  text: "Old text",
+  html: "<p>Old</p>",
+  createdAt,
+  submission: { state: "draft" },
+  filter: { plan: "pro" },
+};
+
+/** What the fake service holds before a test runs, and how its endpoints fail. */
+interface Seed {
+  readonly contacts?: ReadonlyArray<Schemas.Contact>;
+  readonly lists?: ReadonlyArray<Schemas.ContactList>;
+  /** The members of `listId`, in order. */
+  readonly members?: ReadonlyArray<Schemas.Contact>;
+  readonly campaigns?: ReadonlyArray<Schemas.Campaign>;
+  /** Errors `campaigns delete` answers with, one per call, before it succeeds. */
+  readonly removeFailures?: ReadonlyArray<Errors.CampaignStateConflict>;
+  /** Errors `lists import` answers with, one per call, before it succeeds. */
+  readonly importFailures?: ReadonlyArray<Errors.StorageUnavailable>;
 }
 
-const queuedSubmission: Schemas.CampaignSubmission = {
-  state: "queued",
-  queuedAt: createdAt,
-};
+/** One request the service received: which endpoint, and what it carried. */
+interface Received {
+  readonly endpoint: string;
+  readonly params?: unknown;
+  readonly query?: unknown;
+  readonly payload?: unknown;
+}
 
-export const pausedSubmission: Schemas.CampaignSubmission = {
-  state: "paused",
-  queuedAt: createdAt,
-  startedAt: createdAt,
-  progress: { accepted: 0, rejected: 0, uncertain: 0, skipped: 0 },
-  feedback: { bounced: 0, complained: 0 },
-  reason: "rate-limited",
-};
-
-export const inMemoryService = (
-  accepted: string,
-  options: {
-    readonly queueUnavailable?: boolean;
-    /** The first import call answers 503, as a throttled table would. */
-    readonly importUnavailableOnce?: boolean;
-  } = {},
-): Service => {
+/**
+ * The real API contract served from seeded state. It answers each request from what a test seeded
+ * and records it; it does not re-implement the service's transitions, which the backend suites
+ * prove. Every request is decoded against the real contract, so what the CLI sends is checked there.
+ */
+export const fakeService = (seed: Seed = {}) => {
   const authorizations: Array<string> = [];
-  const updates: Array<Schemas.ContactAttributes> = [];
-  const contacts = new Map<string, Schemas.Contact>();
-  const lists = new Map<string, Schemas.ContactList>();
-  const members = new Map<string, Array<string>>();
-  const campaigns = new Map<string, Schemas.Campaign>();
-  const campaignUpdates: Array<Schemas.UpdateCampaignPayload> = [];
-  const testSends: Array<Schemas.TestSendPayload> = [];
-  const startedAt = new Map<string, string>();
-  const importCalls: Array<Schemas.ImportContactsPayload["contacts"]> = [];
-  let importedContacts = 0;
+  const received: Array<Received> = [];
+  const contacts = new Map((seed.contacts ?? []).map((contact) => [contact.id, contact]));
+  const lists = new Map((seed.lists ?? []).map((list) => [list.id, list]));
+  const campaigns = new Map((seed.campaigns ?? []).map((campaign) => [campaign.id, campaign]));
+  const members = seed.members ?? [];
+  const removeFailures = [...(seed.removeFailures ?? [])];
+  const importFailures = [...(seed.importFailures ?? [])];
+  let imported = 0;
+
+  const receive = (endpoint: string, request: Omit<Received, "endpoint"> = {}) =>
+    Effect.sync(() => {
+      received.push({ endpoint, ...request });
+    });
+
+  /** The next scripted failure, if one is left. */
+  const next = <E>(failures: Array<E>) =>
+    Effect.suspend(() => {
+      const failure = failures.shift();
+
+      return failure === undefined ? Effect.void : Effect.fail(failure);
+    });
+
+  const found = <A, E>(value: A | undefined, missing: E) =>
+    value === undefined ? Effect.fail(missing) : Effect.succeed(value);
+
+  const unused = (endpoint: string) => () =>
+    Effect.die(new Error(`${endpoint} is not exercised by these tests`));
 
   const authorization = Layer.succeed(Authorization)(
     Authorization.of({
@@ -74,7 +117,7 @@ export const inMemoryService = (
 
         authorizations.push(credential);
 
-        return credential === accepted ? httpEffect : Effect.fail(new Errors.Unauthorized());
+        return credential === token ? httpEffect : Effect.fail(new Errors.Unauthorized());
       },
     }),
   );
@@ -82,461 +125,168 @@ export const inMemoryService = (
   const contactsGroup = HttpApiBuilder.group(EmailerApi, "contacts", (handlers) =>
     handlers.handleAll({
       create: (request) =>
-        Effect.sync(() => {
-          const contact: Schemas.Contact = { id: contactId, ...request.payload, createdAt };
-
-          contacts.set(contact.id, contact);
-
-          return contact;
-        }),
+        receive("contacts.create", { payload: request.payload }).pipe(
+          Effect.as({ id: contactId, ...request.payload, createdAt }),
+        ),
       get: (request) =>
-        Effect.suspend(() => {
-          const found = contacts.get(request.params.id);
-
-          return found === undefined
-            ? Effect.fail(new Errors.ContactNotFound())
-            : Effect.succeed(found);
-        }),
-      getByEmail: (request) =>
-        Effect.suspend(() => {
-          for (const contact of contacts.values()) {
-            if (Schemas.mailboxKey(contact.email) === Schemas.mailboxKey(request.query.email)) {
-              return Effect.succeed(contact);
-            }
-          }
-
-          return Effect.fail(new Errors.ContactNotFound());
-        }),
-      list: () => Effect.sync(() => ({ items: [...contacts.values()] })),
+        receive("contacts.get", { params: request.params }).pipe(
+          Effect.andThen(found(contacts.get(request.params.id), new Errors.ContactNotFound())),
+        ),
+      list: (request) =>
+        receive("contacts.list", { query: request.query }).pipe(
+          Effect.as({ items: [...contacts.values()] }),
+        ),
       update: (request) =>
-        Effect.suspend(() => {
-          const found = contacts.get(request.params.id);
-
-          if (found === undefined) {
-            return Effect.fail(new Errors.ContactNotFound());
-          }
-
-          if (request.payload.attributes !== undefined && request.payload.attributes !== null) {
-            updates.push(request.payload.attributes);
-          }
-
-          const updated: Schemas.Contact =
-            request.payload.email === undefined
-              ? found
-              : { ...found, email: request.payload.email };
-
-          contacts.set(updated.id, updated);
-
-          return Effect.succeed(updated);
-        }),
-      remove: (request) =>
-        Effect.suspend(() => {
-          if (!contacts.delete(request.params.id)) {
-            return Effect.fail(new Errors.ContactNotFound());
-          }
-
-          return Effect.void;
-        }),
+        receive("contacts.update", { params: request.params, payload: request.payload }).pipe(
+          Effect.andThen(found(contacts.get(request.params.id), new Errors.ContactNotFound())),
+        ),
+      getByEmail: unused("contacts.getByEmail"),
+      remove: unused("contacts.remove"),
     }),
   );
 
   const listsGroup = HttpApiBuilder.group(EmailerApi, "lists", (handlers) =>
     handlers.handleAll({
-      create: (request) =>
-        Effect.sync(() => {
-          const list: Schemas.ContactList = { id: listId, name: request.payload.name, createdAt };
-
-          lists.set(list.id, list);
-
-          return list;
-        }),
+      create: unused("lists.create"),
       get: (request) =>
-        Effect.suspend(() => {
-          const found = lists.get(request.params.id);
-
-          return found === undefined
-            ? Effect.fail(new Errors.ListNotFound())
-            : Effect.succeed(found);
-        }),
-      addContact: (request) =>
-        Effect.suspend(() => {
-          if (!contacts.has(request.params.contactId)) {
-            return Effect.fail(new Errors.ContactNotFound());
-          }
-
-          const current = members.get(request.params.listId) ?? [];
-
-          members.set(request.params.listId, [...current, request.params.contactId]);
-
-          return Effect.void;
-        }),
-      list: () => Effect.sync(() => ({ items: [...lists.values()] })),
+        receive("lists.get", { params: request.params }).pipe(
+          Effect.andThen(found(lists.get(request.params.id), new Errors.ListNotFound())),
+        ),
+      list: (request) =>
+        receive("lists.list", { query: request.query }).pipe(
+          Effect.as({ items: [...lists.values()] }),
+        ),
       update: (request) =>
-        Effect.suspend(() => {
-          const found = lists.get(request.params.id);
-
-          if (found === undefined) {
-            return Effect.fail(new Errors.ListNotFound());
-          }
-
-          const renamed: Schemas.ContactList = { ...found, name: request.payload.name };
-
-          lists.set(renamed.id, renamed);
-
-          return Effect.succeed(renamed);
-        }),
-      remove: (request) =>
-        Effect.suspend(() => {
-          if (!lists.delete(request.params.id)) {
-            return Effect.fail(new Errors.ListNotFound());
-          }
-
-          members.delete(request.params.id);
-
-          return Effect.void;
-        }),
+        receive("lists.update", { params: request.params, payload: request.payload }).pipe(
+          Effect.andThen(found(lists.get(request.params.id), new Errors.ListNotFound())),
+          Effect.map((list) => ({ ...list, name: request.payload.name })),
+        ),
+      remove: (request) => receive("lists.remove", { params: request.params }),
       listMembers: (request) =>
-        Effect.suspend(() => {
-          if (!lists.has(request.params.listId)) {
-            return Effect.fail(new Errors.ListNotFound());
-          }
+        receive("lists.listMembers", { params: request.params, query: request.query }).pipe(
+          Effect.andThen(found(lists.get(request.params.listId), new Errors.ListNotFound())),
+          Effect.map(() => {
+            const limit = request.query.limit ?? Schemas.defaultPageSize;
+            const page = members.slice(0, limit);
+            const last = page.at(-1);
 
-          const joined: Array<Schemas.Contact> = [];
-
-          for (const id of members.get(request.params.listId) ?? []) {
-            const contact = contacts.get(id);
-
-            if (contact !== undefined) {
-              joined.push(contact);
-            }
-          }
-
-          const limit = request.query.limit ?? Schemas.defaultPageSize;
-          const page = joined.slice(0, limit);
-          const last = page.at(-1);
-
-          // Like DynamoDB behind the real service, a full page reports a cursor.
-          return Effect.succeed(
-            page.length === limit && last !== undefined
+            // Like DynamoDB behind the real service, a full page reports a cursor.
+            return page.length === limit && last !== undefined
               ? { items: page, nextCursor: last.id }
-              : { items: page },
-          );
-        }),
-      removeContact: (request) =>
-        Effect.suspend(() => {
-          if (!lists.has(request.params.listId)) {
-            return Effect.fail(new Errors.ListNotFound());
-          }
-
-          const current = members.get(request.params.listId) ?? [];
-
-          members.set(
-            request.params.listId,
-            current.filter((id) => id !== request.params.contactId),
-          );
-
-          return Effect.void;
-        }),
+              : { items: page };
+          }),
+        ),
+      addContact: (request) => receive("lists.addContact", { params: request.params }),
+      removeContact: (request) => receive("lists.removeContact", { params: request.params }),
       import: (request) =>
-        Effect.gen(function* () {
-          importCalls.push(request.payload.contacts);
+        receive("lists.import", { params: request.params, payload: request.payload }).pipe(
+          Effect.andThen(next(importFailures)),
+          Effect.andThen(found(lists.get(request.params.listId), new Errors.ListNotFound())),
+          Effect.map(() => ({
+            contacts: request.payload.contacts.map((entry) => {
+              imported += 1;
 
-          if (options.importUnavailableOnce === true && importCalls.length === 1) {
-            return yield* new Errors.StorageUnavailable({
-              operation: "importContacts",
-              failure: "ThrottlingException",
-            });
-          }
-
-          if (!lists.has(request.params.listId)) {
-            return yield* new Errors.ListNotFound();
-          }
-
-          const imported = request.payload.contacts.map((entry) => {
-            importedContacts += 1;
-
-            const id = `0195f0a0-1111-4222-8333-4444444d${String(importedContacts).padStart(4, "0")}`;
-            const contact: Schemas.Contact = { id, email: entry.email, createdAt };
-
-            contacts.set(id, contact);
-
-            return { email: entry.email, contactId: id, member: true };
-          });
-
-          members.set(request.params.listId, [
-            ...(members.get(request.params.listId) ?? []),
-            ...imported.map((entry) => entry.contactId),
-          ]);
-
-          return { contacts: imported };
-        }),
+              return {
+                email: entry.email,
+                contactId: `0195f0a0-1111-4222-8333-4444444d${String(imported).padStart(4, "0")}`,
+                member: true,
+              };
+            }),
+          })),
+        ),
     }),
   );
+
+  const campaign = (id: string) => found(campaigns.get(id), new Errors.CampaignNotFound());
 
   const campaignsGroup = HttpApiBuilder.group(EmailerApi, "campaigns", (handlers) =>
     handlers.handleAll({
       create: (request) =>
-        Effect.sync(() => {
-          const campaign = {
+        receive("campaigns.create", { payload: request.payload }).pipe(
+          Effect.as({
             id: campaignId,
-            listId: request.payload.listId,
-            subject: request.payload.subject,
-            text: request.payload.text,
+            ...request.payload,
             createdAt,
-            submission: { state: "draft" } as const,
-          };
-
-          const withHtml =
-            request.payload.html === undefined
-              ? campaign
-              : { ...campaign, html: request.payload.html };
-
-          const created: Schemas.Campaign =
-            request.payload.filter === undefined
-              ? withHtml
-              : { ...withHtml, filter: request.payload.filter };
-
-          campaigns.set(created.id, created);
-
-          return created;
-        }),
+            submission: { state: "draft" },
+          }),
+        ),
       get: (request) =>
-        Effect.suspend(() => {
-          const found = campaigns.get(request.params.id);
-
-          return found === undefined
-            ? Effect.fail(new Errors.CampaignNotFound())
-            : Effect.succeed(found);
-        }),
+        receive("campaigns.get", { params: request.params }).pipe(
+          Effect.andThen(campaign(request.params.id)),
+        ),
+      list: (request) =>
+        receive("campaigns.list", { query: request.query }).pipe(
+          Effect.as({ items: [...campaigns.values()] }),
+        ),
       update: (request) =>
-        Effect.gen(function* () {
-          const found = campaigns.get(request.params.id);
-
-          if (found === undefined) {
-            return yield* new Errors.CampaignNotFound();
-          }
-
-          if (found.submission.state !== "draft") {
-            return yield* new Errors.CampaignStateConflict({ state: found.submission.state });
-          }
-
-          campaignUpdates.push(request.payload);
-
-          const { html, filter, ...rest } = found;
-          const change = request.payload;
-
-          const campaign = {
-            ...rest,
-            listId: change.listId ?? found.listId,
-            subject: change.subject ?? found.subject,
-            text: change.text ?? found.text,
-          };
-
-          const nextHtml = change.html === undefined ? html : (change.html ?? undefined);
-          const nextFilter = change.filter === undefined ? filter : (change.filter ?? undefined);
-          const withHtml = nextHtml === undefined ? campaign : { ...campaign, html: nextHtml };
-
-          const updated: Schemas.Campaign =
-            nextFilter === undefined ? withHtml : { ...withHtml, filter: nextFilter };
-
-          campaigns.set(updated.id, updated);
-
-          return updated;
-        }),
+        receive("campaigns.update", { params: request.params, payload: request.payload }).pipe(
+          Effect.andThen(campaign(request.params.id)),
+        ),
       remove: (request) =>
-        Effect.gen(function* () {
-          const found = campaigns.get(request.params.id);
-
-          if (found === undefined) {
-            return yield* new Errors.CampaignNotFound();
-          }
-
-          if (found.submission.state !== "draft") {
-            return yield* new Errors.CampaignStateConflict({ state: found.submission.state });
-          }
-
-          campaigns.delete(found.id);
-        }),
+        receive("campaigns.remove", { params: request.params }).pipe(
+          Effect.andThen(next(removeFailures)),
+        ),
       preview: (request) =>
-        Effect.suspend(() =>
-          campaigns.has(request.params.id)
-            ? Effect.succeed({
-                url: `https://preview.example/previews/${request.params.id}`,
-                expiresAt: "2026-09-12T10:00:00.000Z",
-              })
-            : Effect.fail(new Errors.CampaignNotFound()),
+        receive("campaigns.preview", { params: request.params }).pipe(
+          Effect.as({
+            url: `https://preview.example/previews/${request.params.id}`,
+            expiresAt: "2026-09-12T10:00:00.000Z",
+          }),
         ),
       test: (request) =>
-        Effect.gen(function* () {
-          if (!campaigns.has(request.params.id)) {
-            return yield* new Errors.CampaignNotFound();
-          }
-
-          testSends.push(request.payload);
-
-          const recipients =
-            "to" in request.payload
+        receive("campaigns.test", { params: request.params, payload: request.payload }).pipe(
+          Effect.as({
+            recipients: ("to" in request.payload
               ? request.payload.to
-              : (members.get(request.payload.listId) ?? []).flatMap((id) => {
-                  const contact = contacts.get(id);
-
-                  return contact === undefined ? [] : [contact.email];
-                });
-
-          return {
-            recipients: recipients.map((email, index) => ({
+              : members.map((member) => member.email)
+            ).map((email, index) => ({
               email,
               outcome: "accepted" as const,
               messageId: `message-${index + 1}`,
             })),
-          };
-        }),
+          }),
+        ),
       send: (request) =>
-        Effect.gen(function* () {
-          const found = campaigns.get(request.params.id);
-
-          if (found === undefined) {
-            return yield* new Errors.CampaignNotFound();
-          }
-
-          if (options.queueUnavailable === true) {
-            return yield* new Errors.QueueUnavailable({
-              operation: "dispatch",
-              failure: "ServiceUnavailable",
-            });
-          }
-
-          if (found.submission.state !== "draft") {
-            return found;
-          }
-
-          const queued: Schemas.Campaign = { ...found, submission: queuedSubmission };
-
-          campaigns.set(queued.id, queued);
-
-          return queued;
-        }),
+        receive("campaigns.send", { params: request.params }).pipe(
+          Effect.andThen(campaign(request.params.id)),
+        ),
       resume: (request) =>
-        Effect.gen(function* () {
-          const found = campaigns.get(request.params.id);
-
-          if (found === undefined) {
-            return yield* new Errors.CampaignNotFound();
-          }
-
-          if (options.queueUnavailable === true) {
-            return yield* new Errors.QueueUnavailable({
-              operation: "dispatch",
-              failure: "ServiceUnavailable",
-            });
-          }
-
-          if (found.submission.state !== "paused") {
-            return found;
-          }
-
-          const resumed: Schemas.Campaign = { ...found, submission: queuedSubmission };
-
-          campaigns.set(resumed.id, resumed);
-
-          return resumed;
-        }),
+        receive("campaigns.resume", { params: request.params }).pipe(
+          Effect.andThen(campaign(request.params.id)),
+        ),
       schedule: (request) =>
-        Effect.gen(function* () {
-          const found = campaigns.get(request.params.id);
-
-          if (found === undefined) {
-            return yield* new Errors.CampaignNotFound();
-          }
-
-          const scheduled: Schemas.Campaign = {
-            ...found,
-            submission: { state: "scheduled", sendAt: request.payload.sendAt },
-          };
-
-          campaigns.set(scheduled.id, scheduled);
-
-          return scheduled;
-        }),
+        receive("campaigns.schedule", { params: request.params, payload: request.payload }).pipe(
+          Effect.andThen(campaign(request.params.id)),
+        ),
       cancel: (request) =>
-        Effect.gen(function* () {
-          const found = campaigns.get(request.params.id);
-
-          if (found === undefined) {
-            return yield* new Errors.CampaignNotFound();
-          }
-
-          switch (found.submission.state) {
-            case "sending":
-            case "completed":
-              return yield* new Errors.CampaignStateConflict({
-                state: found.submission.state,
-              });
-            case "draft":
-            case "paused":
-              return found;
-            case "scheduled": {
-              const cancelled: Schemas.Campaign = { ...found, submission: { state: "draft" } };
-
-              campaigns.set(cancelled.id, cancelled);
-
-              return cancelled;
-            }
-
-            case "queued": {
-              const started = startedAt.get(found.id);
-
-              if (started === undefined) {
-                const cancelled: Schemas.Campaign = { ...found, submission: { state: "draft" } };
-
-                campaigns.set(cancelled.id, cancelled);
-
-                return cancelled;
-              }
-
-              const paused: Schemas.Campaign = {
-                ...found,
-                submission: {
-                  state: "paused",
-                  queuedAt: found.submission.queuedAt,
-                  startedAt: started,
-                  progress: { accepted: 0, rejected: 0, uncertain: 0, skipped: 0 },
-                  feedback: { bounced: 0, complained: 0 },
-                  reason: "manual",
-                },
-              };
-
-              campaigns.set(paused.id, paused);
-
-              return paused;
-            }
-          }
-        }),
-      list: () => Effect.sync(() => ({ items: [...campaigns.values()] })),
+        receive("campaigns.cancel", { params: request.params }).pipe(
+          Effect.andThen(campaign(request.params.id)),
+        ),
     }),
   );
 
   const addressesGroup = HttpApiBuilder.group(EmailerApi, "addresses", (handlers) =>
     handlers.handleAll({
-      // The two fakes answer differently so a test can tell which endpoint the CLI called.
+      // The two answer differently so a test can tell which endpoint the CLI called.
       status: (request) =>
-        Effect.succeed({
-          email: request.query.email,
-          status: "suppressed" as const,
-          suppression: { reason: "bounce" as const, suppressedAt: "2026-09-15T10:00:00.000Z" },
-          transientBounces: [],
-          accountSuppression: {
-            reason: "bounce" as const,
-            lastUpdateTime: "2026-09-15T10:00:00.000Z",
-          },
-        }),
+        receive("addresses.status", { query: request.query }).pipe(
+          Effect.as({
+            email: request.query.email,
+            status: "suppressed" as const,
+            suppression: { reason: "bounce" as const, suppressedAt: createdAt },
+            transientBounces: [],
+            accountSuppression: { reason: "bounce" as const, lastUpdateTime: createdAt },
+          }),
+        ),
       unsuppress: (request) =>
-        Effect.succeed({
-          email: request.payload.email,
-          status: "mailable" as const,
-          transientBounces: [],
-          accountSuppression: null,
-        }),
+        receive("addresses.unsuppress", { payload: request.payload }).pipe(
+          Effect.as({
+            email: request.payload.email,
+            status: "mailable" as const,
+            transientBounces: [],
+            accountSuppression: null,
+          }),
+        ),
     }),
   );
 
@@ -546,93 +296,109 @@ export const inMemoryService = (
     Layer.provide(HttpServer.layerServices),
   );
 
-  const seedList = (emails: ReadonlyArray<string>) => {
-    lists.set(listId, { id: listId, name: "Readers", createdAt });
+  /** What each call of one endpoint carried as its payload, in order. */
+  const payloadsOf = (endpoint: string) =>
+    received.flatMap((request) => (request.endpoint === endpoint ? [request.payload] : []));
 
-    const ids = emails.map((email, index) => {
-      const id = `0195f0a0-1111-4222-8333-4444444c${String(index).padStart(4, "0")}`;
-
-      contacts.set(id, { id, email, createdAt });
-
-      return id;
-    });
-
-    members.set(listId, ids);
-  };
-
-  return {
-    routes,
-    authorizations,
-    updates,
-    campaigns,
-    campaignUpdates,
-    testSends,
-    startedAt,
-    importCalls,
-    seedList,
-  };
+  return { routes, authorizations, received, payloadsOf };
 };
 
-interface CliResult {
+export type FakeService = ReturnType<typeof fakeService>;
+
+/**
+ * A terminal that answers a prompt with `answer`, one key press, or with nothing at all, as a
+ * closed stdin does. What a prompt displays is collected rather than written anywhere.
+ */
+const scriptedTerminal = (answer: string | undefined, displayed: Array<string>) =>
+  Terminal.make({
+    columns: Effect.succeed(80),
+    rows: Effect.succeed(24),
+    readInput: Effect.gen(function* () {
+      const input = yield* Queue.unbounded<Terminal.UserInput, Cause.Done>();
+
+      if (answer !== undefined) {
+        yield* Queue.offer(input, {
+          input: Option.some(answer),
+          key: { name: answer, ctrl: false, meta: false, shift: false },
+        });
+      }
+
+      yield* Queue.end(input);
+
+      return input;
+    }),
+    readLine: Effect.fail(new Terminal.QuitError()),
+    display: (text) =>
+      Effect.sync(() => {
+        displayed.push(text);
+      }),
+  });
+
+interface CliRun {
+  readonly exit: Exit.Exit<void, unknown>;
   readonly stdout: string;
   readonly stderr: string;
-  readonly exitCode: number;
+  /** What prompts displayed, which the real CLI writes to stderr. */
+  readonly prompted: string;
 }
 
-const collect = (stream: Stream.Stream<Uint8Array, PlatformError.PlatformError>) =>
-  stream.pipe(Stream.decodeText(), Stream.mkString);
+interface CliOptions {
+  readonly credential?: string;
+  /** Configuration besides the service's URL and the credential. */
+  readonly env?: Readonly<Record<string, string>>;
+  /** The key a prompt is answered with; without one, stdin is closed. */
+  readonly answer?: string;
+}
 
+/**
+ * Runs the command in this process, as `main.ts` runs it, against the fake service: its requests
+ * go to the service's routes directly, its console is captured, and failures are reported the
+ * way the executable reports them. What only a process shows — exit codes and which stream the
+ * real terminal writes to — is `Emailer.test.ts`'s.
+ */
 export const runCli = (
-  baseUrl: string,
-  credential: string,
+  service: FakeService,
   args: ReadonlyArray<string>,
-  environment: Readonly<Record<string, string>> = {},
-  stdin = "",
-): Effect.Effect<CliResult, PlatformError.PlatformError, ChildProcessSpawner.ChildProcessSpawner> =>
-  Effect.gen(function* () {
-    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-
-    const command = ChildProcess.make("node", ["apps/cli/src/main.ts", ...args], {
-      extendEnv: true,
-      stdin: Stream.encodeText(Stream.make(stdin)),
-    }).pipe(
-      ChildProcess.setEnv({
-        EMAILER_API_URL: baseUrl,
-        EMAILER_API_TOKEN: credential,
-        ...environment,
-      }),
-    );
-
-    const handle = yield* spawner.spawn(command);
-
-    const captured = yield* Effect.all(
-      [collect(handle.stdout), collect(handle.stderr), handle.exitCode],
-      { concurrency: "unbounded" },
-    );
-
-    return { stdout: captured[0], stderr: captured[1], exitCode: Number(captured[2]) };
-  }).pipe(Effect.scoped);
-
-export const withService = <A, E>(
-  service: Service,
-  use: (baseUrl: string) => Effect.Effect<A, E, ChildProcessSpawner.ChildProcessSpawner>,
+  options: CliOptions = {},
 ) =>
   Effect.gen(function* () {
-    const handle = yield* HttpRouter.toHttpEffect(service.routes);
+    const { handler, dispose } = HttpRouter.toWebHandler(service.routes, { disableLogger: true });
 
-    yield* HttpServer.serveEffect(handle);
+    yield* Effect.addFinalizer(() => Effect.promise(dispose));
 
-    const baseUrl = yield* HttpServer.addressFormattedWith((address) =>
-      Effect.succeed(address.replace("0.0.0.0", "127.0.0.1")),
+    const displayed: Array<string> = [];
+
+    const exit = yield* Command.runWith(emailer, { version: "0.0.0" })(args).pipe(
+      reporting,
+      Effect.provideService(Terminal.Terminal, scriptedTerminal(options.answer, displayed)),
+      Effect.provide(NodeServices.layer),
+      Effect.provideService(FetchHttpClient.Fetch, (input, init) =>
+        handler(new Request(input, init)),
+      ),
+      Effect.provideService(
+        ConfigProvider.ConfigProvider,
+        ConfigProvider.fromUnknown({
+          EMAILER_API_URL: "http://emailer.test",
+          EMAILER_API_TOKEN: options.credential ?? token,
+          ...options.env,
+        }),
+      ),
+      Effect.exit,
     );
 
-    return yield* use(baseUrl);
-  }).pipe(
-    Effect.scoped,
-    Effect.provide(Layer.mergeAll(NodeHttpServer.layerTest, NodeServices.layer)),
-  );
+    const run: CliRun = {
+      exit,
+      stdout: (yield* TestConsole.logLines).join("\n"),
+      stderr: (yield* TestConsole.errorLines).join("\n"),
+      prompted: displayed.join(""),
+    };
+
+    return run;
+  }).pipe(Effect.provide(TestConsole.layer), Effect.scoped);
 
 export const parseJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
+
+export const toJson = Schema.encodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
 
 /** A file for the CLI to read through a flag, removed when the enclosing scope closes. */
 export const tempFile = (extension: string, contents: string) =>
@@ -643,8 +409,56 @@ export const tempFile = (extension: string, contents: string) =>
     yield* fs.writeFileString(file, contents);
 
     return file;
-  });
+  }).pipe(Effect.provide(NodeServices.layer));
 
-export const textBody = "Hello there";
+interface ProcessResult {
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly exitCode: number;
+}
 
-export const toJson = Schema.encodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
+const collect = (stream: Stream.Stream<Uint8Array, PlatformError.PlatformError>) =>
+  stream.pipe(Stream.decodeText(), Stream.mkString);
+
+const main = fileURLToPath(new URL("../src/main.ts", import.meta.url));
+
+/** Runs the real executable, for what only a process shows: exit codes and output streams. */
+export const runProcess = (
+  baseUrl: string,
+  args: ReadonlyArray<string>,
+  options: { readonly env?: Readonly<Record<string, string>>; readonly stdin?: string } = {},
+): Effect.Effect<ProcessResult, PlatformError.PlatformError> =>
+  Effect.gen(function* () {
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+
+    const command = ChildProcess.make("node", [main, ...args], {
+      extendEnv: true,
+      stdin: Stream.encodeText(Stream.make(options.stdin ?? "")),
+    }).pipe(
+      ChildProcess.setEnv({ EMAILER_API_URL: baseUrl, EMAILER_API_TOKEN: token, ...options.env }),
+    );
+
+    const handle = yield* spawner.spawn(command);
+
+    const [stdout, stderr, exitCode] = yield* Effect.all(
+      [collect(handle.stdout), collect(handle.stderr), handle.exitCode],
+      { concurrency: "unbounded" },
+    );
+
+    return { stdout, stderr, exitCode: Number(exitCode) };
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
+
+/** Serves the fake service on a local port for the executable to reach. */
+export const withServer = <A, E>(
+  service: FakeService,
+  use: (baseUrl: string) => Effect.Effect<A, E>,
+) =>
+  Effect.gen(function* () {
+    yield* HttpServer.serveEffect(yield* HttpRouter.toHttpEffect(service.routes));
+
+    const baseUrl = yield* HttpServer.addressFormattedWith((address) =>
+      Effect.succeed(address.replace("0.0.0.0", "127.0.0.1")),
+    );
+
+    return yield* use(baseUrl);
+  }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest));

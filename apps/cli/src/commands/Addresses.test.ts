@@ -1,44 +1,45 @@
-import { NodeServices } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
-import { Effect } from "effect";
+import { Effect, Exit } from "effect";
 
-import { inMemoryService, parseJson, runCli, token, withService } from "../../test/CliHarness.ts";
+import { createdAt, fakeService, parseJson, runCli } from "../../test/CliHarness.ts";
 
 describe("address status and un-suppress from the command line", () => {
-  it.live("prints the address record from addresses status and exits 0", () =>
+  it.effect("prints the address record addresses status answers, asking with the case given", () =>
     Effect.gen(function* () {
-      const service = inMemoryService(token);
+      const service = fakeService();
 
-      const result = yield* withService(service, (baseUrl) =>
-        runCli(baseUrl, token, ["addresses", "status", "--email", "Sam@Example.com"]),
-      );
+      const run = yield* runCli(service, ["addresses", "status", "--email", "Sam@Example.com"]);
 
-      expect(result.exitCode).toBe(0);
-      expect(yield* parseJson(result.stdout)).toStrictEqual({
+      expect(Exit.isSuccess(run.exit)).toBe(true);
+      expect(service.received).toStrictEqual([
+        { endpoint: "addresses.status", query: { email: "Sam@Example.com" } },
+      ]);
+      expect(yield* parseJson(run.stdout)).toStrictEqual({
         email: "Sam@Example.com",
         status: "suppressed",
-        suppression: { reason: "bounce", suppressedAt: "2026-09-15T10:00:00.000Z" },
+        suppression: { reason: "bounce", suppressedAt: createdAt },
         transientBounces: [],
-        accountSuppression: { reason: "bounce", lastUpdateTime: "2026-09-15T10:00:00.000Z" },
+        accountSuppression: { reason: "bounce", lastUpdateTime: createdAt },
       });
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }),
   );
 
-  it.live("prints the refreshed record from addresses unsuppress and exits 0", () =>
+  it.effect("prints the refreshed record addresses unsuppress answers", () =>
     Effect.gen(function* () {
-      const service = inMemoryService(token);
+      const service = fakeService();
 
-      const result = yield* withService(service, (baseUrl) =>
-        runCli(baseUrl, token, ["addresses", "unsuppress", "--email", "sam@example.com"]),
-      );
+      const run = yield* runCli(service, ["addresses", "unsuppress", "--email", "sam@example.com"]);
 
-      expect(result.exitCode).toBe(0);
-      expect(yield* parseJson(result.stdout)).toStrictEqual({
+      expect(Exit.isSuccess(run.exit)).toBe(true);
+      expect(service.payloadsOf("addresses.unsuppress")).toStrictEqual([
+        { email: "sam@example.com" },
+      ]);
+      expect(yield* parseJson(run.stdout)).toStrictEqual({
         email: "sam@example.com",
         status: "mailable",
         transientBounces: [],
         accountSuppression: null,
       });
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }),
   );
 });
