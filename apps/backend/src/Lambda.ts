@@ -13,15 +13,15 @@ const logRetention = Duration.days(7);
  * its own log group with bounded retention, declared as `<id>Logs`. Each function keeps its
  * `main: import.meta.url`, because that is what points the bundler at its module.
  *
- * Each function passes `logGroupName` on as `EMAILER_LOG_GROUP`. Nothing reads that variable: it
- * exists only so the function depends on its log group, which is then created before the function.
+ * The log group needs no ordering against its function: the provider adopts a group Lambda already
+ * created and applies the retention, and the function removes its group when it is deleted.
  */
 export const lambdaBasics = (id: string, name: string) =>
   Effect.gen(function* () {
     const { stage } = yield* Stack;
     const functionName = `emailer-${stage}-${name}`;
 
-    const logGroup = yield* AWS.Logs.LogGroup(`${id}Logs`, {
+    yield* AWS.Logs.LogGroup(`${id}Logs`, {
       logGroupName: `/aws/lambda/${functionName}`,
       retention: logRetention,
     });
@@ -30,7 +30,6 @@ export const lambdaBasics = (id: string, name: string) =>
       functionName,
       runtime: "nodejs24.x",
       architecture: "arm64",
-      logGroupName: logGroup.logGroupName,
     } as const;
   });
 

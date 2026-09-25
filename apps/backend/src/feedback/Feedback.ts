@@ -224,7 +224,7 @@ export const handleMessage = (expected: string, body: string) =>
   );
 
 const feedbackProps = Effect.gen(function* () {
-  const { logGroupName, ...basics } = yield* lambdaBasics("Feedback", "feedback");
+  const basics = yield* lambdaBasics("Feedback", "feedback");
 
   const mail = yield* configurationSet;
 
@@ -235,7 +235,6 @@ const feedbackProps = Effect.gen(function* () {
     timeout: invocationTimeout,
     functionUrl: false,
     env: {
-      EMAILER_LOG_GROUP: logGroupName,
       EMAILER_CONFIGURATION_SET: mail.configurationSetName,
     },
   } as const;

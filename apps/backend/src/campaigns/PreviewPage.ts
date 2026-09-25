@@ -151,7 +151,7 @@ export const makePreviewHandler = (settings: PreviewSender) =>
   );
 
 const previewProps = Effect.gen(function* () {
-  const { logGroupName, ...basics } = yield* lambdaBasics("Preview", "preview");
+  const basics = yield* lambdaBasics("Preview", "preview");
 
   const secret = yield* previewSecret;
 
@@ -165,7 +165,6 @@ const previewProps = Effect.gen(function* () {
     reservedConcurrentExecutions: 2,
     functionUrl: { authType: "NONE" },
     env: {
-      EMAILER_LOG_GROUP: logGroupName,
       EMAILER_PREVIEW_SECRET: secret.text,
     },
   } as const;

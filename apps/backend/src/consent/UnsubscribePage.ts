@@ -118,7 +118,7 @@ export const makeUnsubscribeHandler = HttpRouter.toHttpEffect(
 ).pipe(Effect.map(respondingToFailures), Effect.provide(routerConfig));
 
 const unsubscribeProps = Effect.gen(function* () {
-  const { logGroupName, ...basics } = yield* lambdaBasics("Unsubscribe", "unsubscribe");
+  const basics = yield* lambdaBasics("Unsubscribe", "unsubscribe");
 
   const secret = yield* unsubscribeSecret;
 
@@ -136,7 +136,6 @@ const unsubscribeProps = Effect.gen(function* () {
     reservedConcurrentExecutions: 10,
     functionUrl: { authType: "NONE" },
     env: {
-      EMAILER_LOG_GROUP: logGroupName,
       EMAILER_UNSUBSCRIBE_SECRET: secret.text,
     },
   } as const;

@@ -17,7 +17,7 @@ const invocationTimeout = Duration.minutes(5);
 const sliceMargin = Duration.seconds(30);
 
 const dispatcherProps = Effect.gen(function* () {
-  const { logGroupName, ...basics } = yield* lambdaBasics("Dispatcher", "dispatcher");
+  const basics = yield* lambdaBasics("Dispatcher", "dispatcher");
 
   const unsubscribe = yield* UnsubscribeFunction;
   const secret = yield* unsubscribeSecret;
@@ -29,7 +29,6 @@ const dispatcherProps = Effect.gen(function* () {
     timeout: invocationTimeout,
     functionUrl: false,
     env: {
-      EMAILER_LOG_GROUP: logGroupName,
       EMAILER_UNSUBSCRIBE_URL: unsubscribe.functionUrl,
       EMAILER_UNSUBSCRIBE_SECRET: secret.text,
     },

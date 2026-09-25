@@ -94,7 +94,7 @@ Status: Done. As built: `stacks/providers.ts` exports `awsProviders`. The prod p
 
 ### T4 — Drop the log-group ordering env var
 
-Status: Not started
+Status: Done in code; the live check runs in T15.
 
 - **Where:** `lambdaBasics` in `apps/backend/src/Lambda.ts`, and `EMAILER_LOG_GROUP` in the props of the Api, Dispatcher, Feedback, Unsubscribe and Preview functions.
 - **Change:**

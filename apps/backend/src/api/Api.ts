@@ -99,7 +99,7 @@ const addressesHandlers = HttpApiBuilder.group(EmailerApi, "addresses", (handler
 );
 
 const apiProps = Effect.gen(function* () {
-  const { logGroupName, ...basics } = yield* lambdaBasics("Api", "api");
+  const basics = yield* lambdaBasics("Api", "api");
 
   // Bare tags, not the inline class form: the inline form always builds when
   // yielded, which would run the public functions' props and init inside this
@@ -117,7 +117,6 @@ const apiProps = Effect.gen(function* () {
     timeout: invocationTimeout,
     functionUrl: { authType: "NONE" },
     env: {
-      EMAILER_LOG_GROUP: logGroupName,
       EMAILER_UNSUBSCRIBE_URL: unsubscribe.functionUrl,
       EMAILER_UNSUBSCRIBE_SECRET: unsubscribeKey.text,
       EMAILER_PREVIEW_URL: preview.functionUrl,
