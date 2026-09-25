@@ -298,6 +298,19 @@ class SubscriptionsGroup extends HttpApiGroup.make("subscriptions")
         Errors.AlarmsUnavailable,
       ],
     }),
+    // The site's confirm page calls this on the subscriber's POST, never on a GET: link scanners
+    // fetch every link in a mail.
+    HttpApiEndpoint.post("confirm", "/confirm", {
+      payload: Schemas.ConfirmPayload,
+      success: Schemas.Subscribed,
+      error: [
+        ...storage,
+        Errors.Forbidden,
+        Errors.ConfirmationNotFound,
+        Errors.ListNotFound,
+        Errors.ContactChanged,
+      ],
+    }),
   )
   .prefix("/subscriptions")
   .middleware(SubscriptionAuthorization) {}

@@ -3,12 +3,12 @@ import { describe, expect, it } from "@effect/vitest";
 import { Integration } from "@emailer/api/Api";
 import * as Errors from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
-import { DateTime, Duration, Effect, Layer } from "effect";
+import { DateTime, Duration, Effect, Layer, Schema } from "effect";
 import { TestClock } from "effect/testing";
 // oxlint-disable-next-line effecttsgo/node-builtin-import
 import { createHash } from "node:crypto";
 
-import { subscribe } from "./Subscriptions.ts";
+import { confirm, subscribe } from "./Subscriptions.ts";
 import { Mail, Mailer, SendRejected, SubmissionUncertain } from "../sending/Mailer.ts";
 import { SendGuard } from "../sending/SendGuard.ts";
 import { AudienceStore } from "../storage/Audience.ts";
@@ -17,7 +17,7 @@ import { unusedAudience } from "../storage/Testing.ts";
 
 import type { SendError } from "../sending/Mailer.ts";
 import type { SendAllowance } from "../sending/SendGuard.ts";
-import type { SubscriptionRequest } from "../storage/Subscriptions.ts";
+import type { SubscriptionConfirmation, SubscriptionRequest } from "../storage/Subscriptions.ts";
 
 const listId = "0195f0a0-1111-4222-8333-44444444109e";
 
@@ -238,6 +238,76 @@ describe("subscribe", () => {
       const fix = fixture({ sendFailure: new SubmissionUncertain({ reason: "timeout" }) });
 
       expect(yield* signingUp(fix)).toStrictEqual(Schemas.ConfirmationSent.make({}));
+    }),
+  );
+});
+
+describe("confirm", () => {
+  const secret = "Aa1Bb2Cc3Dd4Ee5Ff6Gg7Hh8Ii9Jj0Kk-Ll_MmNnOoP";
+
+  const confirmFixture = () => {
+    const confirmations: Array<SubscriptionConfirmation> = [];
+
+    const layer = Layer.mergeAll(
+      Layer.succeed(Integration)({ keyId: "key", lists: [listId], confirmUrl: confirmPage }),
+      Layer.succeed(AudienceStore)({
+        ...unusedAudience,
+        confirmSubscription: (confirmation) =>
+          Effect.sync(() => {
+            confirmations.push(confirmation);
+
+            return confirmation.listId;
+          }),
+      }),
+      NodeCrypto.layer,
+    );
+
+    return { layer, confirmations };
+  };
+
+  const confirming = (fix: ReturnType<typeof confirmFixture>, token: string) =>
+    confirm({ token, ip: "203.0.113.8" }).pipe(Effect.provide(fix.layer));
+
+  it.effect("confirms the mailbox and list the token names, with its secret's hash only", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(now);
+
+      const fix = confirmFixture();
+
+      expect(yield* confirming(fix, `first.last@example.com.${listId}.${secret}`)).toStrictEqual(
+        Schemas.Subscribed.make({ listId }),
+      );
+      // A fresh identifier, which the contact takes only if no one holds the address yet.
+      const contactId = fix.confirmations[0]?.contactId ?? "";
+
+      expect(Schema.is(Schemas.EntityId)(contactId)).toBe(true);
+      expect(fix.confirmations).toStrictEqual([
+        {
+          email: "first.last@example.com",
+          listId,
+          secretHash: createHash("sha256").update(secret).digest("hex"),
+          contactId,
+          confirmedAt: "2026-09-25T10:00:00.000Z",
+          confirmIp: "203.0.113.8",
+        },
+      ]);
+    }),
+  );
+
+  it.effect.each([
+    ["no token at all", "not-a-token", new Errors.ConfirmationNotFound()],
+    [
+      "a short secret",
+      `sam@example.com.${listId}.${secret.slice(1)}`,
+      new Errors.ConfirmationNotFound(),
+    ],
+    ["a list outside the key", `sam@example.com.${otherListId}.${secret}`, new Errors.Forbidden()],
+  ] as const)("refuses %s before any storage", ([_label, token, error]) =>
+    Effect.gen(function* () {
+      const fix = confirmFixture();
+
+      expect(yield* Effect.flip(confirming(fix, token))).toStrictEqual(error);
+      expect(fix.confirmations).toHaveLength(0);
     }),
   );
 });

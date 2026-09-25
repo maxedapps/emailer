@@ -1,4 +1,4 @@
-import { Crypto, Effect, Encoding, Option, Redacted } from "effect";
+import { Crypto, Effect, Encoding, Option, Redacted, Schema } from "effect";
 // Effect exposes no HMAC or constant-time comparison, so these are the platform primitives it would wrap.
 // oxlint-disable-next-line effecttsgo/node-builtin-import
 import { createHmac, timingSafeEqual } from "node:crypto";
@@ -94,6 +94,9 @@ export const verify = (
 };
 
 const secretBytes = 32;
+
+/** A secret `issueSecret` could have issued, as presented back. */
+export const IssuedSecret = Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]{43}$/));
 
 /** A fresh random secret: 32 bytes as unpadded base64url, 43 characters. */
 export const issueSecret = Effect.gen(function* () {

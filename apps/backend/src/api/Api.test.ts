@@ -821,6 +821,43 @@ describe("subscriptions", () => {
     }),
   );
 
+  it.effect("confirms a link with 200, and answers 404 to one that does not work", () =>
+    Effect.gen(function* () {
+      const token = `${email}.${listId}.${keySecret}`;
+
+      const { respond } = yield* api({
+        audience: {
+          confirmSubscription: (confirmation) =>
+            confirmation.secretHash === storedKey.secretHash
+              ? Effect.succeed(confirmation.listId)
+              : Effect.fail(new Errors.ConfirmationNotFound()),
+        },
+      });
+
+      const confirming = (presented: string) =>
+        respond(
+          send(
+            "POST",
+            "/subscriptions/confirm",
+            JSON.stringify({ token: presented, ip: "203.0.113.8" }),
+            scoped,
+          ),
+        );
+
+      const confirmed = yield* confirming(token);
+      const refused = yield* confirming(`${email}.${listId}.${"x".repeat(43)}`);
+
+      expect([confirmed.status, confirmed.body]).toStrictEqual([
+        200,
+        `{"_tag":"Subscribed","listId":"${listId}"}`,
+      ]);
+      expect([refused.status, refused.body]).toStrictEqual([
+        404,
+        `{"_tag":"ConfirmationNotFound"}`,
+      ]);
+    }),
+  );
+
   it.effect("decodes both answers through the typed client, holding the scoped key", () =>
     Effect.gen(function* () {
       const { call } = yield* api(signUp(SubscriptionState.NotSubscribed()));

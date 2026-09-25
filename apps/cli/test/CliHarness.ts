@@ -132,7 +132,10 @@ export const fakeService = (seed: Seed = {}) => {
   );
 
   const subscriptionsGroup = HttpApiBuilder.group(EmailerApi, "subscriptions", (handlers) =>
-    handlers.handleAll({ subscribe: unused("subscriptions.subscribe") }),
+    handlers.handleAll({
+      subscribe: unused("subscriptions.subscribe"),
+      confirm: unused("subscriptions.confirm"),
+    }),
   );
 
   const contactsGroup = HttpApiBuilder.group(EmailerApi, "contacts", (handlers) =>

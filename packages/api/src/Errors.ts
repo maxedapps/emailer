@@ -144,6 +144,20 @@ export class AddressUndeliverable extends Schema.TaggedError<AddressUndeliverabl
   }
 }
 
+/**
+ * The confirmation link is not valid: it never was, it expired, or it was already used. The
+ * subscriber can sign up again for a new one.
+ */
+export class ConfirmationNotFound extends Schema.TaggedError<ConfirmationNotFound>()(
+  "ConfirmationNotFound",
+  {},
+  { httpApiStatus: 404 },
+) {
+  override get [ErrorReporter.ignore]() {
+    return true;
+  }
+}
+
 /** A confirmation mail went to this address for this list within the hour. */
 export class ConfirmationRecentlySent extends Schema.TaggedError<ConfirmationRecentlySent>()(
   "ConfirmationRecentlySent",

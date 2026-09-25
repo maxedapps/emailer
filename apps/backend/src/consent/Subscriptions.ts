@@ -1,20 +1,21 @@
 import { Integration } from "@emailer/api/Api";
 import {
   AddressUndeliverable,
+  ConfirmationNotFound,
   EmailServiceUnavailable,
   Forbidden,
   SendingPaused,
 } from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
-import { Effect, Redacted } from "effect";
+import { Effect, Option, Redacted, Schema } from "effect";
 
 import { unavailable } from "../Errors.ts";
-import { nowIso } from "../Identifiers.ts";
+import { newIdentifier, nowIso } from "../Identifiers.ts";
 import { Mail, Mailer } from "../sending/Mailer.ts";
 import { SendGuard } from "../sending/SendGuard.ts";
 import { AudienceStore } from "../storage/Audience.ts";
 import { SubscriptionState } from "../storage/Subscriptions.ts";
-import { hashSecret, issueSecret } from "../Tokens.ts";
+import { hashSecret, IssuedSecret, issueSecret } from "../Tokens.ts";
 
 /**
  * The key's confirm page, with the link's token added to whatever query it already has. The token
@@ -105,4 +106,48 @@ export const subscribe = Effect.fn("Subscriptions.subscribe")(function* (
     Subscribed: () => Effect.succeed(Schemas.AlreadySubscribed.make({})),
     NotSubscribed: () => requestConfirmation(payload, list.name),
   });
+});
+
+/** A confirmation link's token: `<mailbox>.<listId>.<secret>`. */
+const decodeConfirmationToken = Schema.decodeUnknownOption(
+  Schema.TemplateLiteralParser([
+    Schemas.NormalizedEmailAddress,
+    ".",
+    Schemas.EntityId,
+    ".",
+    IssuedSecret,
+  ]),
+);
+
+/**
+ * The second half of the double opt-in: the subscriber used the mailed link, so they join the list.
+ * A token that does not parse is a link that does not work, like one expired or already used.
+ */
+export const confirm = Effect.fn("Subscriptions.confirm")(function* (
+  payload: Schemas.ConfirmPayload,
+) {
+  const integration = yield* Integration;
+  const audience = yield* AudienceStore;
+  const token = decodeConfirmationToken(payload.token);
+
+  if (Option.isNone(token)) {
+    return yield* new ConfirmationNotFound();
+  }
+
+  const [mailbox, , listId, , secret] = token.value;
+
+  if (!integration.lists.includes(listId)) {
+    return yield* new Forbidden();
+  }
+
+  yield* audience.confirmSubscription({
+    email: mailbox,
+    listId,
+    secretHash: yield* hashSecret(Redacted.make(secret)),
+    contactId: yield* newIdentifier,
+    confirmedAt: yield* nowIso,
+    confirmIp: payload.ip,
+  });
+
+  return Schemas.Subscribed.make({ listId });
 });

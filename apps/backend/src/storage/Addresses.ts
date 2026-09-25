@@ -1,7 +1,7 @@
 import * as Schemas from "@emailer/api/Schemas";
 import { Data, DateTime, Effect, Option, Predicate, Record, Schema } from "effect";
 
-import { itemReader, num, recordVersion, str, strMap, strSet } from "./Items.ts";
+import { itemReader, itemWriter, num, recordVersion, str, strMap, strSet } from "./Items.ts";
 
 import type { QueryPrimitives, ReadPrimitives, UpdatePrimitives } from "./Primitives.ts";
 
@@ -28,6 +28,15 @@ export const pendingKey = (email: string, listId: string) => ({
 });
 
 /**
+ * The evidence of one confirmed opt-in. Append-only: each confirmation adds its own, so a later
+ * sign-up can never overwrite the evidence of an earlier one.
+ */
+export const consentKey = (email: string, listId: string, confirmedAt: string) => ({
+  pk: addressKey(email).pk,
+  sk: str(`CONSENT#${listId}#${confirmedAt}`),
+});
+
+/**
  * A pending sign-up: whom to add and how, the consent evidence so far, and the hash of its link's
  * secret. `ttl` is in epoch seconds, as DynamoDB's TTL reads it.
  */
@@ -47,6 +56,8 @@ export const PendingSubscription = Schema.Struct({
 export type PendingSubscription = typeof PendingSubscription.Type;
 
 export const readPending = itemReader(PendingSubscription);
+
+export const writeConsent = itemWriter(Schemas.ConsentRecord);
 
 const readConsent = itemReader(Schemas.ConsentRecord);
 

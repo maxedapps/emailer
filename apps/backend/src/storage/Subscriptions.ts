@@ -1,12 +1,33 @@
-import { ConfirmationRecentlySent } from "@emailer/api/Errors";
+import {
+  ConfirmationNotFound,
+  ConfirmationRecentlySent,
+  ContactChanged,
+  ListNotFound,
+} from "@emailer/api/Errors";
 import { Data, DateTime, Duration, Effect } from "effect";
 
-import { itemWriter, str } from "./Items.ts";
-import { PendingSubscription, pendingKey, readAddressState, readPending } from "./Addresses.ts";
-import { readReservation, reservationKey } from "./Contacts.ts";
-import { memberKey } from "./Membership.ts";
+import { itemWriter, str, strSet, tableLogicalId } from "./Items.ts";
+import {
+  PendingSubscription,
+  addressKey,
+  consentKey,
+  pendingKey,
+  readAddressState,
+  readPending,
+  writeConsent,
+} from "./Addresses.ts";
+import { contactOf, readReservation, reservationKey, retryLostRace } from "./Contacts.ts";
+import { listKey } from "./Lists.ts";
+import { joinActions, memberKey, readHolders } from "./Membership.ts";
 
-import type { ReadPrimitives, StoredItem, WritePrimitives } from "./Primitives.ts";
+import type {
+  Action,
+  BatchPrimitives,
+  ReadPrimitives,
+  StoredItem,
+  TransactionPrimitives,
+  WritePrimitives,
+} from "./Primitives.ts";
 
 /** How long a confirmation link works. DynamoDB's TTL removes the pending item after it. */
 export const confirmationLifetime = Duration.days(7);
@@ -28,13 +49,25 @@ export const SubscriptionState = Data.taggedEnum<SubscriptionState>();
 /** A pending sign-up as requested, before storage gives it its expiry. */
 export type SubscriptionRequest = Omit<PendingSubscription, "ttl">;
 
+/** A confirmation link used, and the identifier a new contact would take. */
+export interface SubscriptionConfirmation {
+  readonly email: string;
+  readonly listId: string;
+  readonly secretHash: string;
+  readonly contactId: string;
+  readonly confirmedAt: string;
+  readonly confirmIp: string;
+}
+
 const writePending = itemWriter(PendingSubscription);
 
 const plus = (timestamp: string, duration: Duration.Duration): DateTime.Utc =>
   DateTime.addDuration(DateTime.makeUnsafe(timestamp), duration);
 
-export const subscriptionOperations = (primitives: ReadPrimitives & WritePrimitives) => {
-  const { readItem, putIf } = primitives;
+export const subscriptionOperations = (
+  primitives: ReadPrimitives & WritePrimitives & BatchPrimitives & TransactionPrimitives,
+) => {
+  const { readItem, putIf, transact } = primitives;
 
   /**
    * The address item and the reservation are read together; the membership only if a contact holds
@@ -114,5 +147,104 @@ export const subscriptionOperations = (primitives: ReadPrimitives & WritePrimiti
     );
   });
 
-  return { subscriptionState, requestSubscription } as const;
+  /**
+   * Joins the pending subscriber to the list as an import would, records the consent, consumes the
+   * link and lifts the list's opt-out, in one transaction.
+   *
+   * The pending item is deleted first, conditioned on the secret: a link used twice, even at once,
+   * joins once, and the second use answers `ConfirmationNotFound`, which is not retried. An expired
+   * item still in the table (TTL deletes lazily) is refused like a missing one.
+   */
+  const confirmSubscription = Effect.fn("Storage.confirmSubscription")(function* (
+    confirmation: SubscriptionConfirmation,
+  ) {
+    const { email, listId, secretHash, confirmedAt } = confirmation;
+
+    const [pending, list, address, holders] = yield* Effect.all(
+      [
+        readItem("confirmSubscription", pendingKey(email, listId)),
+        readItem("confirmSubscription", listKey(listId)),
+        readAddressState(primitives, "confirmSubscription", email),
+        readHolders(primitives, "confirmSubscription", [email]),
+      ],
+      { concurrency: 4 },
+    );
+
+    if (pending.Item === undefined) {
+      return yield* new ConfirmationNotFound();
+    }
+
+    const stored = yield* readPending("confirmSubscription", pending.Item);
+
+    if (
+      stored.secretHash !== secretHash ||
+      stored.ttl * 1000 <= DateTime.toEpochMillis(DateTime.makeUnsafe(confirmedAt))
+    ) {
+      return yield* new ConfirmationNotFound();
+    }
+
+    if (list.Item === undefined) {
+      return yield* new ListNotFound();
+    }
+
+    const candidate = contactOf(
+      confirmation.contactId,
+      stored.email,
+      stored.name,
+      stored.attributes,
+      confirmedAt,
+    );
+
+    const joined = yield* joinActions(listId, [candidate], holders, confirmedAt);
+
+    const liftOptOut: Array<Action<never>> = address.optOuts.includes(listId)
+      ? [
+          {
+            Update: {
+              Table: tableLogicalId,
+              Key: addressKey(email),
+              UpdateExpression: "DELETE optOuts :list",
+              ExpressionAttributeValues: { ":list": strSet([listId]) },
+            },
+          },
+        ]
+      : [];
+
+    const actions: ReadonlyArray<Action<ConfirmationNotFound | ContactChanged>> = [
+      {
+        Delete: {
+          Table: tableLogicalId,
+          Key: pendingKey(email, listId),
+          ConditionExpression: "secretHash = :secretHash",
+          ExpressionAttributeValues: { ":secretHash": str(secretHash) },
+        },
+        refused: () => new ConfirmationNotFound(),
+      },
+      ...joined.actions,
+      {
+        Put: {
+          Table: tableLogicalId,
+          Item: {
+            ...consentKey(email, listId, confirmedAt),
+            ...(yield* writeConsent({
+              listId,
+              source: stored.source,
+              wording: stored.wording,
+              ip: stored.ip,
+              requestedAt: stored.requestedAt,
+              confirmedAt,
+              confirmIp: confirmation.confirmIp,
+            })),
+          },
+        },
+      },
+      ...liftOptOut,
+    ];
+
+    yield* transact("confirmSubscription", actions);
+
+    return listId;
+  }, retryLostRace);
+
+  return { subscriptionState, requestSubscription, confirmSubscription } as const;
 };

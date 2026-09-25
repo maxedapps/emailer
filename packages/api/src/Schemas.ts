@@ -612,6 +612,26 @@ export const ConfirmationSent = Schema.TaggedStruct("ConfirmationSent", {});
 /** The address is already on the list, so no mail went out. */
 export const AlreadySubscribed = Schema.TaggedStruct("AlreadySubscribed", {});
 
+/** `<mailbox>.<listId>.<secret>`, where the secret is 43 base64url characters. */
+const maxConfirmationTokenLength = maxEmailLength + 1 + 36 + 1 + 43;
+
+/**
+ * The token from a confirmation link, exactly as the site received it. The service parses it, so a
+ * token that is not one answers `ConfirmationNotFound` like any other link that does not work.
+ */
+const ConfirmationToken = Schema.String.check(
+  Schema.isNonEmpty(),
+  Schema.isMaxLength(maxConfirmationTokenLength),
+);
+
+/** A confirmation from the site's page. `ip` is the subscriber's address as the site saw it. */
+export const ConfirmPayload = Schema.Struct({ token: ConfirmationToken, ip: IpAddress });
+
+export type ConfirmPayload = typeof ConfirmPayload.Type;
+
+/** The subscriber is on the list. */
+export const Subscribed = Schema.TaggedStruct("Subscribed", { listId: EntityId });
+
 /** A short-lived public link to a campaign's rendered preview. */
 export const PreviewLink = Schema.Struct({ url: Schema.String, expiresAt: Timestamp });
 

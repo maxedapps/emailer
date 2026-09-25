@@ -115,6 +115,7 @@ const keysHandlers = HttpApiBuilder.group(EmailerApi, "keys", (handlers) =>
 const subscriptionsHandlers = HttpApiBuilder.group(EmailerApi, "subscriptions", (handlers) =>
   handlers.handleAll({
     subscribe: (request) => Subscriptions.subscribe(request.payload),
+    confirm: (request) => Subscriptions.confirm(request.payload),
   }),
 );
 

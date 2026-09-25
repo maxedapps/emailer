@@ -253,7 +253,14 @@ Deviations:
 
 ### T7 — `POST /subscriptions/confirm`
 
-Status: To do
+Status: Done
+
+Deviations:
+
+- `readHolders` takes addresses rather than contacts, because the confirmation reads the reservation before it has the pending contact.
+- The domain issues the identifier a new contact would take and passes it in, as imports do.
+- The pending item's delete is the transaction's first action. When a used link and a lost race coincide, `ConfirmationNotFound` decides, and it is not retried.
+- The consent `Put` carries no condition: the pending delete's condition already allows one confirmation per link.
 
 - **Contract:**
   - payload `{token: ConfirmationToken, ip}`;

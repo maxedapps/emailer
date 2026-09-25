@@ -96,15 +96,12 @@ const joinMember = (
  * advice only — a strong read still does not make a later write atomic — which `joinActions`
  * turns into conditions its transaction asserts.
  */
-const readHolders = Effect.fnUntraced(function* (
+export const readHolders = Effect.fnUntraced(function* (
   primitives: Pick<BatchPrimitives, "readItems">,
   operation: string,
-  candidates: ReadonlyArray<Schemas.Contact>,
+  emails: ReadonlyArray<string>,
 ) {
-  const reserved = yield* primitives.readItems(
-    operation,
-    candidates.map((candidate) => reservationKey(candidate.email)),
-  );
+  const reserved = yield* primitives.readItems(operation, emails.map(reservationKey));
 
   const holders = new Map<string, string>();
 
@@ -129,7 +126,7 @@ const readHolders = Effect.fnUntraced(function* (
  * membership; and each new address is reserved conditionally, so losing a race to a concurrent
  * creation fails too. Both races answer `ContactChanged`, which a caller retries from a fresh read.
  */
-const joinActions = Effect.fnUntraced(function* (
+export const joinActions = Effect.fnUntraced(function* (
   listId: string,
   candidates: ReadonlyArray<Schemas.Contact>,
   holders: ReadonlyMap<string, string>,
@@ -465,7 +462,11 @@ export const membershipOperations = (
     const [list, holders] = yield* Effect.all(
       [
         readItem("importContacts", listKey(listId)),
-        readHolders(primitives, "importContacts", candidates),
+        readHolders(
+          primitives,
+          "importContacts",
+          candidates.map((candidate) => candidate.email),
+        ),
       ],
       { concurrency: 2 },
     );

@@ -5,7 +5,7 @@ import { Config, Crypto, Data, Effect, Layer, Option, Redacted, Schema } from "e
 
 import { newIdentifier, nowIso } from "../Identifiers.ts";
 import { ApiKeyStore } from "../storage/ApiKeys.ts";
-import { hashSecret, issueSecret, tokensMatch } from "../Tokens.ts";
+import { hashSecret, IssuedSecret, issueSecret, tokensMatch } from "../Tokens.ts";
 
 const tokenPattern = /^[A-Za-z0-9_-]{43}$/;
 
@@ -48,12 +48,7 @@ const keyPrefix = "emk.";
  * parses as a key, and a key is never compared with the admin token.
  */
 const decodeScopedKey = Schema.decodeUnknownOption(
-  Schema.TemplateLiteralParser([
-    keyPrefix,
-    Schemas.EntityId,
-    ".",
-    Schema.String.check(Schema.isPattern(tokenPattern)),
-  ]),
+  Schema.TemplateLiteralParser([keyPrefix, Schemas.EntityId, ".", IssuedSecret]),
 );
 
 /**
