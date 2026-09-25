@@ -39,7 +39,7 @@
 
 ### T1 — Read the list once per call
 
-Status: Not started
+Status: Done
 
 - **Where:** `importContacts` in `apps/backend/src/storage/Membership.ts`.
 - **The read:**

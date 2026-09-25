@@ -609,8 +609,13 @@ describe("importContacts", () => {
     contactId: { S: holder },
   });
 
+  const listKey = { pk: { S: `LIST#${listId}` }, sk: { S: "META" } };
+
+  const listFound = Effect.succeed({ Item: listKey });
+
+  /** The list is there for the first read and for the one a raced import retries with. */
   const importInto = (replies: ScriptedReplies, candidates: ReadonlyArray<Schemas.Contact>) => {
-    const table = scriptedTable(replies);
+    const table = scriptedTable({ getItem: [listFound, listFound], ...replies });
 
     return {
       table,
@@ -626,21 +631,20 @@ describe("importContacts", () => {
         contacts: [{ email: "sam@example.com", contactId, member: true }],
       });
 
+      // The list is read, strongly consistent, and never locked by the transaction: its META shares
+      // the partition every member write lands on.
+      expect(table.getItemRequests).toStrictEqual([{ Key: listKey, ConsistentRead: true }]);
+
       const items = table.transactionRequests[0]?.TransactItems ?? [];
 
-      expect(items).toHaveLength(5);
-      expect(items[0]?.ConditionCheck).toStrictEqual({
-        Table: tableLogicalId,
-        Key: { pk: { S: `LIST#${listId}` }, sk: { S: "META" } },
-        ConditionExpression: "attribute_exists(pk)",
-      });
-      expect(items[1]?.Put?.Item?.["pk"]).toStrictEqual({ S: `CONTACT#${contactId}` });
-      expect(items[2]?.Put?.Item?.["pk"]).toStrictEqual({ S: "EMAIL#sam@example.com" });
-      expect(items[3]?.Update?.Key).toStrictEqual({
+      expect(items).toHaveLength(4);
+      expect(items[0]?.Put?.Item?.["pk"]).toStrictEqual({ S: `CONTACT#${contactId}` });
+      expect(items[1]?.Put?.Item?.["pk"]).toStrictEqual({ S: "EMAIL#sam@example.com" });
+      expect(items[2]?.Update?.Key).toStrictEqual({
         pk: { S: `LIST#${listId}` },
         sk: { S: `MEMBER#${contactId}` },
       });
-      expect(items[4]?.Update?.Key).toStrictEqual({
+      expect(items[3]?.Update?.Key).toStrictEqual({
         pk: { S: `CONTACT#${contactId}` },
         sk: { S: `LISTOF#${listId}` },
       });
@@ -668,15 +672,15 @@ describe("importContacts", () => {
 
       const items = table.transactionRequests[0]?.TransactItems ?? [];
 
-      expect(items).toHaveLength(5);
-      expect(items[1]?.ConditionCheck).toStrictEqual({
+      expect(items).toHaveLength(4);
+      expect(items[0]?.ConditionCheck).toStrictEqual({
         Table: tableLogicalId,
         Key: { pk: { S: `CONTACT#${otherContactId}` }, sk: { S: "META" } },
         ConditionExpression: "attribute_exists(pk)",
       });
       // The contact existing is not enough: it must still be the address's holder, or this
       // import would add it to the list under an address it has since moved off.
-      expect(items[2]?.ConditionCheck).toStrictEqual({
+      expect(items[1]?.ConditionCheck).toStrictEqual({
         Table: tableLogicalId,
         Key: { pk: { S: "EMAIL#sam@example.com" }, sk: { S: "META" } },
         ConditionExpression: "contactId = :holder",
@@ -706,12 +710,8 @@ describe("importContacts", () => {
 
       const items = second.table.transactionRequests[0]?.TransactItems ?? [];
 
-      // Members are upserted and the list is only checked, so nothing new is created.
+      // Members are upserted and the holder only checked, so nothing new is created.
       expect(items.some((item) => item.Put !== undefined)).toBe(false);
-      expect(items[0]?.ConditionCheck?.Key).toStrictEqual({
-        pk: { S: `LIST#${listId}` },
-        sk: { S: "META" },
-      });
     }),
   );
 
@@ -721,7 +721,7 @@ describe("importContacts", () => {
 
       yield* run;
 
-      expect(table.transactionRequests[0]?.TransactItems[3]?.Update?.UpdateExpression).toContain(
+      expect(table.transactionRequests[0]?.TransactItems[2]?.Update?.UpdateExpression).toContain(
         "addedAt = if_not_exists(addedAt, :addedAt)",
       );
     }),
@@ -740,20 +740,18 @@ describe("importContacts", () => {
 
       yield* run;
 
-      expect(table.transactionRequests[0]?.TransactItems).toHaveLength(81);
+      expect(table.transactionRequests[0]?.TransactItems).toHaveLength(80);
     }),
   );
 
-  it.effect("answers NotFound for a list that is not there rather than a storage failure", () =>
+  it.effect("answers NotFound for a list that is not there, before writing anything", () =>
     Effect.gen(function* () {
-      const { run } = importInto(
-        {
-          transactWriteItems: [cancelled("ConditionalCheckFailed", "None", "None", "None", "None")],
-        },
-        [candidate(contactId, "sam@example.com")],
-      );
+      const { table, run } = importInto({ getItem: [Effect.succeed({})] }, [
+        candidate(contactId, "sam@example.com"),
+      ]);
 
       expect(yield* Effect.flip(run)).toStrictEqual(new Errors.ListNotFound());
+      expect(table.transactionRequests).toHaveLength(0);
     }),
   );
 
@@ -767,7 +765,7 @@ describe("importContacts", () => {
               Responses: { [physicalName]: [reservationFor("sam@example.com", contactId)] },
             }),
           ],
-          transactWriteItems: [cancelled("None", "ConditionalCheckFailed", "None", "None", "None")],
+          transactWriteItems: [cancelled("ConditionalCheckFailed", "None", "None", "None")],
         },
         [candidate(otherContactId, "sam@example.com")],
       );
@@ -776,7 +774,7 @@ describe("importContacts", () => {
         contacts: [{ email: "sam@example.com", contactId: otherContactId, member: true }],
       });
       expect(table.transactionRequests).toHaveLength(2);
-      expect(table.transactionRequests[1]?.TransactItems[1]?.Put?.Item?.["id"]).toStrictEqual({
+      expect(table.transactionRequests[1]?.TransactItems[0]?.Put?.Item?.["id"]).toStrictEqual({
         S: otherContactId,
       });
     }),
