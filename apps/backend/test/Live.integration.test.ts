@@ -16,6 +16,7 @@ import { awsProviders } from "../../../stacks/providers.ts";
 import { apiSuite } from "../src/api/Api.live.ts";
 import { cancellationSuite } from "../src/campaigns/CampaignCancellation.live.ts";
 import { draftingSuite } from "../src/campaigns/Drafting.live.ts";
+import { variantsSuite } from "../src/campaigns/Variants.live.ts";
 import { subscriptionsSuite } from "../src/consent/Subscriptions.live.ts";
 import { unsubscribeSuite } from "../src/consent/Unsubscribe.live.ts";
 import { feedbackSuite } from "../src/feedback/Feedback.live.ts";
@@ -77,6 +78,8 @@ apiSuite(live);
 cancellationSuite(live);
 
 draftingSuite(live);
+
+variantsSuite(live);
 
 unsubscribeSuite(live);
 
