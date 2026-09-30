@@ -416,3 +416,98 @@ describe("campaigns test", () => {
       }),
   );
 });
+
+describe("campaigns variants", () => {
+  const half: Schemas.Variant = { key: "half", percent: 50, subject: "Half", text: "Split copy" };
+
+  const set = (...flags: ReadonlyArray<string>) =>
+    ["campaigns", "variants", "set", campaignId, ...flags] as const;
+
+  it.effect("appends a new variant and replaces one with the same key in place", () =>
+    Effect.gen(function* () {
+      const service = fakeService({ campaigns: [{ ...draft, variants: [half] }] });
+      const text = yield* tempFile("txt", "Berlin copy");
+
+      yield* runCli(service, [
+        ...set("berlin", "--subject", "Hallo", "--text", text, "--when", "city=Berlin"),
+      ]);
+
+      yield* runCli(service, [
+        ...set("half", "--subject", "Half again", "--text", text, "--percent", "30"),
+      ]);
+
+      expect(service.payloadsOf("campaigns.update")).toStrictEqual([
+        {
+          variants: [
+            half,
+            { key: "berlin", subject: "Hallo", text: "Berlin copy", when: { city: "Berlin" } },
+          ],
+        },
+        { variants: [{ key: "half", subject: "Half again", text: "Berlin copy", percent: 30 }] },
+      ]);
+    }),
+  );
+
+  it.effect.each([
+    ["both --when and --percent", ["--when", "city=Berlin", "--percent", "10"]],
+    ["neither --when nor --percent", []],
+    ["a percent the contract refuses", ["--percent", "0"]],
+  ] as const)("refuses %s before any request", ([_label, rule]) =>
+    Effect.gen(function* () {
+      const service = fakeService({ campaigns: [draft] });
+      const text = yield* tempFile("txt", "Copy");
+
+      const run = yield* runCli(service, [...set("b", "--subject", "B", "--text", text, ...rule)]);
+
+      expect(Exit.isFailure(run.exit)).toBe(true);
+      expect(service.received).toStrictEqual([]);
+    }),
+  );
+
+  it.effect("refuses the default copy's key as a variant key", () =>
+    Effect.gen(function* () {
+      const service = fakeService({ campaigns: [draft] });
+      const text = yield* tempFile("txt", "Copy");
+
+      const run = yield* runCli(service, [
+        ...set("default", "--subject", "B", "--text", text, "--percent", "10"),
+      ]);
+
+      expect(Exit.isFailure(run.exit)).toBe(true);
+      expect(service.received).toStrictEqual([]);
+    }),
+  );
+
+  it.effect(
+    "removes a variant, sending null for the last one, and writes nothing for a key it lacks",
+    () =>
+      Effect.gen(function* () {
+        const service = fakeService({ campaigns: [{ ...draft, variants: [half] }] });
+
+        yield* runCli(service, ["campaigns", "variants", "remove", campaignId, "berlin"]);
+        yield* runCli(service, ["campaigns", "variants", "remove", campaignId, "half"]);
+
+        expect(service.payloadsOf("campaigns.update")).toStrictEqual([{ variants: null }]);
+      }),
+  );
+
+  it.effect("sends a test of the variant --variant names", () =>
+    Effect.gen(function* () {
+      const service = fakeService({ campaigns: [draft] });
+
+      yield* runCli(service, [
+        "campaigns",
+        "test",
+        campaignId,
+        "--to",
+        "me@example.com",
+        "--variant",
+        "half",
+      ]);
+
+      expect(service.payloadsOf("campaigns.test")).toStrictEqual([
+        { to: ["me@example.com"], variant: "half" },
+      ]);
+    }),
+  );
+});

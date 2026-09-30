@@ -1,8 +1,8 @@
 import * as Schemas from "@emailer/api/Schemas";
-import { Array as Arr, Console, Effect, FileSystem, Schema } from "effect";
+import { Effect, FileSystem, Schema } from "effect";
 import { CliError, Command, Flag } from "effect/unstable/cli";
 
-import { report, withClient } from "../Client.ts";
+import { inBatches, report, withClient } from "../Client.ts";
 import { decodeCsvContacts } from "../CsvContacts.ts";
 import { entityPageFlags, idArgument, memberPageFlags, pageQuery } from "../Flags.ts";
 
@@ -116,18 +116,6 @@ const decodeImportFile = Schema.decodeUnknownEffect(
 );
 
 /**
- * Calls in flight at once. One list's member items share a DynamoDB partition, and past its limit
- * DynamoDB throttles the transactions and still bills their attempts. On the live gate, four calls
- * imported about 280 contacts a second with almost no throttling; eight were slower and used 38%
- * more write units (ADR-0025).
- */
-const importConcurrency = 4;
-
-const progressStep = 1_000;
-
-const count = (value: number) => value.toLocaleString("en-US");
-
-/**
  * Read and decoded here rather than through `Flag.FileSchema`, whose decode drops keys the contract
  * does not declare: a misspelled `attributs` would vanish and its contact would be imported without
  * attributes. Rejecting the key names it before any request is made. A `.csv` file is a CSV export
@@ -157,46 +145,19 @@ const importFile = Flag.File("file", { mustExist: true }).pipe(
   ),
 );
 
-/**
- * A file of any size goes out in payloads of `maxImportEntries`, several at once. Each answer is the
- * converged state of its batch, so the joined answers are the file's, in file order, and running
- * the same file again — after a failure too — changes nothing it already did.
- */
+/** A file of any size, several batches at a time, as `inBatches` sends it. */
 const listsImport = Command.make(
   "import",
   { listId: idArgument("listId"), file: importFile },
   Effect.fn(function* (input) {
-    const total = input.file.contacts.length;
-    let confirmed = 0;
-
-    const imported = yield* withClient(
-      (client) =>
-        Effect.forEach(
-          Arr.chunksOf(input.file.contacts, Schemas.maxImportEntries),
-          (contacts) =>
-            client.lists.import({ params: { listId: input.listId }, payload: { contacts } }).pipe(
-              Effect.tap(() => {
-                const before = confirmed;
-
-                confirmed += contacts.length;
-
-                return Math.floor(confirmed / progressStep) > Math.floor(before / progressStep)
-                  ? Console.error(`Imported ${count(confirmed)} of ${count(total)} contacts`)
-                  : Effect.void;
-              }),
-            ),
-          { concurrency: importConcurrency },
-        ),
-      { retryTransient: true },
-    ).pipe(
-      Effect.tapError(() =>
-        Console.error(
-          `Stopped with ${count(confirmed)} of ${count(total)} contacts confirmed; running the same file again is safe`,
-        ),
-      ),
+    const contacts = yield* inBatches(
+      input.file.contacts,
+      (client, batch) =>
+        client.lists.import({ params: { listId: input.listId }, payload: { contacts: batch } }),
+      "Imported",
     );
 
-    yield* report({ contacts: imported.flatMap((batch) => batch.contacts) });
+    yield* report({ contacts });
   }),
 ).pipe(
   Command.withDescription("Load a file of contacts into a list, several batches at a time"),

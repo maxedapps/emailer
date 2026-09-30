@@ -1,8 +1,9 @@
 import * as Schemas from "@emailer/api/Schemas";
-import { Effect, Option } from "effect";
-import { Command, Flag } from "effect/unstable/cli";
+import { Effect, FileSystem, Option } from "effect";
+import { CliError, Command, Flag } from "effect/unstable/cli";
 
-import { report, withClient } from "../Client.ts";
+import { inBatches, report, withClient } from "../Client.ts";
+import { decodeCsvAttributes } from "../CsvContacts.ts";
 import { entityPageFlags, idArgument, pageQuery } from "../Flags.ts";
 
 /**
@@ -66,30 +67,42 @@ const contactsGet = Command.make(
 interface ContactChange {
   email?: string;
   name?: string | null;
-  attributes?: Schemas.ContactAttributes;
+  attributes?: Schemas.AttributePatch | null;
 }
 
-/** An omitted flag leaves a field alone; `--clear-name` is how a CLI expresses the contract's null. */
-const contactChange = (
-  email: Option.Option<string>,
-  name: Option.Option<string>,
-  clearName: boolean,
-  attributes: Option.Option<Schemas.ContactAttributes>,
-) => {
+const refuse = (userMessage: string) => new CliError.UserError({ cause: userMessage, userMessage });
+
+/**
+ * An omitted flag leaves a field alone; `--clear-name` and `--clear-attributes` are how a CLI
+ * expresses the contract's null. `--attr` and `--unset` become one merge patch.
+ */
+const contactChange = (input: {
+  readonly email: Option.Option<string>;
+  readonly name: Option.Option<string>;
+  readonly clearName: boolean;
+  readonly attr: Option.Option<Schemas.ContactAttributes>;
+  readonly unset: ReadonlyArray<string>;
+  readonly clearAttributes: boolean;
+}) => {
   const payload: ContactChange = {};
 
-  if (Option.isSome(email)) {
-    payload.email = email.value;
+  if (Option.isSome(input.email)) {
+    payload.email = input.email.value;
   }
 
-  if (clearName) {
+  if (input.clearName) {
     payload.name = null;
-  } else if (Option.isSome(name)) {
-    payload.name = name.value;
+  } else if (Option.isSome(input.name)) {
+    payload.name = input.name.value;
   }
 
-  if (Option.isSome(attributes)) {
-    payload.attributes = attributes.value;
+  if (input.clearAttributes) {
+    payload.attributes = null;
+  } else if (Option.isSome(input.attr) || input.unset.length > 0) {
+    payload.attributes = {
+      ...Option.getOrUndefined(input.attr),
+      ...Object.fromEntries(input.unset.map((key) => [key, null])),
+    };
   }
 
   return payload;
@@ -140,10 +153,22 @@ const contactsUpdate = Command.make(
       Flag.withDescription("Remove the display name"),
       Flag.withDefault(false),
     ),
-    attr: attributesFlag("Replace the whole attribute map, as repeated key=value pairs"),
+    attr: attributesFlag("Set attributes, as repeated key=value pairs; others are kept"),
+    unset: Flag.String("unset").pipe(
+      Flag.withDescription("Remove an attribute; repeat for each key"),
+      Flag.between(0, Schemas.maxAttributeEntries),
+    ),
+    clearAttributes: Flag.Boolean("clear-attributes").pipe(
+      Flag.withDescription("Remove every attribute"),
+      Flag.withDefault(false),
+    ),
   },
   Effect.fn(function* (input) {
-    const payload = contactChange(input.email, input.name, input.clearName, input.attr);
+    if (input.clearAttributes && (Option.isSome(input.attr) || input.unset.length > 0)) {
+      return yield* refuse("Pass --clear-attributes alone, or --attr and --unset");
+    }
+
+    const payload = contactChange(input);
 
     yield* report(
       yield* withClient((client) => client.contacts.update({ params: { id: input.id }, payload })),
@@ -153,8 +178,59 @@ const contactsUpdate = Command.make(
   Command.withDescription("Change a contact; an omitted field is left alone"),
   Command.withExamples([
     {
-      command: "emailer contacts update 0195f0a0-1111-4222-8333-44444444c001 --attr plan=pro",
-      description: "Replace the attribute map with a single entry",
+      command:
+        "emailer contacts update 0195f0a0-1111-4222-8333-44444444c001 --attr plan=pro --unset trial",
+      description: "Set one attribute and remove another, keeping the rest",
+    },
+  ]),
+);
+
+/**
+ * Read and decoded here, like an import file, so a row that fails is named by its line before any
+ * request is made.
+ */
+const attributesFile = Flag.File("file", { mustExist: true }).pipe(
+  Flag.withDescription("A CSV file: an email column, and one column per attribute to set"),
+  Flag.mapEffect((path) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+
+      return yield* decodeCsvAttributes(yield* fs.readFileString(path));
+    }).pipe(
+      Effect.mapError(
+        (error) =>
+          new CliError.InvalidValue({
+            option: "file",
+            value: path,
+            expected: error.message,
+            kind: "flag",
+          }),
+      ),
+    ),
+  ),
+);
+
+const contactsSetAttributes = Command.make(
+  "set-attributes",
+  { file: attributesFile },
+  Effect.fn(function* (input) {
+    const contacts = yield* inBatches(
+      input.file.contacts,
+      (client, batch) => client.contacts.setAttributes({ payload: { contacts: batch } }),
+      "Updated",
+    );
+
+    yield* report({ contacts });
+  }),
+).pipe(
+  Command.withDescription(
+    "Merge attributes from a CSV file into the contacts holding its addresses",
+  ),
+  Command.withExamples([
+    {
+      command: "emailer contacts set-attributes --file segments.csv",
+      description:
+        "Set each row's attributes on the contact with its email, keeping the others; a blank cell changes nothing",
     },
   ]),
 );
@@ -177,6 +253,7 @@ export const contacts = Command.make("contacts").pipe(
     contactsByEmail,
     contactsList,
     contactsUpdate,
+    contactsSetAttributes,
     contactsDelete,
   ]),
 );

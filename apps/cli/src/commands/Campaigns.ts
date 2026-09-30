@@ -1,6 +1,6 @@
 import * as Schemas from "@emailer/api/Schemas";
 import { DateTime, Effect, Option, Schema } from "effect";
-import { CliError, Command, Flag } from "effect/unstable/cli";
+import { Argument, CliError, Command, Flag } from "effect/unstable/cli";
 
 import { report, withClient } from "../Client.ts";
 import { entityPageFlags, idArgument, pageQuery } from "../Flags.ts";
@@ -236,6 +236,126 @@ const campaignsUpdate = Command.make(
   ]),
 );
 
+const variantKeyArgument = Argument.String("key").pipe(
+  Argument.withDescription("The variant's key: up to 32 letters, digits, _ or -"),
+  Argument.withSchema(Schemas.VariantKey),
+);
+
+const decodeVariant = Schema.decodeUnknownEffect(Schemas.Variant);
+
+/**
+ * Adds a variant, or replaces the one under the same key in place, so the order its `when` rule is
+ * tried in stays. The draft's variants are read and written back as a whole, as the contract edits
+ * them.
+ */
+const variantsSet = Command.make(
+  "set",
+  {
+    id: idArgument("id"),
+    key: variantKeyArgument,
+    subject: Flag.String("subject").pipe(
+      Flag.withDescription("The variant's subject"),
+      Flag.withSchema(Schemas.CampaignSubject),
+    ),
+    ...contentFlags,
+    when: Flag.KeyValuePair("when").pipe(
+      Flag.withDescription(
+        "Send it to members whose attributes equal every key=value given; repeat per entry",
+      ),
+      Flag.optional,
+    ),
+    percent: Flag.Int("percent").pipe(
+      Flag.withDescription("Send it to this share of the members no --when variant takes"),
+      Flag.optional,
+    ),
+  },
+  Effect.fn(function* (input) {
+    const content = yield* chooseContent(input);
+
+    if (Option.isNone(content)) {
+      return yield* refuse("Pass --markdown, or --text with an optional --html");
+    }
+
+    if (Option.isSome(input.when) === Option.isSome(input.percent)) {
+      return yield* refuse("Pass --when (repeatable) or --percent, one of the two");
+    }
+
+    const rule = Option.isSome(input.when)
+      ? { when: input.when.value }
+      : { percent: Option.getOrUndefined(input.percent) };
+
+    const variant = yield* decodeVariant({
+      key: input.key,
+      subject: input.subject,
+      ...(yield* bodyOf(content.value, Effect.succeed(input.subject))),
+      ...rule,
+    }).pipe(Effect.mapError((failure) => refuse(`The variant is refused: ${failure.message}`)));
+
+    yield* report(
+      yield* withClient((client) =>
+        Effect.gen(function* () {
+          const campaign = yield* client.campaigns.get({ params: { id: input.id } });
+          const variants = campaign.variants ?? [];
+          const index = variants.findIndex((existing) => existing.key === input.key);
+
+          return yield* client.campaigns.update({
+            params: { id: input.id },
+            payload: {
+              variants: index === -1 ? [...variants, variant] : variants.with(index, variant),
+            },
+          });
+        }),
+      ),
+    );
+  }),
+).pipe(
+  Command.withDescription("Add a variant to a draft campaign, or replace the one with this key"),
+  Command.withExamples([
+    {
+      command:
+        'emailer campaigns variants set 0195f0a0-1111-4222-8333-4444444ca409 beginners --subject "Start here" --markdown beginners.md --when level=beginner',
+      description: "Send members whose level is beginner their own copy",
+    },
+    {
+      command:
+        'emailer campaigns variants set 0195f0a0-1111-4222-8333-4444444ca409 b --subject "Release notes" --markdown b.md --percent 50',
+      description: "Split everyone else evenly between this copy and the campaign's own",
+    },
+  ]),
+);
+
+const variantsRemove = Command.make(
+  "remove",
+  { id: idArgument("id"), key: variantKeyArgument },
+  Effect.fn(function* (input) {
+    yield* report(
+      yield* withClient((client) =>
+        Effect.gen(function* () {
+          const campaign = yield* client.campaigns.get({ params: { id: input.id } });
+          const variants = campaign.variants ?? [];
+          const kept = variants.filter((variant) => variant.key !== input.key);
+
+          if (kept.length === variants.length) {
+            return campaign;
+          }
+
+          return yield* client.campaigns.update({
+            params: { id: input.id },
+            payload: { variants: kept.length === 0 ? null : kept },
+          });
+        }),
+      ),
+    );
+  }),
+).pipe(Command.withDescription("Remove a variant from a draft; repeating it changes nothing"));
+
+const campaignsVariants = Command.make("variants").pipe(
+  Command.withDescription(
+    "Alternate copies of a draft: the first --when variant a member matches, else a --percent share, else the campaign's own copy",
+  ),
+  Command.withSubcommands([variantsSet, variantsRemove]),
+);
+
 const campaignsDelete = Command.make(
   "delete",
   { id: idArgument("id") },
@@ -265,6 +385,11 @@ const campaignsTest = Command.make(
     yes: Flag.Boolean("yes").pipe(
       Flag.withDescription("Send to --list without asking first"),
       Flag.withDefault(false),
+    ),
+    variant: Flag.String("variant").pipe(
+      Flag.withDescription("Send this variant's copy instead of the campaign's own"),
+      Flag.withSchema(Schemas.CopyKey),
+      Flag.optional,
     ),
   },
   Effect.fn(function* (input) {
@@ -305,12 +430,13 @@ const campaignsTest = Command.make(
     }
 
     const params = { id: input.id };
+    const copy = Option.isSome(input.variant) ? { variant: input.variant.value } : {};
 
     yield* report(
       yield* withClient((client) =>
         Option.isSome(input.list)
-          ? client.campaigns.test({ params, payload: { listId: input.list.value } })
-          : client.campaigns.test({ params, payload: { to: input.to } }),
+          ? client.campaigns.test({ params, payload: { listId: input.list.value, ...copy } })
+          : client.campaigns.test({ params, payload: { to: input.to, ...copy } }),
       ),
     );
   }),
@@ -503,6 +629,7 @@ export const campaigns = Command.make("campaigns").pipe(
   Command.withSubcommands([
     campaignsCreate,
     campaignsUpdate,
+    campaignsVariants,
     campaignsDelete,
     campaignsTest,
     campaignsPreview,
