@@ -1,4 +1,4 @@
-import type * as Schemas from "@emailer/api/Schemas";
+import * as Schemas from "@emailer/api/Schemas";
 import { Clock, Data, Duration, Effect, ErrorReporter, Predicate, Schedule } from "effect";
 
 import { unsubscribeLink } from "../consent/Unsubscribe.ts";
@@ -6,6 +6,7 @@ import { newIdentifier, nowIso } from "../Identifiers.ts";
 import { CampaignWake } from "./Dispatch.ts";
 import { accepted, failureOutcomes, Mail, Mailer, submissionTimeout } from "./Mailer.ts";
 import { SendGuard } from "./SendGuard.ts";
+import { chooseVariant, matchesAttributes } from "./Variants.ts";
 import { AudienceStore } from "../storage/Audience.ts";
 import { CampaignStore } from "../storage/Campaigns.ts";
 import { operationTimeout } from "../storage/Items.ts";
@@ -50,11 +51,6 @@ const reservationFor = (delay: Duration.Duration) =>
 
 const remainingUntil = (deadline: number) =>
   Effect.map(Clock.currentTimeMillis, (now) => Duration.millis(deadline - now));
-
-const matchesFilter = (
-  filter: Schemas.ContactAttributes,
-  attributes: Schemas.ContactAttributes | undefined,
-) => Object.entries(filter).every(([key, value]) => attributes?.[key] === value);
 
 /**
  * One page of a campaign run. A write that finds the run is no longer the campaign's ends the slice
@@ -108,8 +104,10 @@ export const runSlice = Effect.fn("Dispatching.runSlice")(
       return;
     }
 
-    const { text, html } = yield* campaigns.getCampaignBody(message.campaignId);
-    const content: MessageContent = { subject, text, html };
+    // Every copy is read once per slice; each recipient's is chosen from these.
+    const copies = yield* campaigns.getCopies(message.campaignId);
+
+    const ownContent: MessageContent = { subject, text: copies.body.text, html: copies.body.html };
     // ExclusiveStartKey of the last member this slice finished (skip, settle, or
     // already-claimed). A budget overrun before sending N checkpoints here so
     // the next page starts after N-1.
@@ -124,7 +122,7 @@ export const runSlice = Effect.fn("Dispatching.runSlice")(
       // A member the filter excludes is not a recipient, so it gets no row and no
       // counter; re-paging re-evaluates the same pure function, so nothing needs
       // recording; it sits before the status read so a miss costs no read.
-      if (filter !== undefined && !matchesFilter(filter, member.attributes)) {
+      if (filter !== undefined && !matchesAttributes(filter, member.attributes)) {
         lastProcessed = member.id;
         continue;
       }
@@ -166,6 +164,16 @@ export const runSlice = Effect.fn("Dispatching.runSlice")(
         Effect.orDie,
       );
 
+      // Chosen from the attributes this slice read and recorded by the claim, so a redelivered page
+      // or a later attribute change cannot send this member a second or different copy.
+      const chosen = yield* chooseVariant(message.campaignId, member, copies.variants);
+      const variant = chosen?.key ?? Schemas.defaultCopy;
+
+      const content: MessageContent =
+        chosen === undefined
+          ? ownContent
+          : { subject: chosen.subject, text: chosen.text, html: chosen.html };
+
       const sendId = yield* newIdentifier;
 
       const claimed = yield* campaigns.claimRecipient(
@@ -173,6 +181,7 @@ export const runSlice = Effect.fn("Dispatching.runSlice")(
         message.runToken,
         member.id,
         member.email,
+        variant,
         sendId,
         now,
       );
@@ -188,6 +197,7 @@ export const runSlice = Effect.fn("Dispatching.runSlice")(
         unsubscribeUrl,
         campaignId: message.campaignId,
         sendId,
+        variant,
         contactId: member.id,
         runToken: message.runToken,
         limit: guard.limit,
@@ -225,6 +235,7 @@ const submitClaimed = Effect.fn("Dispatching.submitClaimed")(function* (input: {
   readonly unsubscribeUrl: string;
   readonly campaignId: string;
   readonly sendId: string;
+  readonly variant: Schemas.CopyKey;
   readonly contactId: string;
   readonly runToken: string;
   readonly limit: number;
@@ -234,17 +245,17 @@ const submitClaimed = Effect.fn("Dispatching.submitClaimed")(function* (input: {
   const campaigns = yield* CampaignStore;
   const guards = yield* SendGuard;
 
-  const { recipient, content, unsubscribeUrl, campaignId, sendId, contactId, runToken, limit } =
+  const { recipient, content, unsubscribeUrl, campaignId, sendId, variant, contactId, runToken } =
     input;
 
-  const mail = Mail.Campaign({ content, unsubscribeUrl, campaignId, sendId });
+  const mail = Mail.Campaign({ content, unsubscribeUrl, campaignId, sendId, variant });
 
   // One attempt waits for its pacing slot and sends. The first attempt's slot is the one already
   // checked against the time budget; a retry reserves its own once it has backed off.
   const sendOnce = Effect.gen(function* () {
     const { attempt } = yield* Schedule.CurrentMetadata;
 
-    yield* Effect.sleep(attempt === 0 ? input.firstDelay : yield* guards.slot(limit));
+    yield* Effect.sleep(attempt === 0 ? input.firstDelay : yield* guards.slot(input.limit));
 
     return yield* mailer.send(recipient, mail);
   });

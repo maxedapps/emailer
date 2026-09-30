@@ -24,7 +24,7 @@ export const submissionTimeout = Duration.seconds(8);
 
 /**
  * What goes out, and why. A campaign mail is tagged so its feedback lands on the campaign's
- * counters; a test copy and a sign-up's confirmation carry no tags, so their bounces and complaints
+ * counters and names the copy it drew; a test copy and a sign-up's confirmation carry no tags, so their bounces and complaints
  * never reach them.
  */
 export type Mail = Data.TaggedEnum<{
@@ -33,6 +33,7 @@ export type Mail = Data.TaggedEnum<{
     readonly unsubscribeUrl: string;
     readonly campaignId: string;
     readonly sendId: string;
+    readonly variant: Schemas.CopyKey;
   };
   Test: { readonly content: MessageContent; readonly unsubscribeUrl: string };
   Confirmation: { readonly listName: string; readonly confirmUrl: string };
@@ -114,13 +115,14 @@ export const feedbackPublishing = Effect.gen(function* () {
  */
 const prepare = (mail: Mail, postal: string) =>
   Mail.$match(mail, {
-    Campaign: ({ content, unsubscribeUrl, campaignId, sendId }) => ({
+    Campaign: ({ content, unsubscribeUrl, campaignId, sendId, variant }) => ({
       message: compose(content, unsubscribeUrl, postal),
       tags: [
         { Name: "campaignId", Value: campaignId },
         { Name: "sendId", Value: sendId },
+        { Name: "variant", Value: variant },
       ],
-      logged: { mail: "Campaign", campaignId, sendId },
+      logged: { mail: "Campaign", campaignId, sendId, variant },
     }),
     Test: ({ content, unsubscribeUrl }) => ({
       message: compose(content, unsubscribeUrl, postal),

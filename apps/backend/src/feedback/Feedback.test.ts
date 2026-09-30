@@ -113,6 +113,7 @@ const tags = (extra: Record<string, Array<string>> = {}) => ({
   "ses:configuration-set": [configurationSetName],
   campaignId: [campaignId],
   sendId: ["0195f0a0-1111-4222-8333-44444444e5d1"],
+  variant: ["half"],
   ...extra,
 });
 
@@ -197,30 +198,33 @@ const countBounced: FeedbackWrite = { effect: "count", counter: "bounced" };
 const countComplained: FeedbackWrite = { effect: "count", counter: "complained" };
 
 describe("bounces", () => {
-  it.effect("suppresses a permanent bounce and hands the store a counted, suppressed row", () =>
-    Effect.gen(function* () {
-      const world = yield* run(bounceEvent("Permanent", "General"));
+  it.effect(
+    "suppresses a permanent bounce and hands the store a counted, suppressed row naming its copy",
+    () =>
+      Effect.gen(function* () {
+        const world = yield* run(bounceEvent("Permanent", "General"));
 
-      expect(world.suppressions.get("hard@example.com")?.reason).toBe("bounce");
-      expect(world.suppressions.get("hard@example.com")?.messageId).toBe(messageId);
-      expect(world.suppressions.get("hard@example.com")?.bounceSubType).toBe("General");
-      expect(world.writes).toHaveLength(1);
-      expect(world.writes[0]?.write).toStrictEqual(countBounced);
-      expect(world.writes[0]?.row).toStrictEqual({
-        campaignId,
-        kind: "bounce",
-        feedbackId,
-        recipient: "hard@example.com",
-        messageId,
-        outcome: "suppressed",
-        receivedAt: world.writes[0]?.row.receivedAt,
-        bounceType: "Permanent",
-        bounceSubType: "General",
-        complaintFeedbackType: undefined,
-        complaintSubType: undefined,
-      });
-      expect(world.writes[0]?.row.receivedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
-    }),
+        expect(world.suppressions.get("hard@example.com")?.reason).toBe("bounce");
+        expect(world.suppressions.get("hard@example.com")?.messageId).toBe(messageId);
+        expect(world.suppressions.get("hard@example.com")?.bounceSubType).toBe("General");
+        expect(world.writes).toHaveLength(1);
+        expect(world.writes[0]?.write).toStrictEqual(countBounced);
+        expect(world.writes[0]?.row).toStrictEqual({
+          campaignId,
+          kind: "bounce",
+          feedbackId,
+          recipient: "hard@example.com",
+          messageId,
+          variant: "half",
+          outcome: "suppressed",
+          receivedAt: world.writes[0]?.row.receivedAt,
+          bounceType: "Permanent",
+          bounceSubType: "General",
+          complaintFeedbackType: undefined,
+          complaintSubType: undefined,
+        });
+        expect(world.writes[0]?.row.receivedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+      }),
   );
 
   it.effect("does not suppress a transient bounce and hands the store a transient row", () =>

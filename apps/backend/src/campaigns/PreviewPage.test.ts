@@ -66,7 +66,8 @@ const pageFor = Effect.fnUntraced(function* (
 
             return stored;
           }),
-        getCampaignBody: () => Effect.die(new Error("the page reads the whole campaign")),
+        getCopies: () => Effect.die(new Error("the page reads the whole campaign")),
+        loadCampaign: () => Effect.die(new Error("the page reads the whole campaign")),
       }),
       Effect.provide(configuration),
     ),
@@ -141,6 +142,33 @@ describe("GET /previews/:token", () => {
 
       expect(body).not.toContain("<iframe");
       expect(body).toContain("This campaign has no HTML part");
+    }),
+  );
+
+  it.live("shows every copy, the campaign's own first, each with its key and rule", () =>
+    Effect.gen(function* () {
+      const { body } = yield* pageFor(
+        {
+          ...campaign,
+          variants: [
+            { key: "berlin", when: { city: "Berlin" }, subject: "Hallo Berlin", text: "Berlin" },
+            { key: "half", percent: 50, subject: "Half & half", text: "Split" },
+          ],
+        },
+        yield* tokenFor(campaignId),
+      );
+
+      const own = body.indexOf("<dd>default, for everyone no variant takes</dd>");
+      const berlin = body.indexOf("<dd>berlin, for contacts with city = Berlin</dd>");
+      const half = body.indexOf("<dd>half, for 50% of everyone no targeted variant takes</dd>");
+
+      expect(own).toBeGreaterThan(-1);
+      expect(berlin).toBeGreaterThan(own);
+      expect(half).toBeGreaterThan(berlin);
+      expect(body).toContain("<dd>Half &amp; half</dd>");
+      expect(body).toContain(
+        `<pre>Split${footerFor(placeholderUnsubscribeUrl, settings.postalAddress)}</pre>`,
+      );
     }),
   );
 

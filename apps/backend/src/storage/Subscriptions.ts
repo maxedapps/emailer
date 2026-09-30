@@ -16,9 +16,15 @@ import {
   readPending,
   writeConsent,
 } from "./Addresses.ts";
-import { contactOf, readReservation, reservationKey, retryLostRace } from "./Contacts.ts";
+import {
+  contactOf,
+  readHolders,
+  readReservation,
+  reservationKey,
+  retryLostRace,
+} from "./Contacts.ts";
 import { listKey } from "./Lists.ts";
-import { joinActions, memberKey, readHolders } from "./Membership.ts";
+import { joinActions, memberKey } from "./Membership.ts";
 
 import type {
   Action,

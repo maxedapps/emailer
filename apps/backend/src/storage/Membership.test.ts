@@ -623,7 +623,7 @@ describe("importContacts", () => {
 
   it.effect("stays inside the transaction action limit at a full batch", () =>
     Effect.gen(function* () {
-      const candidates = Array.from({ length: Schemas.maxImportEntries }, (_, index) =>
+      const candidates = Array.from({ length: Schemas.maxBatchEntries }, (_, index) =>
         candidate(
           `0195f0a0-1111-4222-8333-4444444${String(index).padStart(5, "0")}`,
           `contact${index}@example.com`,
@@ -637,7 +637,7 @@ describe("importContacts", () => {
       const actions = table.transactionRequests[0]?.TransactItems ?? [];
 
       // DynamoDB refuses a transaction of more than 100 actions.
-      expect(actions).toHaveLength(Schemas.maxImportEntries * 4);
+      expect(actions).toHaveLength(Schemas.maxBatchEntries * 4);
       expect(actions.length).toBeLessThanOrEqual(100);
     }),
   );

@@ -180,6 +180,42 @@ export class TestAudienceTooLarge extends Schema.TaggedError<TestAudienceTooLarg
   }
 }
 
+/** The campaign has no copy under this key. */
+export class VariantNotFound extends Schema.TaggedError<VariantNotFound>()(
+  "VariantNotFound",
+  { variant: Schema.String },
+  { httpApiStatus: 404 },
+) {
+  override get [ErrorReporter.ignore]() {
+    return true;
+  }
+}
+
+/**
+ * The draft's copies changed while the request was writing them — another edit or a delete landed
+ * first — and they kept changing on each retry.
+ */
+export class DraftChanged extends Schema.TaggedError<DraftChanged>()(
+  "DraftChanged",
+  {},
+  { httpApiStatus: 409 },
+) {
+  override get [ErrorReporter.ignore]() {
+    return true;
+  }
+}
+
+/** Merging the change would leave the contact with more attributes than a contact may hold. */
+export class TooManyAttributes extends Schema.TaggedError<TooManyAttributes>()(
+  "TooManyAttributes",
+  { email: NormalizedEmailAddress, limit: Schema.Int },
+  { httpApiStatus: 422 },
+) {
+  override get [ErrorReporter.ignore]() {
+    return true;
+  }
+}
+
 /** The account-wide guard refuses every send right now: a reputation halt or a spent daily budget. */
 export class SendingPaused extends Schema.TaggedError<SendingPaused>()(
   "SendingPaused",

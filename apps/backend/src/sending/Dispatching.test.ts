@@ -22,12 +22,14 @@ import { memberPageSize, runSlice, SliceOverrun } from "./Dispatching.ts";
 import { CampaignWake } from "./Dispatch.ts";
 import { Mail, Mailer, SendingSuspended, SendThrottled, SubmissionUncertain } from "./Mailer.ts";
 import { SendGuard } from "./SendGuard.ts";
+import { bucketOf } from "./Variants.ts";
 import { AudienceStore } from "../storage/Audience.ts";
 import { CampaignStore, RunSuperseded, SettlementNotApplied } from "../storage/Campaigns.ts";
 import { unusedAudience, unusedCampaigns } from "../storage/Testing.ts";
 
 import type { MailboxStatus, PauseReason, SkipReason } from "@emailer/api/Schemas";
 import type { SendError } from "./Mailer.ts";
+import type { MessageContent } from "./Message.ts";
 import type { SendAllowance } from "./SendGuard.ts";
 import type { SubmissionOutcome } from "../storage/Campaigns.ts";
 
@@ -79,6 +81,7 @@ interface RecipientRow {
   readonly sendId?: string;
   readonly contactId: string;
   readonly recipient: string;
+  readonly variant?: Schemas.CopyKey;
   readonly state: "unconfirmed" | "accepted" | "rejected" | "uncertain" | "skipped";
   readonly skipReason?: SkipReason;
   readonly rejectionCode?: Schemas.RejectionCode;
@@ -97,6 +100,7 @@ interface World {
   readonly checkpointOutcome: "updated" | "condition-failed";
   cursor: string | undefined;
   readonly html: string | undefined;
+  readonly variants: ReadonlyArray<Schemas.Variant>;
   readonly listMissing: boolean;
   readonly members: ReadonlyArray<Schemas.Contact>;
   readonly nextCursor: string | undefined;
@@ -157,8 +161,12 @@ const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> 
     }),
     Layer.succeed(CampaignStore)({
       ...unusedCampaigns,
-      getCampaignBody: () =>
-        Effect.succeed(world.html === undefined ? { text } : { text, html: world.html }),
+      getCopies: () =>
+        Effect.succeed({
+          body: world.html === undefined ? { text } : { text, html: world.html },
+          variants: [...world.variants],
+          revision: 1,
+        }),
       beginRun: (_id, token) =>
         world.beginOutcome === "stale" || token !== world.runToken
           ? Effect.fail(new RunSuperseded())
@@ -169,7 +177,7 @@ const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> 
               filter: world.filter,
               run: world.run,
             }),
-      claimRecipient: (_id, token, contactId, recipient, sendId) =>
+      claimRecipient: (_id, token, contactId, recipient, variant, sendId) =>
         Effect.suspend(() => {
           if (token !== world.runToken) {
             return Effect.fail(new RunSuperseded());
@@ -183,6 +191,7 @@ const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> 
             sendId,
             contactId,
             recipient,
+            variant,
             state: "unconfirmed",
           });
           world.claims.push(contactId);
@@ -218,12 +227,7 @@ const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> 
             return Effect.fail(new SettlementNotApplied());
           }
 
-          const settled: RecipientRow = {
-            sendId: row.sendId,
-            contactId,
-            recipient: row.recipient,
-            state: settlement.outcome,
-          };
+          const settled: RecipientRow = { ...row, state: settlement.outcome };
 
           if (settlement.outcome === "accepted") {
             world.rows.set(contactId, { ...settled, messageId: settlement.messageId });
@@ -364,6 +368,7 @@ interface Scenario {
   readonly cursor?: string;
   readonly filter?: Schemas.ContactAttributes;
   readonly html?: string | undefined;
+  readonly variants?: ReadonlyArray<Schemas.Variant>;
   readonly beginOutcome?: "running" | "stale";
   readonly checkpointOutcome?: "updated" | "condition-failed";
   readonly listMissing?: boolean;
@@ -394,6 +399,7 @@ const fixture = (scenario: Scenario = {}): Fixture => {
     checkpointOutcome: scenario.checkpointOutcome ?? "updated",
     cursor: scenario.cursor,
     html: scenario.html,
+    variants: scenario.variants ?? [],
     listMissing: scenario.listMissing ?? false,
     members: scenario.members ?? [memberA],
     nextCursor: scenario.nextCursor,
@@ -406,6 +412,7 @@ const fixture = (scenario: Scenario = {}): Fixture => {
           sendId: "already-claimed",
           contactId: member.id,
           recipient: member.email,
+          variant: Schemas.defaultCopy,
           state: "unconfirmed",
         },
       ]),
@@ -541,6 +548,7 @@ describe("runSlice", () => {
                 unsubscribeUrl,
                 campaignId,
                 sendId: fix.world.rows.get(member.id)?.sendId ?? "",
+                variant: Schemas.defaultCopy,
               }),
           );
 
@@ -593,6 +601,77 @@ describe("runSlice", () => {
       expect(fix.wake.messages).toHaveLength(0);
     }),
   );
+
+  describe("with variants", () => {
+    const berlin: Schemas.Variant = {
+      key: "berlin",
+      when: { city: "Berlin" },
+      subject: "Hallo Berlin",
+      text: "Berlin copy",
+    };
+
+    const half: Schemas.Variant = {
+      key: "half",
+      percent: 50,
+      subject: "Half",
+      text: "Split copy",
+      html: "<p>Split copy</p>",
+    };
+
+    const campaignMailOf = (fix: Fixture, recipient: string) =>
+      fix.mailer.sent.find((message) => message.recipient === recipient)?.mail;
+
+    it.effect(
+      "sends each member the copy its attributes or its bucket choose, and records and tags it",
+      () =>
+        Effect.gen(function* () {
+          const fix = fixture({ members: [memberA, memberB, memberC], variants: [berlin, half] });
+
+          successOf(yield* runSliceNow(fix));
+
+          const contents = new Map<string, MessageContent>([
+            [berlin.key, { subject: berlin.subject, text: berlin.text, html: undefined }],
+            [half.key, { subject: half.subject, text: half.text, html: half.html }],
+            [Schemas.defaultCopy, { subject, text, html: undefined }],
+          ]);
+
+          // A lives in Berlin, so targeting decides; B and C fall to the split by their bucket.
+          const expected = new Map([[memberA.id, "berlin"]]);
+
+          for (const member of [memberB, memberC]) {
+            const bucket = yield* bucketOf(campaignId, member.id).pipe(
+              Effect.provide(NodeCrypto.layer),
+            );
+
+            expected.set(member.id, bucket < half.percent ? "half" : Schemas.defaultCopy);
+          }
+
+          for (const member of [memberA, memberB, memberC]) {
+            const variant = expected.get(member.id);
+            const mail = campaignMailOf(fix, member.email);
+
+            expect(fix.world.rows.get(member.id)?.variant).toBe(variant);
+            expect(mail?._tag === "Campaign" ? mail.variant : undefined).toBe(variant);
+
+            expect(mail?._tag === "Campaign" ? mail.content : undefined).toStrictEqual(
+              contents.get(variant ?? ""),
+            );
+          }
+        }),
+    );
+
+    it.effect("never re-chooses for a member a previous delivery already claimed", () =>
+      Effect.gen(function* () {
+        // A was claimed with the campaign's own copy before its city made it a Berlin target.
+        const fix = fixture({ members: [memberA], claimed: [memberA], variants: [berlin] });
+
+        successOf(yield* runSliceNow(fix));
+
+        expect(fix.mailer.sent).toStrictEqual([]);
+        expect(fix.world.rows.get(memberA.id)?.variant).toBe(Schemas.defaultCopy);
+      }),
+    );
+  });
 
   it.effect("skips unsubscribed, suppressed and bouncing members without claiming them", () =>
     Effect.gen(function* () {

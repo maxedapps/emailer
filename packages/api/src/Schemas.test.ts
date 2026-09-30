@@ -220,6 +220,88 @@ describe("UpdateCampaignPayload", () => {
   );
 });
 
+describe("Variants", () => {
+  // Default decoding, as the HTTP API decodes: excess properties are dropped there, not refused.
+  const decode = Schema.decodeUnknownResult(Schemas.Variants);
+
+  const content = { subject: "Hello", text: "Body" };
+
+  it("admits targeted and split variants side by side", () => {
+    const variants = [
+      { key: "beginner", when: { level: "beginner" }, ...content },
+      { key: "b_2", percent: 50, ...content },
+    ];
+
+    expect(decode(variants)).toStrictEqual(Result.succeed(variants));
+  });
+
+  it.each([
+    ["both selectors", [{ key: "b", when: { level: "x" }, percent: 10, ...content }]],
+    ["neither selector", [{ key: "b", ...content }]],
+    ["an empty targeting", [{ key: "b", when: {}, ...content }]],
+    ["the default copy's key", [{ key: "default", percent: 10, ...content }]],
+    ["a key SES would refuse as a tag value", [{ key: "b.2", percent: 10, ...content }]],
+    [
+      "a key named twice",
+      [
+        { key: "b", percent: 10, ...content },
+        { key: "b", when: { level: "x" }, ...content },
+      ],
+    ],
+    [
+      "percents adding up to more than 100",
+      [
+        { key: "b", percent: 60, ...content },
+        { key: "c", percent: 41, ...content },
+      ],
+    ],
+    ["no variants", []],
+  ])("refuses %s", (_case, variants) => {
+    expect(Result.isFailure(decode(variants))).toBe(true);
+  });
+
+  it("refuses a route naming both selectors, as the stored routing decodes", () => {
+    expect(
+      Result.isFailure(
+        Schema.decodeUnknownResult(Schemas.VariantRoutes)([
+          { key: "b", when: { level: "x" }, percent: 10 },
+        ]),
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("AttributePatch", () => {
+  const decode = Schema.decodeUnknownResult(Schemas.AttributePatch);
+
+  it("admits null, which removes a key", () => {
+    expect(decode({ plan: "pro", city: null })).toStrictEqual(
+      Result.succeed({ plan: "pro", city: null }),
+    );
+  });
+
+  it("rejects an over-long key rather than silently dropping the entry", () => {
+    expect(
+      Result.isFailure(decode({ [`k${"x".repeat(Schemas.maxAttributeKeyLength)}`]: null })),
+    ).toBe(true);
+  });
+});
+
+describe("SetAttributesPayload", () => {
+  it("refuses a payload naming one mailbox twice, in any case", () => {
+    expect(
+      Result.isFailure(
+        Schema.decodeResult(Schemas.SetAttributesPayload)({
+          contacts: [
+            { email: "Sam@example.com", attributes: {} },
+            { email: "sam@EXAMPLE.com", attributes: {} },
+          ],
+        }),
+      ),
+    ).toBe(true);
+  });
+});
+
 describe("EntityCursor", () => {
   const decode = Schema.decodeUnknownResult(Schemas.EntityCursor);
 
@@ -259,11 +341,11 @@ describe("imports", () => {
   });
 
   it("admits a file larger than one call's batch", () => {
-    const file = { contacts: entries(Schemas.maxImportEntries + 1) };
+    const file = { contacts: entries(Schemas.maxBatchEntries + 1) };
 
     expect(
       Result.getOrThrow(Schema.decodeResult(Schemas.ImportContactsFile)(file)).contacts,
-    ).toHaveLength(Schemas.maxImportEntries + 1);
+    ).toHaveLength(Schemas.maxBatchEntries + 1);
   });
 
   it("refuses a file naming one mailbox twice, even batches apart", () => {
@@ -304,6 +386,9 @@ describe("public error statuses", () => {
     [Errors.SendAtNotInFuture, 409],
     [Errors.CampaignStateConflict, 409],
     [Errors.TestAudienceTooLarge, 409],
+    [Errors.VariantNotFound, 404],
+    [Errors.DraftChanged, 409],
+    [Errors.TooManyAttributes, 422],
     [Errors.SendingPaused, 503],
     [Errors.StorageUnavailable, 503],
     [Errors.EmailServiceUnavailable, 503],

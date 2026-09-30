@@ -186,6 +186,7 @@ export const unusedAudience: AudienceOperations = {
   getContactByEmail: () => notExercised("AudienceStore", "getContactByEmail"),
   listContacts: () => notExercised("AudienceStore", "listContacts"),
   updateContact: () => notExercised("AudienceStore", "updateContact"),
+  setAttributes: () => notExercised("AudienceStore", "setAttributes"),
   deleteContact: () => notExercised("AudienceStore", "deleteContact"),
   createList: () => notExercised("AudienceStore", "createList"),
   getList: () => notExercised("AudienceStore", "getList"),
@@ -206,7 +207,7 @@ export const unusedAudience: AudienceOperations = {
 
 export const unusedCampaigns: CampaignStoreOperations = {
   createCampaign: () => notExercised("CampaignStore", "createCampaign"),
-  getCampaignBody: () => notExercised("CampaignStore", "getCampaignBody"),
+  getCopies: () => notExercised("CampaignStore", "getCopies"),
   getCampaign: () => notExercised("CampaignStore", "getCampaign"),
   listCampaigns: () => notExercised("CampaignStore", "listCampaigns"),
   getCampaignControl: () => notExercised("CampaignStore", "getCampaignControl"),

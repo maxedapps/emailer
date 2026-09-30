@@ -48,14 +48,14 @@ describe("the item codec", () => {
     Effect.gen(function* () {
       const bare = { id: contactId, email: "sam@example.com", createdAt };
 
-      expect(yield* read(yield* contactItem(contact))).toStrictEqual(contact);
-      expect(yield* read(yield* contactItem(bare))).toStrictEqual(bare);
+      expect(yield* read(yield* contactItem(contact, 1))).toStrictEqual(contact);
+      expect(yield* read(yield* contactItem(bare, 1))).toStrictEqual(bare);
     }),
   );
 
   it.effect("writes no attribute for an optional value left undefined", () =>
     Effect.gen(function* () {
-      const item = yield* contactItem({ ...contact, name: undefined });
+      const item = yield* contactItem({ ...contact, name: undefined }, 1);
 
       expect(item).not.toHaveProperty("name");
     }),
@@ -68,7 +68,7 @@ describe("the item codec", () => {
     ["a version this code cannot read", { v: { N: "99" } }],
   ] as const)("reads an item carrying %s as the CorruptItem defect", ([_label, overrides]) =>
     Effect.gen(function* () {
-      const item = { ...(yield* contactItem(contact)), ...overrides };
+      const item = { ...(yield* contactItem(contact, 1)), ...overrides };
 
       expect(yield* defectOf(read(item))).toStrictEqual(
         new CorruptItem({ operation: "getContact" }),
@@ -80,7 +80,7 @@ describe("the item codec", () => {
     "reads an item without its %s attribute as the CorruptItem defect",
     (name) =>
       Effect.gen(function* () {
-        const { [name]: _absent, ...item } = yield* contactItem(contact);
+        const { [name]: _absent, ...item } = yield* contactItem(contact, 1);
 
         expect(yield* defectOf(read(item))).toStrictEqual(
           new CorruptItem({ operation: "getContact" }),

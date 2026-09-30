@@ -42,6 +42,12 @@ export const bodyKey = (campaignId: string) => ({
   sk: str("BODY"),
 });
 
+/** An alternate copy's body, beside the campaign's own `BODY`. */
+export const variantBodyKey = (campaignId: string, variantKey: string) => ({
+  pk: str(`CAMPAIGN#${campaignId}`),
+  sk: str(`BODY#${variantKey}`),
+});
+
 export const strMap = (values: Schemas.ContactAttributes) => ({
   M: Object.fromEntries(Object.entries(values).map(([name, value]) => [name, str(value)])),
 });
