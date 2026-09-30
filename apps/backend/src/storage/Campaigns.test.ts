@@ -498,6 +498,16 @@ describe("getCopies", () => {
     }),
   );
 
+  it.effect("answers an unavailable store as StorageUnavailable, not a defect", () =>
+    Effect.gen(function* () {
+      const { storage } = withStorage({ getItem: [Effect.fail(serverError)] });
+
+      expect(yield* Effect.flip(storage.getCampaign(campaignId))).toBeInstanceOf(
+        Errors.StorageUnavailable,
+      );
+    }),
+  );
+
   it.effect("treats a variant missing under unchanged rules as corrupt", () =>
     Effect.gen(function* () {
       const half = bodyAt(1, [{ key: "half", percent: 50 }]);

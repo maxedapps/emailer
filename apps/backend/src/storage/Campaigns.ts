@@ -453,7 +453,9 @@ const campaignReads = (primitives: ReadPrimitives) => {
     },
     // Each round needs another edit to have landed in between, so running out is a defect.
     (read) =>
-      Effect.retry(read, { times: 3, while: Predicate.isTagged("CopiesMoved") }).pipe(Effect.orDie),
+      Effect.retry(read, { times: 3, while: Predicate.isTagged("CopiesMoved") }).pipe(
+        Effect.catchTag("CopiesMoved", (moved) => Effect.die(moved)),
+      ),
   );
 
   /** Every copy of a campaign whose META the caller holds, so a missing body is corrupt. */
