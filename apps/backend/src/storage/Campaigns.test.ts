@@ -227,8 +227,8 @@ describe("campaign records", () => {
 
       const readBack = withStorage({
         getItem: [
-          Effect.succeed({ Item: table.putItemRequests[1]?.Item ?? {} }),
           Effect.succeed({ Item: writtenBody }),
+          Effect.succeed({ Item: table.putItemRequests[1]?.Item ?? {} }),
         ],
       });
 
@@ -293,8 +293,9 @@ describe("campaign records", () => {
   it.effect("decodes every public state including progress", () =>
     Effect.gen(function* () {
       const { storage } = withStorage({
-        // Every `getCampaign` reads META then BODY, so the replies interleave.
+        // Every `getCampaign` reads BODY then META, so the replies interleave.
         getItem: [
+          Effect.succeed({ Item: body() }),
           Effect.succeed({ Item: meta({ state: "draft" }) }),
           Effect.succeed({ Item: body() }),
           Effect.succeed({ Item: meta({ state: "scheduled", queuedAt }) }),
@@ -329,7 +330,6 @@ describe("campaign records", () => {
               ...progress,
             }),
           }),
-          Effect.succeed({ Item: body() }),
         ],
       });
 
@@ -374,6 +374,7 @@ describe("campaign records", () => {
     Effect.gen(function* () {
       const { storage } = withStorage({
         getItem: [
+          Effect.succeed({ Item: body() }),
           Effect.succeed({
             Item: meta({ state: "sending", startedAt }),
           }),
@@ -386,20 +387,20 @@ describe("campaign records", () => {
     }),
   );
 
-  it.effect("reads META then BODY and merges them into one campaign", () =>
+  it.effect("reads BODY then META and merges them into one campaign", () =>
     Effect.gen(function* () {
       const { table, storage } = withStorage({
         getItem: [
-          Effect.succeed({ Item: meta({ state: "draft" }) }),
           Effect.succeed({ Item: body() }),
+          Effect.succeed({ Item: meta({ state: "draft" }) }),
         ],
       });
 
       const campaign = yield* storage.getCampaign(campaignId);
 
       expect(table.getItemRequests.map((request) => request.Key)).toStrictEqual([
-        { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } },
         { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "BODY" } },
+        { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } },
       ]);
       expect(campaign).toStrictEqual({
         id: campaignId,
@@ -416,8 +417,8 @@ describe("campaign records", () => {
     Effect.gen(function* () {
       const { storage } = withStorage({
         getItem: [
-          Effect.succeed({ Item: meta({ state: "draft", filter: { plan: "pro" } }) }),
           Effect.succeed({ Item: body() }),
+          Effect.succeed({ Item: meta({ state: "draft", filter: { plan: "pro" } }) }),
         ],
       });
 
@@ -436,12 +437,12 @@ describe("campaign records", () => {
   it.effect("treats a META without a BODY as corrupt", () =>
     Effect.gen(function* () {
       const { storage } = withStorage({
-        getItem: [Effect.succeed({ Item: meta({ state: "draft" }) }), Effect.succeed({})],
+        getItem: [Effect.succeed({}), Effect.succeed({ Item: meta({ state: "draft" }) })],
       });
 
       const defect = yield* defectOf(storage.getCampaign(campaignId));
 
-      expect(defect).toStrictEqual(new CorruptItem({ operation: "getOwnBody" }));
+      expect(defect).toStrictEqual(new CorruptItem({ operation: "getCampaign" }));
     }),
   );
 });
@@ -475,6 +476,43 @@ describe("getCopies", () => {
         variantKey("berlin"),
         variantKey("half"),
       ]);
+    }),
+  );
+
+  it.effect("reads the rules again when an edit removed a variant between the reads", () =>
+    Effect.gen(function* () {
+      const { storage } = withStorage({
+        getItem: [
+          Effect.succeed({ Item: bodyAt(1, [{ key: "half", percent: 50 }]) }),
+          Effect.succeed({}),
+          Effect.succeed({ Item: bodyAt(2) }),
+          Effect.succeed({ Item: bodyAt(2) }),
+        ],
+      });
+
+      expect(yield* storage.getCopies(campaignId)).toStrictEqual({
+        body: { text: "Body" },
+        variants: [],
+        revision: 2,
+      });
+    }),
+  );
+
+  it.effect("treats a variant missing under unchanged rules as corrupt", () =>
+    Effect.gen(function* () {
+      const half = bodyAt(1, [{ key: "half", percent: 50 }]);
+
+      const { storage } = withStorage({
+        getItem: [
+          Effect.succeed({ Item: half }),
+          Effect.succeed({}),
+          Effect.succeed({ Item: half }),
+        ],
+      });
+
+      expect(yield* defectOf(storage.getCopies(campaignId))).toStrictEqual(
+        new CorruptItem({ operation: "getCopies" }),
+      );
     }),
   );
 
@@ -659,7 +697,6 @@ describe("updateDraft", () => {
     revision: number | undefined,
     variants: ReadonlyArray<Schemas.Variant> = [],
   ): NonNullable<ScriptedReplies["getItem"]> => [
-    Effect.succeed({ Item: meta({ state: "draft" }) }),
     Effect.succeed({
       Item:
         revision === undefined
@@ -678,6 +715,7 @@ describe("updateDraft", () => {
     ...variants.map((variant) =>
       Effect.succeed({ Item: variantBody(variant.key, variant.subject, variant.text) }),
     ),
+    Effect.succeed({ Item: meta({ state: "draft" }) }),
   ];
 
   it.effect(
@@ -808,6 +846,41 @@ describe("updateDraft", () => {
           { Put: { Table: tableLogicalId, Item: variantBody("berlin", "Hallo", "Berlin copy") } },
           { Delete: { Table: tableLogicalId, Key: variantKey("half") } },
         ]);
+      }),
+  );
+
+  it.effect(
+    "keeps a subject another edit wrote after the revision was read: the write fails and retries",
+    () =>
+      Effect.gen(function* () {
+        const renamed = {
+          ...meta({ state: "draft" }),
+          subject: { S: "New subject" },
+        };
+
+        // The body is read at revision 1; the other edit then commits, so META reads its subject.
+        const { table, storage } = withStorage({
+          getItem: [
+            Effect.succeed({ Item: bodyAt(1) }),
+            Effect.succeed({ Item: renamed }),
+            Effect.succeed({ Item: bodyAt(2) }),
+            Effect.succeed({ Item: renamed }),
+          ],
+          transactWriteItems: [cancelled("None", "ConditionalCheckFailed")],
+        });
+
+        const next = yield* storage.updateDraft(campaignId, (current) => ({
+          ...current,
+          text: "New text",
+        }));
+
+        expect(next.subject).toBe("New subject");
+        expect(
+          table.transactionRequests[1]?.TransactItems[0]?.Update?.ExpressionAttributeValues,
+        ).toMatchObject({ ":subject": { S: "New subject" } });
+        expect(
+          table.transactionRequests[1]?.TransactItems[1]?.Put?.ExpressionAttributeValues,
+        ).toStrictEqual({ ":revision": { N: "2" } });
       }),
   );
 
@@ -1500,8 +1573,8 @@ describe("condition failures", () => {
   const sending = meta({ state: "sending", queuedAt, startedAt });
 
   const draftRead = [
-    Effect.succeed({ Item: meta({ state: "draft" }) }),
     Effect.succeed({ Item: body() }),
+    Effect.succeed({ Item: meta({ state: "draft" }) }),
   ];
 
   it.effect.each<
@@ -1529,7 +1602,7 @@ describe("condition failures", () => {
     ],
     [
       "updateDraft refuses a campaign it reads outside draft without writing",
-      { getItem: [Effect.succeed({ Item: sending }), Effect.succeed({ Item: body() })] },
+      { getItem: [Effect.succeed({ Item: body() }), Effect.succeed({ Item: sending })] },
       (storage) => storage.updateDraft(campaignId, (current) => current),
       Result.fail(new Errors.CampaignStateConflict({ state: "sending" })),
     ],

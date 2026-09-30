@@ -1,7 +1,9 @@
 import { CampaignNotFound, CampaignStateConflict, DraftChanged } from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
 import * as AWS from "alchemy/AWS";
-import { Context, Crypto, Data, Effect, Layer, Predicate, Schema } from "effect";
+import { Context, Crypto, Data, Effect, Layer, Option, Predicate, Schema } from "effect";
+
+import { CorruptItem } from "../Errors.ts";
 
 import {
   bodyKey,
@@ -214,6 +216,9 @@ export class SettlementNotApplied extends Data.TaggedError("SettlementNotApplied
 /** Another slice already wrote this recipient's send row. */
 class AlreadyClaimed extends Data.TaggedError("AlreadyClaimed") {}
 
+/** A draft edit changed the copies between reading the body and reading a variant it named. */
+class CopiesMoved extends Data.TaggedError("CopiesMoved") {}
+
 const superseded = () => new RunSuperseded();
 
 const changed = (operation: string) => (current: StoredItem) =>
@@ -396,37 +401,77 @@ const campaignReads = (primitives: ReadPrimitives) => {
 
   /**
    * Every copy: the campaign's own body, then each variant its rules name, each by `GetItem`, so
-   * the preview function needs nothing broader. No absent case: every caller holds a META that
-   * proves the campaign exists, so a missing body is corrupt, which decoding an undefined item
-   * reports.
+   * the preview function needs nothing broader. None when there is no body, which a caller holding
+   * a META reads as corrupt. The separate reads can straddle a draft edit: a variant it removed
+   * after the body was read is gone, and then the body is read again. Only a variant missing under
+   * unchanged rules is corrupt.
    */
-  const getOwnBody = Effect.fn("Storage.getOwnBody")(function* (campaignId: string) {
-    const response = yield* readItem("getOwnBody", bodyKey(campaignId));
+  const readCopies = Effect.fn("Storage.readCopies")(
+    function* (campaignId: string) {
+      const own = yield* readItem("getCopies", bodyKey(campaignId));
 
-    return yield* readBody("getOwnBody", response.Item);
-  });
+      if (own.Item === undefined) {
+        return Option.none();
+      }
 
+      const stored = yield* readBody("getCopies", own.Item);
+
+      const read = yield* Effect.forEach(
+        stored.variants ?? [],
+        (route) =>
+          Effect.map(readItem("getCopies", variantBodyKey(campaignId, route.key)), (response) => ({
+            route,
+            item: response.Item,
+          })),
+        { concurrency: "unbounded" },
+      );
+
+      if (read.some(({ item }) => item === undefined)) {
+        const again = yield* readItem("getCopies", bodyKey(campaignId));
+
+        if (again.Item === undefined) {
+          return Option.none();
+        }
+
+        if ((yield* readBody("getCopies", again.Item)).revision === stored.revision) {
+          return yield* Effect.die(new CorruptItem({ operation: "getCopies" }));
+        }
+
+        return yield* new CopiesMoved();
+      }
+
+      const variants = yield* Effect.forEach(read, ({ route, item }) =>
+        Effect.map(readVariantBody("getCopies", item), (body) => variantOf(route, body)),
+      );
+
+      const body: Schemas.CampaignBody =
+        stored.html === undefined
+          ? { text: stored.text }
+          : { text: stored.text, html: stored.html };
+
+      return Option.some({ body, variants, revision: stored.revision });
+    },
+    // Each round needs another edit to have landed in between, so running out is a defect.
+    (read) =>
+      Effect.retry(read, { times: 3, while: Predicate.isTagged("CopiesMoved") }).pipe(Effect.orDie),
+  );
+
+  /** Every copy of a campaign whose META the caller holds, so a missing body is corrupt. */
   const getCopies = Effect.fn("Storage.getCopies")(function* (campaignId: string) {
-    const stored = yield* getOwnBody(campaignId);
+    const copies = yield* readCopies(campaignId);
 
-    const variants = yield* Effect.forEach(
-      stored.variants ?? [],
-      (route) =>
-        readItem("getCopies", variantBodyKey(campaignId, route.key)).pipe(
-          Effect.flatMap((variant) => readVariantBody("getCopies", variant.Item)),
-          Effect.map((body) => variantOf(route, body)),
-        ),
-      { concurrency: "unbounded" },
-    );
-
-    const body: Schemas.CampaignBody =
-      stored.html === undefined ? { text: stored.text } : { text: stored.text, html: stored.html };
-
-    return { body, variants, revision: stored.revision };
+    return Option.isSome(copies)
+      ? copies.value
+      : yield* Effect.die(new CorruptItem({ operation: "getCopies" }));
   });
 
-  /** The whole campaign, and the revision of the copies it was read at. */
+  /**
+   * The whole campaign, and the revision of the copies it was read at. The copies are read before
+   * META, so an edit landing after the revision was read fails a write made against it, and one
+   * landing before is in the META read after it: META's fields are never older than the revision.
+   */
   const loadCampaign = Effect.fn("Storage.loadCampaign")(function* (campaignId: string) {
+    const copies = yield* readCopies(campaignId);
     const response = yield* readItem("getCampaign", campaignKey(campaignId));
 
     if (response.Item === undefined) {
@@ -434,7 +479,13 @@ const campaignReads = (primitives: ReadPrimitives) => {
     }
 
     const stored = yield* readCampaign("getCampaign", response.Item);
-    const { body, variants, revision } = yield* getCopies(campaignId);
+
+    // A META without a body is corrupt: the body is written first and deleted with it.
+    if (Option.isNone(copies)) {
+      return yield* Effect.die(new CorruptItem({ operation: "getCampaign" }));
+    }
+
+    const { body, variants, revision } = copies.value;
     const campaign: Schemas.Campaign = { ...summaryOf(stored), ...body };
 
     return { campaign: variants.length === 0 ? campaign : { ...campaign, variants }, revision };
