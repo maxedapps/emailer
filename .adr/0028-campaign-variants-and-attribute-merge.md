@@ -1,6 +1,7 @@
 # ADR-0028: Alternate copies inside a campaign, and attributes merged into existing contacts
 
-- Status: Proposed
+- Status: Accepted
+- Accepted: 2026-10-01, after one plan review with the Codex reviewer
 - Date: 2026-10-01
 - Authority: Task 165. Two explorations designed this (task 133, score-driven, and task 165, score-free). Max then decided:
   - build variants now, with no pilot;
@@ -42,16 +43,24 @@
    2. **Otherwise a split.** `bucket = SHA-256(campaignId + "/" + contactId)`: the first four bytes, as an unsigned integer, mod 100. The `percent` variants take consecutive ranges of buckets, in order, and the default copy takes the rest.
 
    So `when` variants alone are "segment copies with a default". `percent` variants alone are an A/B or weighted test against the default. Both together are "these segments get their copy, and everyone else is split". A split within one segment is left out until a campaign needs it.
-3. **Storage.**
-   - **Bodies:** each variant is its own item, `CAMPAIGN#<id>/BODY#<key>`, holding `{ subject, text, html? }`. `BODY` stays the default copy.
-   - **`META`** gains `variants`: the routing only, as `[{ key, when } | { key, percent }]`. It is stored as a JSON string through `Schema.fromJsonString`, so the codec stays flat, and nothing ever evaluates into it. Typical routing is tens of bytes per copy.
-   - **Create** writes all bodies with `recordOnce`, then `META` last, as today.
-   - **A draft edit** replaces the whole set in the existing single transaction: the `META` update, a Put for every body, and a Delete for each variant the edit dropped.
-   - **A draft delete** removes `META` and every body its routing names.
-   - `get` and the preview read `META`, then each body by `GetItem` (at most five). The preview function keeps `GetItem` only.
+3. **Storage: a campaign's copies live in its body items, and `META` doesn't change.**
+   - **Bodies:** each variant is its own item, `CAMPAIGN#<id>/BODY#<key>`, holding `{ subject, text, html? }`.
+   - **The default `BODY`** keeps its text and HTML and gains `variants`: the routing only, as `[{ key, when } | { key, percent }]`.
+     - It is stored as a JSON string through `Schema.fromJsonString`, so the codec stays flat. Nothing ever evaluates into it, and a condition can compare it whole.
+     - `META` stays as it is, so settlements and feedback, which rewrite it, pay nothing for routing. At its bounds, routing can reach about 9 KB.
+   - **Create** writes the variant bodies, then `BODY`, then `META` last, each with `recordOnce`, as today.
+   - **A draft edit** replaces the whole set in the existing single transaction:
+     - the `META` update, conditioned on `draft`;
+     - the `BODY` Put, conditioned on its routing still being what the edit read;
+     - a Put for every variant body;
+     - a Delete for each variant the edit dropped.
+
+     A concurrent edit that changed the routing makes the condition fail, and the edit is retried from a fresh read, so no body item is orphaned.
+   - **A draft delete** reads `BODY` first. It then deletes `META` (conditioned on `draft`), `BODY` (conditioned on the routing it read) and every variant body that routing names, in one transaction.
+   - **Reads:**
+     - `get` and the preview read `META`, `BODY`, then each variant by `GetItem` (at most four). The preview function keeps `GetItem` only.
+     - The dispatcher reads `BODY` once per slice, as today, then batch-reads the variants it names, matched by sort key.
 4. **Dispatch** (amends ADR-0011).
-   - `beginRun` already returns `META`, so it returns the routing too.
-   - Each slice batch-reads every body once and matches them by sort key.
    - The copy is chosen after the filter and the address status and before the claim. The claim's conditional Put records `variant` on `SEND#<contactId>`, and the choice is never recomputed on settle or resume.
    - Every campaign mail carries a third SES tag, `variant=<key>`. The feedback consumer copies the tag onto its history row.
 5. **Preview and test send.**
@@ -59,12 +68,16 @@
    - `POST /campaigns/:id/test` takes an optional `variant` (the default copy if absent). An unknown key answers `VariantNotFound` (404).
 6. **Attributes merge** (the root fix of the gap).
    - **`PATCH /contacts/:id`:** `attributes` is a merge patch ([RFC 7396](https://www.rfc-editor.org/rfc/rfc7396)). A string sets a key, `null` removes it, keys left out stay, and `attributes: null` removes them all.
-   - **`POST /contacts/attributes`** merges a patch into up to 20 contacts by address. It reads the reservations and contacts in batches, then writes one transaction of whole-contact Puts, each conditioned as `updateContact`'s is. A lost race is retried from a fresh read.
+   - **`POST /contacts/attributes`** merges a patch into up to 20 contacts by address. It reads the reservations and contacts in batches, then writes one transaction of whole-contact Puts.
+   - **Every contact write is guarded by a revision.** A contact item carries `revision`, a number every write sets and every update increments. An update or merge Put is conditioned on the revision it read, which is the standard [optimistic locking](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/DynamoDBMapper.OptimisticLocking.html) pattern.
+     - Two disjoint merges, or a merge racing a name edit, then both land: the loser fails `ContactChanged` and `retryLostRace` re-reads and re-merges.
+     - This replaces `updateContact`'s email-only condition, which let a concurrent edit be silently reverted.
+     - A contact written before this change has no revision, and then the condition is `attribute_not_exists(revision)`.
      - **Answer:** one entry per address, `updated` with the contact id or `not-found`.
    - A merged map over 20 entries answers `TooManyAttributes` (422) on both endpoints, instead of becoming an encode defect.
    - **`emailer contacts set-attributes --file <csv>`:** the email column plus attribute columns. It sends batches of 20, four at a time, like `lists import`. A blank cell leaves that key alone.
    - **Import and sign-up stay create-only.**
-7. **Compatibility.** Every new stored field is optional (`META.variants`, `FEEDBACK.variant`) or only written (`SEND.variant`), so the retained prod table decodes as it is. `recordVersion` stays 1, and no migration is needed.
+7. **Compatibility.** Every new stored field is optional (`BODY.variants`, `FEEDBACK.variant`, the contact's `revision`) or only written (`SEND.variant`), so the retained prod table decodes as it is. `recordVersion` stays 1, and no migration is needed.
 
 ## Alternatives
 
@@ -75,12 +88,14 @@
   - The default copy keeps its place on `META`/`BODY`, and variant subjects go in their own bodies.
 - **A selection mode per campaign (`when` or split, never both).** Rejected: it needs a mode field and a rule forbidding the mix. The two-step rule is total, just as short to explain, and makes the combination free.
 - **Weights instead of percents.** Weights avoid the sum check, but "10%" is what an operator means. The default takes the remainder, so no sum has to equal 100.
-- **Routing on the body items, found with a `Query`.** Rejected: a query page caps at 1 MB, so it has to paginate over bodies of up to 256 KiB. The preview function would also need `Query`. `META` is already read at `beginRun`.
+- **Routing on `META`.** `beginRun` returns `META` anyway, so the dispatcher would learn the routing without a read. Rejected: four variants with four equalities at their bounds add about 9 KB to the item every settlement and feedback event rewrites, billed per 1 KB. That is ADR-0014's body problem again. On `BODY`, it costs one sequential read per slice and nothing per recipient.
+- **Routing on every variant item, found with a `Query`.** Rejected: a query page caps at 1 MB, so it has to paginate over bodies of up to 256 KiB. The preview function would also need `Query`.
 - **A native list-of-maps attribute.** Rejected: it means a recursive codec in `Items.ts` for one field that nothing queries. A JSON string is one line in the record schema.
 - **Per-campaign assignment rows (`email → copy`).** Rejected: an extra write per contact, a read per recipient, and it would reverse ADR-0011's live audience. It is only worth it if frozen cohorts become a must.
 - **SES stored templates.** Rejected: a second send path, template resources with their own lifecycle, Handlebars instead of Markdown, and no HTML escaping.
 - **Per-variant counters on `META`.** Rejected: up to six counters per copy would grow the item every settlement rewrites. The variant lives on the SEND and FEEDBACK rows, so counts can be derived on demand later.
 - **Attribute merge as `GET /contacts/by-email` plus `PATCH` per CSV row.** No new endpoint, but two round trips per contact. A 50k-contact file would take about half an hour, against minutes for 20-entry batches, as with the import (ADR-0025).
+- **Guarding merges by comparing the whole attribute map in the condition.** Rejected: absent fields and maps need a branch each, while a revision is one number and also protects name and email.
 - **Merge with `SET attributes.#k = :v`.** Rejected: it fails when the map doesn't exist yet, and it can't enforce the 20-entry cap.
 - **Merge inside import and sign-up.** Rejected:
   - an import would need a contact read per existing contact, raising ADR-0025's measured cost;
@@ -99,5 +114,6 @@
   - No new AWS resources.
 - **Attributes stay live until the claim** (ADR-0011). Changing a contact's attribute before it is reached changes its copy. After the claim, the copy is fixed.
 - **`PATCH /contacts/:id` changes meaning:** attributes merge rather than replace. Nothing in production depends on the old meaning.
+- **Concurrent contact edits no longer revert each other.** Each loser pays one extra read and write.
 - **A split is fresh per campaign.** The same contact can land in different buckets in different campaigns.
 - **No per-variant report yet.** Copies are compared with utm links in site analytics. Delivery counts per copy can be derived from the rows when needed.

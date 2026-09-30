@@ -39,8 +39,9 @@ Status: To do
 
 - **`packages/api/src/Schemas.ts`:**
   - `VariantKey`: `^[A-Za-z0-9_-]{1,32}$`, not `default`.
-  - `VariantRule`: a union of `{ when }` (1–4 attribute equalities) and `{ percent }` (an integer, 1–100).
-  - `Variant`: a union of `{ key, subject, text, html?, when }` and `{ key, subject, text, html?, percent }`.
+  - `VariantRule`: a union of `{ when, percent?: never }` (1–4 attribute equalities) and `{ percent, when?: never }` (an integer, 1–100).
+    - Each branch declares the other selector as `optionalKey(Schema.Never)`, so the default decoding the HTTP API uses rejects both-or-neither instead of dropping one.
+  - `Variant`: the rule plus `{ key, subject, text, html? }`.
   - `Variants`: 1–4 entries, unique keys, percents summing to at most 100.
   - `Campaign`, `CreateCampaignPayload` and `UpdateCampaignPayload` get `variants` (`optionalKey`; on update also `NullOr`).
   - `TestSendPayload` members get `variant?`.
@@ -52,25 +53,34 @@ Status: To do
   - `contacts.setAttributes`: `POST /contacts/attributes`.
   - `test` adds `VariantNotFound`.
   - `update` and `setAttributes` add `TooManyAttributes`.
-- **Tests (`Schemas.test.ts`):** a payload with both `when` and `percent` is refused on the decode path with excess properties as errors; so is one with neither, and so are a duplicate key, `default`, a percent sum over 100 and an invalid key character.
+- **Tests:**
+  - With default decoding (`Schemas.test.ts`), each of these is refused: both selectors, neither selector, a duplicate key, `default`, a percent sum over 100, and an invalid key character.
+  - A handler test answers 400 for a both-selectors payload over HTTP.
 
 ### T2 — Campaign storage
 
 Status: To do
 
 - **`storage/Items.ts`:** `variantBodyKey(id, key)`.
-- **`storage/Campaigns.ts`:**
-  - `META` gets `variants: optionalKey(fromJsonString(Routes))`.
-  - `beginRun` returns `routes`.
+- **`storage/Campaigns.ts`** (`META` is unchanged):
+  - `BODY` gets `variants: optionalKey(fromJsonString(Routes))`.
+  - `BODY#<key>` holds `{ subject, text, html? }`.
   - `createCampaign` writes the variant bodies, then `BODY`, then `META`, each with `recordOnce`.
-  - `updateDraft(next, dropped)` adds a Put per variant body and a Delete per dropped key. The `META` values come from the record's encoder, not by hand.
-  - `deleteDraft` also deletes each variant body the stored routing names, read from the returned old item or from a read first.
-  - `getCampaign` reads `META`, then `BODY` and the variant bodies by `GetItem`.
-  - `readCopies(id, routes)` reads every body in one batch, matched by `sk`, for the dispatcher.
-- **Tests (`storage/Campaigns.test.ts`, against the in-memory table):**
+  - `updateDraft(next, seen)`:
+    - the `META` update (on `draft`);
+    - the `BODY` Put, conditioned on `variants` equal to the routing `seen` held, or absent when it held none;
+    - Puts for the variant bodies;
+    - Deletes for the keys in `seen` that the edit drops.
+
+    A refused `BODY` condition is `DraftChanged`, which the service retries from a fresh read.
+  - `deleteDraft` reads `BODY` first. It then deletes `META` (on `draft`), `BODY` (on the routing read) and the variant bodies, in one transaction, with the same retry.
+  - `getCampaign` reads `META`, then `BODY`, then the variant bodies by `GetItem`.
+  - `readCopies(id)` reads `BODY`, then batch-reads the variants, matched by `sk`. It is for the dispatcher.
+- **Tests (`storage/Campaigns.test.ts`):**
   - create, get, update and delete round-trip the variants;
   - an update that drops a variant deletes its body;
-  - delete leaves nothing in the partition;
+  - delete removes every body;
+  - interleaving: two edits that read the same routing, and an edit racing a delete, leave no orphan body, and the loser retries;
   - `readCopies` returns every copy.
 
 ### T3 — Choosing and sending a copy
@@ -102,20 +112,24 @@ Status: To do
 - **`campaigns/TestSends.ts`:** `variant` picks the copy's subject and body. An unknown key answers `VariantNotFound`.
 - **Tests:** the preview page renders every copy; a test send of a variant sends its content; an unknown variant fails.
 
-### T5 — Attribute merge
+### T5 — Attribute merge and contact revisions
 
 Status: To do
 
 - **`storage/Contacts.ts`:**
-  - a pure `mergeAttributes(current, patch)`;
-  - `updateContact` merges, validates against the 20-entry cap and fails `TooManyAttributes`;
-  - `setAttributes(entries)`: `readHolders`, then a batch contact read, merge, and one transaction of Puts conditioned `attribute_exists(pk) AND #email = :email`, all inside `retryLostRace`.
+  - The contact item carries `revision` (storage only, not on the wire).
+    - A create writes 1.
+    - Every update Put writes `seen + 1`, conditioned on `revision = :seen`, or on `attribute_not_exists(revision)` for an item from before this change.
+    - This replaces the email condition. The address moves stay as they are.
+  - A pure `mergeAttributes(current, patch)`.
+  - `updateContact` merges and validates against the 20-entry cap, failing `TooManyAttributes`.
+  - `setAttributes(entries)`: `readHolders`, then a batch contact read, merge, and one transaction of revision-conditioned Puts, all inside `retryLostRace`.
 - **`audience/Contacts.ts`** and the API handler wire `setAttributes`.
 - **Tests:**
-  - merge keeps untouched keys, and `null` removes a key;
-  - `attributes: null` clears the map;
-  - a merge over 20 entries fails typed;
-  - bulk: a mix of existing and unknown addresses, and a race retried.
+  - merge keeps untouched keys, `null` removes a key, and `attributes: null` clears the map;
+  - a merge over 20 entries fails typed, and is re-checked after a re-read;
+  - bulk: a mix of existing and unknown addresses;
+  - interleaving: two disjoint merges keep both keys, and a bulk merge racing a name edit keeps both.
 
 ### T6 — CLI
 
