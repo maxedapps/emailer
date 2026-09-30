@@ -35,7 +35,7 @@
 
 ### T1 — Contract
 
-Status: To do
+Status: Done
 
 - **`packages/api/src/Schemas.ts`:**
   - `VariantKey`: `^[A-Za-z0-9_-]{1,32}$`, not `default`.
@@ -59,7 +59,7 @@ Status: To do
 
 ### T2 — Campaign storage
 
-Status: To do
+Status: Done
 
 - **`storage/Items.ts`:** `variantBodyKey(id, key)`.
 - **`storage/Campaigns.ts`** (`META` is unchanged):
@@ -75,17 +75,17 @@ Status: To do
     A refused `BODY` condition is `DraftChanged`, which the service retries from a fresh read.
   - `deleteDraft` reads `BODY` first. It then deletes `META` (on `draft`), `BODY` (on the routing read) and the variant bodies, in one transaction, with the same retry.
   - `getCampaign` reads `META`, then `BODY`, then the variant bodies by `GetItem`.
-  - `readCopies(id)` reads `BODY`, then batch-reads the variants, matched by `sk`. It is for the dispatcher.
+  - `getCopies(id)` reads `BODY`, then each variant by `GetItem` in parallel. `get`, the preview and the dispatcher all use it: a batch read costs the same and would be a second path.
 - **Tests (`storage/Campaigns.test.ts`):**
   - create, get, update and delete round-trip the variants;
   - an update that drops a variant deletes its body;
   - delete removes every body;
   - interleaving: two edits that read the same routing, and an edit racing a delete, leave no orphan body, and the loser retries;
-  - `readCopies` returns every copy.
+  - `getCopies` returns every copy in order.
 
 ### T3 — Choosing and sending a copy
 
-Status: To do
+Status: Done
 
 - **`sending/Variants.ts`** (new, pure apart from the digest):
   - `bucketOf(campaignId, contactId)` via `Crypto.digest("SHA-256")`;
@@ -106,7 +106,7 @@ Status: To do
 
 ### T4 — Preview and test send
 
-Status: To do
+Status: Done
 
 - **`campaigns/PreviewPage.ts`:** one section per copy, headed with its key and rule, the default first.
 - **`campaigns/TestSends.ts`:** `variant` picks the copy's subject and body. An unknown key answers `VariantNotFound`.
@@ -114,7 +114,7 @@ Status: To do
 
 ### T5 — Attribute merge and contact revisions
 
-Status: To do
+Status: Done
 
 - **`storage/Contacts.ts`:**
   - The contact item carries `revision` (storage only, not on the wire).
@@ -133,7 +133,7 @@ Status: To do
 
 ### T6 — CLI
 
-Status: To do
+Status: Done
 
 - **`campaigns variants set <id> <key>`:** `--subject`, `--markdown` or `--text [--html]`, and `--when k=v…` or `--percent n`. It reads the campaign, replaces or appends the variant, and updates the draft.
 - **`campaigns variants remove <id> <key>`.**
@@ -149,7 +149,7 @@ Status: To do
 
 ### T7 — Docs and live suite
 
-Status: To do
+Status: Done
 
 - **README:** variants (the selection rule, utm per copy, preview and test), attribute merge semantics, `set-attributes`, and the limits table.
 - **Live suite** (`apps/backend/test/Live.integration.test.ts` / `IntegrationSupport.ts`):

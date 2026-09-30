@@ -58,8 +58,8 @@
      A concurrent edit that changed the routing makes the condition fail, and the edit is retried from a fresh read, so no body item is orphaned.
    - **A draft delete** reads `BODY` first. It then deletes `META` (conditioned on `draft`), `BODY` (conditioned on the routing it read) and every variant body that routing names, in one transaction.
    - **Reads:**
-     - `get` and the preview read `META`, `BODY`, then each variant by `GetItem` (at most four). The preview function keeps `GetItem` only.
-     - The dispatcher reads `BODY` once per slice, as today, then batch-reads the variants it names, matched by sort key.
+     - `get`, the preview and the dispatcher share one read: `BODY`, then each variant it names by `GetItem`, in parallel (at most four). The preview function keeps `GetItem` only.
+     - The dispatcher makes that read once per slice, where it read `BODY` before.
 4. **Dispatch** (amends ADR-0011).
    - The copy is chosen after the filter and the address status and before the claim. The claim's conditional Put records `variant` on `SEND#<contactId>`, and the choice is never recomputed on settle or resume.
    - Every campaign mail carries a third SES tag, `variant=<key>`. The feedback consumer copies the tag onto its history row.
