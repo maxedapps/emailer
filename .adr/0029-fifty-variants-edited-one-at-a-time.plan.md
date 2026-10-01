@@ -36,10 +36,10 @@
 - `routesKey` → `CAMPAIGN#<id>/ROUTES` holding `{ routes (JSON string), revision }`. `BODY` back to `{ text, html? }`.
 - `createCampaign`: BODY, then META.
 - `updateDraft(id, change)`: one transaction of field updates (META Update or ConditionCheck on `draft`; BODY Update when text/html sent), then the read for the answer. No revision, no retry.
-- `setVariant(id, variant)` / `removeVariant(id, key)`: read ROUTES, compute the next routes (in place or appended), refuse 51 or >100 %, transaction of META ConditionCheck, ROUTES Put/Delete on the revision, BODY#key Put/Delete; `retryDraftRace`.
+- `setVariant(id, variant)` / `removeVariant(id, key)`: read ROUTES, compute the next routes (in place or appended), refuse 51 or >100 %, transaction of META ConditionCheck, ROUTES Put on the revision (kept with `[]` after the last removal, review F1), BODY#key Put/Delete; `retryDraftRace`.
 - `deleteDraft`: one transaction with every body, ROUTES on its revision.
-- Reads: `getCampaign` (ROUTES + BODY, then META), `getVariant` (ROUTES, then BODY#key; META only to tell a missing campaign apart), `getRoutes` and `getCopy(id, key)` for the dispatcher.
-- Tests (Campaigns.test against the in-memory table): set replaces in place and appends; 50 accepted, the 51st `TooManyVariants`; percents over 100 `SplitOverfull`; a set racing another set retries and both land; set/remove on a non-draft conflict; remove of an unknown key writes nothing; delete with 50 variants is one transaction of 53 actions and leaves no item; PATCH of subject alone keeps text and vice versa.
+- Reads: `getCampaign` (ROUTES + BODY, then META), `getSummary` (META), `getVariant` (ROUTES, then BODY#key; a missing body re-reads ROUTES: changed → read again, unchanged → defect, review F2; META only to tell a missing campaign apart), `getRoutes` and `getCopy(id, key)` for the dispatcher.
+- Tests (Campaigns.test against the in-memory table): set replaces in place and appends; remove-last, set again, then a stale set is refused (F1); a removal between getVariant's two reads answers VariantNotFound (F2); 50 accepted, the 51st `TooManyVariants`; percents over 100 `SplitOverfull`; a set racing another set retries and both land; set/remove on a non-draft conflict; remove of an unknown key writes nothing; delete with 50 variants is one transaction of 53 actions and leaves no item; PATCH of subject alone keeps text and vice versa.
 
 ### T3 — Service and API (`campaigns/Campaigns.ts`, `api/Api.live.ts`)
 
@@ -48,14 +48,14 @@
 
 ### T4 — Dispatcher (`sending/Dispatching.ts`)
 
-- Per slice: `getRoutes`, and a `Cache.make({ capacity: maxVariants + 1, lookup })` over `getCopy`; `chooseVariant` over the routes.
-- Tests: a slice reads only the copies its members get; a missing copy item is a defect.
+- Per slice: `getRoutes`, and a `Cache.make({ capacity: maxVariants + 1, lookup })` over `getCopy`; `chooseVariant` over the routes. The copy is chosen and fetched before the slot and deadline check (review F3).
+- Tests: a slice reads only the copies its members get; a slow first copy read that exhausts the budget defers the member unclaimed.
 
 ### T5 — Preview and test send (`campaigns/PreviewPage.ts`, `TestSends.ts`, `Copies.ts`)
 
 - Routes `/previews/:token` (default copy plus a list of every copy with its rule, each linking to its page) and `/previews/:token/:key` (one copy, a link back). Unknown key → not-found page.
-- Test send reads the campaign, plus the variant when one is named.
-- Tests: PreviewPage.test for both pages and an unknown key; TestSends.test for a named variant and `VariantNotFound`.
+- Test send and a variant's preview page read META and the one copy (review F4).
+- Tests: PreviewPage.test for both pages and an unknown key; TestSends.test for a named variant (no default BODY read) and `VariantNotFound`.
 - Manual: agent-browser on the test stage — the overview links open each copy's page under the CSP sandbox.
 
 ### T6 — CLI (`apps/cli/src/commands/Campaigns.ts`)
@@ -67,7 +67,8 @@
 
 - `Variants.live.ts`: set variants through PUT; fetch a variant; preview overview and one copy page.
 - README: limits (50, rule size), commands, contract, preview; ADR-0028 gets "Amended by ADR-0029".
-- `pnpm test:integration`; a manual walkthrough on `--stage test` with 50 variants at a realistic size (a script sets them), a send to simulator addresses, the preview in a browser; destroy and check the account.
+- `pnpm test:integration`; a manual walkthrough on `--stage test` with 50 variants plus the default at their full size limits (a script sets them): set and replace, GET of the campaign and one variant, the preview pages in a browser, draft delete; then a smaller campaign sent to simulator addresses. Destroy and check the account.
+- Already proven (plan review): a transaction deleting 15 items of 380 KB (5.7 MB) succeeds, so deleted items don't count toward the 4 MB cap.
 
 ## Open questions
 

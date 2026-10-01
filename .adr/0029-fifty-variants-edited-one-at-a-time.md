@@ -1,6 +1,7 @@
 # ADR-0029: Fifty variants, each copy edited and read on its own
 
-- Status: Proposed
+- Status: Accepted
+- Accepted: 2026-10-01, after one plan review with the Codex reviewer
 - Date: 2026-10-01
 - Authority: Task 165. Max asked for 50 variants per campaign instead of 4, "unless there's a strong reason that speaks against it", and for a design that holds at 50, with big refactors welcome (emailer is not in production yet).
 - Amends [ADR-0028](0028-campaign-variants-and-attribute-merge.md): decisions 1 (the limit), 3 (storage, edits, reads) and 5 (preview). Selection, dispatch, tags and attribute merge stay as decided there.
@@ -22,21 +23,21 @@
 2. **Storage: one item per copy, and the routing on its own item.** Under `CAMPAIGN#<id>`:
    - `META`: unchanged; the default copy's subject stays here for the listing.
    - `BODY`: the default copy's text and HTML only, as before ADR-0028.
-   - `ROUTES` (new): `{ routes, revision }`, the variants' rules in order as a JSON string, at most about 260 KB. Absent means no variants.
+   - `ROUTES` (new): `{ routes, revision }`, the variants' rules in order as a JSON string, at most about 260 KB. Absent means no variant was ever set. Once written, it stays until the campaign is deleted, even with no routes left: deleting it would restart its revision, and a stale edit could then pass the condition.
    - `BODY#<key>`: a variant's subject, text and HTML, as in ADR-0028.
 3. **Every write touches one copy, so every request and transaction stays at one copy's size.**
    - **Create** takes no variants: it writes `BODY`, then `META`, as before ADR-0028.
    - **`PATCH /campaigns/:id`** edits the default copy and META's fields and takes no variants. It is one transaction of updates of exactly the fields sent: META (`subject`, `listId`, `filter`) conditioned on `draft` (a `ConditionCheck` when none of them is sent), and `BODY` (`text`, `html`) when either is sent. With no read-modify-write left, it needs no revision and no retry, and two edits of different fields both land.
    - **`PUT /campaigns/:id/variants/:key`** sets one variant: it replaces the one with that key in place, so its `when` keeps its turn, or appends it. One transaction: a `ConditionCheck` that META is a draft, the `ROUTES` Put conditioned on the revision read, and the `BODY#<key>` Put. A lost race retries from a fresh read, as in ADR-0028.
-   - **`DELETE /campaigns/:id/variants/:key`** removes one the same way, deleting `ROUTES` with its last route. A key that isn't there changes nothing.
-   - **A draft delete** reads `ROUTES` and deletes META (conditioned on `draft`), `BODY`, `ROUTES` (conditioned on the revision read) and every variant body in one transaction: at most 53 of the 100 actions allowed.
+   - **`DELETE /campaigns/:id/variants/:key`** removes one the same way, with a `BODY#<key>` Delete in place of the Put. A key that isn't there changes nothing.
+   - **A draft delete** reads `ROUTES` and deletes META (conditioned on `draft`), `BODY`, `ROUTES` (conditioned on the revision read) and every variant body in one transaction: at most 53 of the 100 actions allowed. The 4 MB transaction cap doesn't count deleted items: a probe on a throwaway table deleted 15 items of 380 KB (5.7 MB) in one transaction.
    - A set that would make 51 variants answers `TooManyVariants` (422), and one that would take more than 100 percent answers `SplitOverfull` (422). Both depend on the stored routes, so the contract can't refuse them at decoding.
 4. **Every read fetches what it shows.**
    - **`GET /campaigns/:id`** answers the summary, the default copy and `variants` as rules only (`{ key, when }` or `{ key, percent }`): `ROUTES` and `BODY`, then META.
-   - **`GET /campaigns/:id/variants/:key`** answers one variant with its content: `ROUTES`, then `BODY#<key>`; an unknown key is `VariantNotFound` (404).
+   - **`GET /campaigns/:id/variants/:key`** answers one variant with its content: `ROUTES`, then `BODY#<key>`; an unknown key is `VariantNotFound` (404). Two `GetItem`s are no snapshot, so a body missing under a route is told apart by reading `ROUTES` again: a changed revision means an edit landed in between and the read starts over, and only an unchanged one is corrupt.
    - **The preview** is one page per copy. `/previews/<token>` shows the default copy and lists every copy with its rule, each linking to `/previews/<token>/<key>`, which shows that copy. The token stays per campaign, and the preview function keeps `GetItem` only.
-   - **A test send** reads only the copy it sends.
-   - **The dispatcher** reads `ROUTES` once per slice and each copy the first time a recipient of that slice needs it, through a slice-scoped `Cache`. A copy no recipient of the slice gets is never read.
+   - **A test send** reads META and only the copy it sends; so does a variant's preview page.
+   - **The dispatcher** reads `ROUTES` once per slice and each copy the first time a recipient of that slice needs it, through a slice-scoped `Cache`. A copy no recipient of the slice gets is never read. The copy is chosen and fetched before the recipient's send slot is reserved and the deadline checked, so a slow read can only defer an unclaimed recipient. A copy missing during a run is corrupt, since copies change only in a draft.
 5. **The CLI** maps one to one: `campaigns variants set` is the PUT, `variants remove` the DELETE, and a new `variants get <id> <key>` shows one variant. `campaigns get` shows the rules.
 6. **Compatibility.** Prod has never run ADR-0028 (its table holds no `revision`, `variants` or `BODY#` items), so `BODY` returns to its pre-ADR-0028 shape and no migration is needed.
 
@@ -61,5 +62,6 @@
   - every slice reads `ROUTES`: 1 RRU when absent or small, so about $0.00025 per 100k sends for a single-copy campaign;
   - variant copies are read once per slice that uses them: at about 9 RRU for a typical 35 KB copy, a 50-way split costs about $0.07 per 100k sends; at the size limit, about $0.65;
   - per send nothing changes: the send row stays under 1 KB, and the SES tag is free;
-  - a variant edit is a transactional write of up to about 330 KB, which is fractions of a cent.
+  - a variant edit is a transactional write of up to about 330 KB, which is fractions of a cent;
+  - deletes are billed by the deleted item's size: a draft delete with 50 full-size variants costs about 34,000 WRU, about $0.02. The probe's 15 items of 380 KB took 11,160 WRU.
 - **Merging and retries:** two concurrent variant edits on one draft serialise through the `ROUTES` revision; the loser re-reads and re-applies its single change.
