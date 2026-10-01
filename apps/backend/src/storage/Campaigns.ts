@@ -1084,24 +1084,46 @@ export const campaignOperations = (
     });
   }, retryDraftRace);
 
+  /** Drops one variant the rules name, its rule and its body together: the rules it leaves. */
+  const dropVariant = (campaignId: string, current: Routes, key: string, operation: string) => {
+    const next: Routes = {
+      routes: current.routes.filter((route) => route.key !== key),
+      revision: (current.revision ?? 0) + 1,
+    };
+
+    return Effect.as(
+      writeVariant(campaignId, operation, next.routes, current.revision, {
+        Delete: { Table: tableLogicalId, Key: variantBodyKey(campaignId, key) },
+      }),
+      next,
+    );
+  };
+
   /** Removes one variant of a draft, its rule and its body together; an unknown key changes nothing. */
   const removeVariant = Effect.fn("Storage.removeVariant")(function* (
     campaignId: string,
     key: string,
   ) {
-    const { routes, revision } = yield* getRoutes(campaignId);
-    const kept = routes.filter((route) => route.key !== key);
+    const current = yield* getRoutes(campaignId);
 
-    if (kept.length < routes.length) {
-      yield* writeVariant(campaignId, "removeVariant", kept, revision, {
-        Delete: { Table: tableLogicalId, Key: variantBodyKey(campaignId, key) },
-      });
+    if (current.routes.some((route) => route.key === key)) {
+      yield* dropVariant(campaignId, current, key, "removeVariant");
     }
   }, retryDraftRace);
 
-  /** Deletes a draft and every copy the rules it read name, only while those rules are unchanged. */
+  /**
+   * Deletes a draft and every copy, one copy per transaction: each variant is dropped as
+   * `removeVariant` drops it, and the draft itself goes last, with the rules as they then are. One
+   * transaction over fifty full-size copies would ask the campaign's partition for some 33,000 write
+   * units at once, which DynamoDB throttles. A delete cut short leaves a draft with fewer variants,
+   * so repeating it finishes the job.
+   */
   const deleteDraft = Effect.fn("Storage.deleteDraft")(function* (id: string) {
-    const { routes, revision } = yield* getRoutes(id);
+    let current = yield* getRoutes(id);
+
+    for (const { key } of current.routes) {
+      current = yield* dropVariant(id, current, key, "deleteDraft");
+    }
 
     // A campaign another delete already removed fails META's condition as not found.
     yield* transact("deleteDraft", [
@@ -1118,12 +1140,9 @@ export const campaignOperations = (
       },
       { Delete: { Table: tableLogicalId, Key: bodyKey(id) } },
       {
-        Delete: { Table: tableLogicalId, Key: routesKey(id), ...sameRevision(revision) },
+        Delete: { Table: tableLogicalId, Key: routesKey(id), ...sameRevision(current.revision) },
         refused: () => new DraftChanged(),
       },
-      ...routes.map((route) => ({
-        Delete: { Table: tableLogicalId, Key: variantBodyKey(id, route.key) },
-      })),
     ]);
   }, retryDraftRace);
 

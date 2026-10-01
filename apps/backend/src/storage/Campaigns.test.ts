@@ -988,55 +988,67 @@ describe("removeVariant", () => {
 });
 
 describe("deleteDraft", () => {
-  it.effect("deletes META only while a draft, its body, its rules as read and every variant", () =>
-    Effect.gen(function* () {
-      const { table, storage } = withStorage({
-        getItem: [routesRead(2, [{ key: "half", percent: 50 }])],
-      });
+  const metaDelete = {
+    Delete: {
+      Table: tableLogicalId,
+      Key: metaKey,
+      ConditionExpression: "#state = :draft",
+      ExpressionAttributeNames: { "#state": "state" },
+      ExpressionAttributeValues: { ":draft": { S: "draft" } },
+      ReturnValuesOnConditionCheckFailure: "ALL_OLD",
+    },
+  };
 
-      yield* storage.deleteDraft(campaignId);
+  it.effect(
+    "drops each variant in its own transaction, then META only while a draft, BODY and the rules",
+    () =>
+      Effect.gen(function* () {
+        const half = { key: "half", percent: 50 };
+        const berlin = { key: "berlin", when: { city: "Berlin" } };
+        const { table, storage } = withStorage({ getItem: [routesRead(2, [half, berlin])] });
 
-      expect(table.transactionRequests).toHaveLength(1);
-      expect(table.transactionRequests[0]?.TransactItems).toStrictEqual([
-        {
-          Delete: {
-            Table: tableLogicalId,
-            Key: metaKey,
-            ConditionExpression: "#state = :draft",
-            ExpressionAttributeNames: { "#state": "state" },
-            ExpressionAttributeValues: { ":draft": { S: "draft" } },
-            ReturnValuesOnConditionCheckFailure: "ALL_OLD",
-          },
-        },
-        { Delete: { Table: tableLogicalId, Key: bodyKey } },
-        {
-          Delete: {
-            Table: tableLogicalId,
-            Key: routesKey,
-            ConditionExpression: "revision = :revision",
-            ExpressionAttributeValues: { ":revision": { N: "2" } },
-          },
-        },
-        { Delete: { Table: tableLogicalId, Key: variantKey("half") } },
-      ]);
-    }),
-  );
+        yield* storage.deleteDraft(campaignId);
 
-  it.effect("deletes a campaign with every variant it may hold in one transaction", () =>
-    Effect.gen(function* () {
-      const full = Array.from({ length: Schemas.maxVariants }, (_, index) => ({
-        key: `v${index}`,
-        percent: 1,
-      }));
-
-      const { table, storage } = withStorage({ getItem: [routesRead(9, full)] });
-
-      yield* storage.deleteDraft(campaignId);
-
-      // DynamoDB takes up to 100 actions in one transaction.
-      expect(table.transactionRequests).toHaveLength(1);
-      expect(table.transactionRequests[0]?.TransactItems).toHaveLength(Schemas.maxVariants + 3);
-    }),
+        expect(table.getItemRequests).toHaveLength(1);
+        expect(table.transactionRequests.map((request) => request.TransactItems)).toStrictEqual([
+          [
+            draftCheck,
+            {
+              Put: {
+                Table: tableLogicalId,
+                Item: routesAt(3, [berlin]),
+                ConditionExpression: "revision = :revision",
+                ExpressionAttributeValues: { ":revision": { N: "2" } },
+              },
+            },
+            { Delete: { Table: tableLogicalId, Key: variantKey("half") } },
+          ],
+          [
+            draftCheck,
+            {
+              Put: {
+                Table: tableLogicalId,
+                Item: routesAt(4, []),
+                ConditionExpression: "revision = :revision",
+                ExpressionAttributeValues: { ":revision": { N: "3" } },
+              },
+            },
+            { Delete: { Table: tableLogicalId, Key: variantKey("berlin") } },
+          ],
+          [
+            metaDelete,
+            { Delete: { Table: tableLogicalId, Key: bodyKey } },
+            {
+              Delete: {
+                Table: tableLogicalId,
+                Key: routesKey,
+                ConditionExpression: "revision = :revision",
+                ExpressionAttributeValues: { ":revision": { N: "4" } },
+              },
+            },
+          ],
+        ]);
+      }),
   );
 
   it.effect("deletes the rules only if none were ever set, when it read none", () =>
@@ -1045,17 +1057,21 @@ describe("deleteDraft", () => {
 
       yield* storage.deleteDraft(campaignId);
 
-      expect(table.transactionRequests[0]?.TransactItems[2]).toStrictEqual({
-        Delete: {
-          Table: tableLogicalId,
-          Key: routesKey,
-          ConditionExpression: "attribute_not_exists(revision)",
+      expect(table.transactionRequests[0]?.TransactItems).toStrictEqual([
+        metaDelete,
+        { Delete: { Table: tableLogicalId, Key: bodyKey } },
+        {
+          Delete: {
+            Table: tableLogicalId,
+            Key: routesKey,
+            ConditionExpression: "attribute_not_exists(revision)",
+          },
         },
-      });
+      ]);
     }),
   );
 
-  it.effect("re-reads and deletes the variant an edit added after the first read", () =>
+  it.effect("starts over from fresh rules when an edit set a variant meanwhile", () =>
     Effect.gen(function* () {
       const { table, storage } = withStorage({
         getItem: [noRoutes, routesRead(1, [{ key: "half", percent: 50 }])],
@@ -1064,8 +1080,8 @@ describe("deleteDraft", () => {
 
       yield* storage.deleteDraft(campaignId);
 
-      expect(table.transactionRequests).toHaveLength(2);
-      expect(table.transactionRequests[1]?.TransactItems[3]).toStrictEqual({
+      expect(table.transactionRequests).toHaveLength(3);
+      expect(table.transactionRequests[1]?.TransactItems[2]).toStrictEqual({
         Delete: { Table: tableLogicalId, Key: variantKey("half") },
       });
     }),
