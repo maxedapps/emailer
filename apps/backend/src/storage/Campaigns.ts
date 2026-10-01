@@ -473,12 +473,16 @@ const campaignReads = (primitives: ReadPrimitives) => {
     return summaryOf(yield* readCampaign("getSummary", response.Item));
   });
 
-  /** The campaign's own text and HTML, of a campaign whose META the caller holds. */
+  /**
+   * The campaign's own text and HTML, read after its META. A body missing then is a delete that
+   * landed in between, unless META is still there: the body is written first and deleted with it.
+   */
   const getBody = Effect.fn("Storage.getBody")(function* (campaignId: string) {
     const response = yield* readItem("getBody", bodyKey(campaignId));
 
-    // A META without a body is corrupt: the body is written first and deleted with it.
     if (response.Item === undefined) {
+      yield* getSummary(campaignId);
+
       return yield* Effect.die(new CorruptItem({ operation: "getBody" }));
     }
 

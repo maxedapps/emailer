@@ -183,7 +183,8 @@ export const variantsSuite = (test: LiveTest) => {
               params: { id: campaign.id, key },
               payload: { when: { segment: key }, subject: `Copy ${key}`, text, html },
             }),
-          { concurrency: 4, discard: true },
+          // One at a time, so the rules keep the keys' order.
+          { discard: true },
         );
 
         // Replacing one keeps its place; one more is refused.

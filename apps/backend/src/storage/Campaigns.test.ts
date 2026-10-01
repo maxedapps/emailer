@@ -586,6 +586,30 @@ describe("getVariant", () => {
   );
 });
 
+describe("getBody", () => {
+  it.effect("answers CampaignNotFound when a delete landed after META was read", () =>
+    Effect.gen(function* () {
+      const { storage } = withStorage({ getItem: [Effect.succeed({}), Effect.succeed({})] });
+
+      expect(yield* Effect.flip(storage.getBody(campaignId))).toStrictEqual(
+        new Errors.CampaignNotFound(),
+      );
+    }),
+  );
+
+  it.effect("treats a body missing under a META that is still there as corrupt", () =>
+    Effect.gen(function* () {
+      const { storage } = withStorage({
+        getItem: [Effect.succeed({}), Effect.succeed({ Item: meta({ state: "draft" }) })],
+      });
+
+      expect(yield* defectOf(storage.getBody(campaignId))).toStrictEqual(
+        new CorruptItem({ operation: "getBody" }),
+      );
+    }),
+  );
+});
+
 describe("getVariantContent", () => {
   it.effect("treats a body missing during a run as corrupt, since no edit can remove it", () =>
     Effect.gen(function* () {
