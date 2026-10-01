@@ -2,6 +2,13 @@
 
 - Status: Accepted
 - Accepted: 2026-10-01, after one plan review with the Codex reviewer
+- Confirmed: 2026-10-01.
+  - The live suite passed 41 of 41 cases on its own stage, which it then destroyed. That includes a case with 50 variants plus the default, all at full body size: set, replaced in place, the 51st refused, read, previewed and deleted, leaving no item behind.
+  - On the ephemeral stage `test`, a CLI walkthrough set 50 full-size variants, read them and sent a test of one. A draft with 49 of them was deleted in 33 s, one copy per transaction.
+  - The preview overview and a variant's page were followed in a browser under the CSP sandbox.
+  - A send to six simulator addresses gave the segment members their copies and the others the split copy their buckets predict.
+  - A send of 50 full-size variants at 2% each to 50 simulator addresses ran as one dispatcher slice: 33 distinct copies were read, all 50 were accepted in 21 s, nothing was throttled, and memory peaked at 231 of 512 MB.
+  - The stage was destroyed, and the account holds none of its resources.
 - Date: 2026-10-01
 - Authority: Task 165. Max asked for 50 variants per campaign instead of 4, "unless there's a strong reason that speaks against it", and for a design that holds at 50, with big refactors welcome (emailer is not in production yet).
 - Amends [ADR-0028](0028-campaign-variants-and-attribute-merge.md): decisions 1 (the limit), 3 (storage, edits, reads) and 5 (preview). Selection, dispatch, tags and attribute merge stay as decided there.
