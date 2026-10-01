@@ -61,7 +61,7 @@
 ## Consequences
 
 - **50 copies at their size limit work end to end.** No request, response, item or transaction carries more than one copy plus the rules, and no write asks the campaign's partition for more than one copy's write units.
-- **Deleting a draft with many full-size variants takes tens of seconds**, and a delete that times out is safe to repeat.
+- **Deleting a draft with many full-size variants takes tens of seconds**, and a delete that times out is safe to repeat. The delete is no longer all-or-nothing: a `send` or `schedule` that lands mid-delete makes the next step's draft check refuse it (409). The campaign then goes out without the variants already dropped, and their members get what the remaining rules choose. Every step was a legitimate removal, so the state stays consistent.
 - **Contract changes** (nothing outside this repo uses them): create and `PATCH` no longer take `variants`; `GET /campaigns/:id` answers rules only; three variant endpoints; two 422 errors; `DraftChanged` leaves `PATCH`; the preview link opens an overview of the copies.
 - **`PATCH` gets simpler:** no read before the write, no revision, no retry.
 - **Cost** (DynamoDB on-demand, consistent reads at 1 RRU per 4 KB; slices of 50 members, so 2,000 slices per 100k sends):
