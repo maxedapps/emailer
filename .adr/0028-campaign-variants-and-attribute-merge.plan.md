@@ -1,6 +1,6 @@
 # Plan: Alternate copies inside a campaign, and attributes merged into existing contacts
 
-- Status: In progress
+- Status: Done
 - Decision: [ADR-0028](0028-campaign-variants-and-attribute-merge.md)
 
 ## Goal
@@ -158,7 +158,7 @@ Status: Done
 
 ### T8 — Live gate and walkthrough
 
-Status: To do
+Status: Done (see the ADR's Confirmed line)
 
 - Export the CLI credentials and `AWS_REGION`, then run `pnpm test:integration`. It deploys and destroys its own stage.
 - **Manual:**
@@ -169,7 +169,7 @@ Status: To do
 
 ### T9 — Merge
 
-Status: To do
+Status: Done
 
 - Settle the review, get `pnpm check` green, and run the leak grep over the diff and the messages.
 - Merge into `main`, push, and remove the worktree and branch.

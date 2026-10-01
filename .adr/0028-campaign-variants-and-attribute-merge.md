@@ -2,6 +2,13 @@
 
 - Status: Accepted
 - Accepted: 2026-10-01, after one plan review with the Codex reviewer
+- Confirmed: 2026-10-01.
+  - The live suite passed 40 of 40 cases on its own stage, which it then destroyed. That includes the variants case: a merge into imported contacts keeps their other keys, the preview shows every copy, each send row names the copy its rule or bucket chose, and the bounce row carries the `variant` tag.
+  - A CLI walkthrough on the ephemeral stage `test` covered import, `set-attributes` (two updated, one not found), `contacts update --attr/--unset`, `variants set` (and its refusals), preview, `test --variant` (and `VariantNotFound`), and a send to six simulator addresses:
+    - the two beginners got `beginners`;
+    - the four others got `b`, which their buckets (16, 33, 8, 5, all under 50) predict.
+  - `variants remove` and a draft delete left no body item behind.
+  - The stage was destroyed, and the account holds none of its resources.
 - Date: 2026-10-01
 - Authority: Task 165. Two explorations designed this (task 133, score-driven, and task 165, score-free). Max then decided:
   - build variants now, with no pilot;
