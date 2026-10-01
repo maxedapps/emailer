@@ -132,7 +132,7 @@ const campaignId = "0195f0a0-1111-4222-8333-4444444ca409";
 const sendId = "0195f0a0-1111-4222-8333-44444444e5d1";
 
 const campaignMail = (sent: MessageContent = content) =>
-  Mail.Campaign({ content: sent, unsubscribeUrl, campaignId, sendId });
+  Mail.Campaign({ content: sent, unsubscribeUrl, campaignId, sendId, variant: "b" });
 
 const sending = (transport: Transport, mail: Mail = campaignMail()) =>
   Effect.gen(function* () {
@@ -171,6 +171,7 @@ const campaignRequest = (Body: sesv2.Body = { Text: textPart }) => ({
   EmailTags: [
     { Name: "campaignId", Value: campaignId },
     { Name: "sendId", Value: sendId },
+    { Name: "variant", Value: "b" },
   ],
   ConfigurationSetName: "emailer-mail",
 });
@@ -340,7 +341,7 @@ describe("makeSend", () => {
   );
 
   it.effect.each([
-    ["a campaign send", campaignMail(), { mail: "Campaign", campaignId, sendId }],
+    ["a campaign send", campaignMail(), { mail: "Campaign", campaignId, sendId, variant: "b" }],
     ["a test send", Mail.Test({ content, unsubscribeUrl }), { mail: "Test" }],
   ] as const)(
     "logs why %s ended uncertain, without the recipient's address, the body, the link or credentials",

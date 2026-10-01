@@ -37,6 +37,7 @@ const campaign: Schemas.Campaign = {
   html: "<p>Hello there</p>",
   createdAt: "2026-09-11T10:00:00.000Z",
   submission: { state: "draft" },
+  variants: [{ key: "half", percent: 50, subject: "Half notes", text: "Split copy" }],
 };
 
 const healthy: SendAllowance = { limit: 3 };
@@ -184,6 +185,29 @@ describe("sendTest", () => {
         );
         expect(fix.slots).toStrictEqual([healthy.limit, healthy.limit]);
       }),
+  );
+
+  it.effect("sends the variant the payload names, and refuses a key the campaign lacks", () =>
+    Effect.gen(function* () {
+      const fix = fixture();
+
+      yield* run(fix, { to: ["a@example.com"], variant: "half" });
+
+      expect(fix.sent[0]?.mail).toMatchObject({
+        content: { subject: "[Test] Half notes", text: "Split copy", html: undefined },
+      });
+
+      yield* run(fix, { to: ["a@example.com"], variant: "default" });
+
+      expect(fix.sent[1]?.mail).toMatchObject({ content: { subject: "[Test] Release notes" } });
+
+      const missing = fixture();
+
+      expect(
+        failureOf(yield* run(missing, { to: ["a@example.com"], variant: "berlin" })),
+      ).toStrictEqual(new Errors.VariantNotFound({ variant: "berlin" }));
+      expect(missing.sent).toStrictEqual([]);
+    }),
   );
 
   it.effect("sends each address only once its pacing slot's delay has passed", () =>

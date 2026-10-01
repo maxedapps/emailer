@@ -1,7 +1,6 @@
 import { makeEmailerClient } from "@emailer/api/Client";
 import * as Errors from "@emailer/api/Errors";
 import { Effect, Result } from "effect";
-import { HttpClient, HttpClientRequest } from "effect/unstable/http";
 import { describe, expect } from "vitest";
 
 import { newIdentifier } from "../Identifiers.ts";
@@ -11,6 +10,7 @@ import {
   campaignMeta,
   configuration,
   contactFor,
+  fetchPage,
   liveStorage,
   sendRows,
   simulator,
@@ -19,9 +19,6 @@ import {
 } from "../../test/IntegrationSupport.ts";
 
 const draftingTimeout = 180_000;
-
-const fetchPage = (url: string) =>
-  Effect.flatMap(HttpClient.HttpClient, (client) => client.execute(HttpClientRequest.get(url)));
 
 const counters = ["accepted", "rejected", "uncertain", "skipped", "bounced", "complained"] as const;
 

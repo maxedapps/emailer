@@ -21,6 +21,10 @@ const decodeEntry = Schema.decodeUnknownEffect(Schemas.ImportContactEntry);
 
 const decodeFile = Schema.decodeUnknownEffect(Schemas.ImportContactsFile);
 
+const decodeAttributeUpdate = Schema.decodeUnknownEffect(Schemas.AttributeUpdate);
+
+const decodeAttributesFile = Schema.decodeUnknownEffect(Schemas.SetAttributesFile);
+
 /** `email` and `name` in any case name those fields; any other header is an attribute's key. */
 const fieldOf = (column: string) => {
   const lower = column.toLowerCase();
@@ -57,11 +61,11 @@ const entryOf = (fields: ReadonlyArray<string>, record: ReadonlyArray<string>) =
 };
 
 /**
- * Reads a CSV export as an import file. The first row names the columns: `email` is required and
- * `name` optional, in any case, and every other column is an attribute under its header. Each row
- * then passes the checks a JSON entry does, and a row that fails is named by its line.
+ * A CSV export's rows as entries, each with the line it came from. The first row names the
+ * columns: `email` is required and `name` optional, in any case, and every other column is an
+ * attribute under its header.
  */
-export const decodeCsvContacts = Effect.fn("decodeCsvContacts")(function* (text: string) {
+const readEntries = Effect.fn("readEntries")(function* (text: string) {
   const [header, ...rows] = yield* decodeRows(
     yield* Effect.try({
       try: () => parse(text, { bom: true, skip_empty_lines: true, info: true }),
@@ -85,13 +89,47 @@ export const decodeCsvContacts = Effect.fn("decodeCsvContacts")(function* (text:
     return yield* new InvalidCsv({ message: "The header has no email column" });
   }
 
-  const contacts = yield* Effect.forEach(rows, ({ record, info }) =>
-    decodeEntry(entryOf(fields, record)).pipe(
-      Effect.mapError(
-        (error) => new InvalidCsv({ message: `line ${info.lines}: ${error.message}` }),
-      ),
+  return {
+    fields,
+    rows: rows.map(({ record, info }) => ({ entry: entryOf(fields, record), line: info.lines })),
+  };
+});
+
+/** Each row passes the checks a JSON entry does, and a row that fails is named by its line. */
+const decodeEach = <A>(
+  rows: ReadonlyArray<{ readonly entry: RowEntry; readonly line: number }>,
+  decode: (entry: RowEntry) => Effect.Effect<A, Schema.SchemaError>,
+) =>
+  Effect.forEach(rows, ({ entry, line }) =>
+    decode(entry).pipe(
+      Effect.mapError((error) => new InvalidCsv({ message: `line ${line}: ${error.message}` })),
     ),
   );
 
-  return yield* decodeFile({ contacts });
+/** Reads a CSV export as an import file. */
+export const decodeCsvContacts = Effect.fn("decodeCsvContacts")(function* (text: string) {
+  const { rows } = yield* readEntries(text);
+
+  return yield* decodeFile({ contacts: yield* decodeEach(rows, decodeEntry) });
+});
+
+/**
+ * Reads a CSV file as attributes to merge into existing contacts: the email column and one column
+ * per attribute. A blank cell leaves that attribute alone. A name column is refused rather than
+ * read as an attribute called `name`, which it names everywhere else.
+ */
+export const decodeCsvAttributes = Effect.fn("decodeCsvAttributes")(function* (text: string) {
+  const { fields, rows } = yield* readEntries(text);
+
+  if (fields.includes("name")) {
+    return yield* new InvalidCsv({
+      message: "The file has a name column; it sets attributes only, so remove the column",
+    });
+  }
+
+  const contacts = yield* decodeEach(rows, (entry) =>
+    decodeAttributeUpdate({ email: entry.email, attributes: entry.attributes ?? {} }),
+  );
+
+  return yield* decodeAttributesFile({ contacts });
 });

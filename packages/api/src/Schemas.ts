@@ -10,13 +10,14 @@ const maxHtmlBytes = 256 * 1024;
 
 export const maxEmailLength = 254;
 
-const maxAttributeEntries = 20;
+export const maxAttributeEntries = 20;
 
 export const maxAttributeKeyLength = 64;
 
 const maxAttributeValueLength = 512;
 
-export const maxImportEntries = 20;
+/** The most contacts one import or attribute merge call takes: one transaction's worth. */
+export const maxBatchEntries = 20;
 
 /**
  * The most recipients one test send reaches. It goes out synchronously inside the API's 60-second
@@ -142,22 +143,35 @@ export const CampaignHtml = Schema.String.check(Schema.isNonEmpty(), utf8ByteCei
 
 export type CampaignHtml = typeof CampaignHtml.Type;
 
+const AttributeKey = Schema.String.check(
+  Schema.isNonEmpty(),
+  Schema.isMaxLength(maxAttributeKeyLength),
+);
+
+const AttributeValue = Schema.String.check(Schema.isMaxLength(maxAttributeValueLength));
+
 /**
  * Bounded caller-supplied attributes. The key bound is `isPropertyNames` plus `isMaxProperties`
  * rather than a check on the `Record` key schema: a key check narrows which properties are
  * *selected*, so an over-long key would be silently dropped instead of rejected.
  */
-export const ContactAttributes = Schema.Record(
-  Schema.String,
-  Schema.String.check(Schema.isMaxLength(maxAttributeValueLength)),
-).check(
-  Schema.isPropertyNames(
-    Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(maxAttributeKeyLength)),
-  ),
+export const ContactAttributes = Schema.Record(Schema.String, AttributeValue).check(
+  Schema.isPropertyNames(AttributeKey),
   Schema.isMaxProperties(maxAttributeEntries),
 );
 
 export type ContactAttributes = typeof ContactAttributes.Type;
+
+/**
+ * A merge patch for a contact's attributes (RFC 7396): a string sets a key, null removes it, and a
+ * key left out keeps its value.
+ */
+export const AttributePatch = Schema.Record(Schema.String, Schema.NullOr(AttributeValue)).check(
+  Schema.isPropertyNames(AttributeKey),
+  Schema.isMaxProperties(maxAttributeEntries),
+);
+
+export type AttributePatch = typeof AttributePatch.Type;
 
 export const Contact = Schema.Struct({
   id: EntityId,
@@ -281,8 +295,111 @@ export const CampaignBody = Schema.Struct({
 
 export type CampaignBody = typeof CampaignBody.Type;
 
-/** A campaign is its summary, which `list` answers alone, plus its body. */
-export const Campaign = Schema.Struct({ ...CampaignSummary.fields, ...CampaignBody.fields });
+/** The key the campaign's own copy — its subject, text and HTML — is sent and recorded under. */
+export const defaultCopy = "default";
+
+const maxVariants = 4;
+
+const maxTargetingEntries = 4;
+
+const maxPercent = 100;
+
+/**
+ * Which copy a recipient got. Short, and a valid SES tag value, which allows only ASCII letters,
+ * digits, `_` and `-`.
+ */
+export const CopyKey = Schema.String.check(
+  Schema.isPattern(/^[A-Za-z0-9_-]{1,32}$/, {
+    message: "Expected 1 to 32 ASCII letters, digits, _ or -",
+  }),
+);
+
+export type CopyKey = typeof CopyKey.Type;
+
+/** An alternate copy's key: any copy key but the one the campaign's own copy holds. */
+export const VariantKey = CopyKey.check(
+  Schema.makeFilter((key: string) =>
+    key === defaultCopy ? `"${defaultCopy}" names the campaign's own copy` : undefined,
+  ),
+);
+
+/**
+ * How a variant is chosen: `when` targets contacts whose attributes equal every entry, `percent`
+ * takes that share of everyone no `when` targeted. Each branch declares the other selector as
+ * `Never`, so a rule naming both, which would otherwise decode as the first branch with the second
+ * selector dropped, is refused.
+ */
+const targeted = {
+  when: Schema.Record(Schema.String, AttributeValue).check(
+    Schema.isPropertyNames(AttributeKey),
+    Schema.isMinProperties(1),
+    Schema.isMaxProperties(maxTargetingEntries),
+  ),
+  percent: Schema.optionalKey(Schema.Never),
+};
+
+const split = {
+  percent: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: maxPercent })),
+  when: Schema.optionalKey(Schema.Never),
+};
+
+/** A variant's rule without its content: what a campaign's default body records. */
+export const VariantRoute = Schema.Union([
+  Schema.Struct({ key: VariantKey, ...targeted }),
+  Schema.Struct({ key: VariantKey, ...split }),
+]);
+
+export type VariantRoute = typeof VariantRoute.Type;
+
+const variantContent = {
+  subject: CampaignSubject,
+  text: CampaignText,
+  html: Schema.optionalKey(CampaignHtml),
+};
+
+export const Variant = Schema.Union([
+  Schema.Struct({ key: VariantKey, ...targeted, ...variantContent }),
+  Schema.Struct({ key: VariantKey, ...split, ...variantContent }),
+]);
+
+export type Variant = typeof Variant.Type;
+
+type Routed = ReadonlyArray<{ readonly key: string; readonly percent?: number }>;
+
+/** Keys name one copy each, and the default copy takes whatever share the percents leave. */
+const routeChecks = [
+  Schema.isMinLength(1),
+  Schema.isMaxLength(maxVariants),
+  Schema.makeFilter((routes: Routed) =>
+    new Set(routes.map((route) => route.key)).size === routes.length
+      ? undefined
+      : "Expected each variant key at most once",
+  ),
+  Schema.makeFilter((routes: Routed) =>
+    routes.reduce((sum, route) => sum + (route.percent ?? 0), 0) <= maxPercent
+      ? undefined
+      : `Expected the percents to add up to at most ${maxPercent}`,
+  ),
+] as const;
+
+export const VariantRoutes = Schema.Array(VariantRoute).check(...routeChecks);
+
+export type VariantRoutes = typeof VariantRoutes.Type;
+
+/** A campaign's alternate copies, in the order their rules are tried. */
+export const Variants = Schema.Array(Variant).check(...routeChecks);
+
+export type Variants = typeof Variants.Type;
+
+/**
+ * A campaign is its summary, which `list` answers alone, plus its own copy's body and any
+ * alternate copies.
+ */
+export const Campaign = Schema.Struct({
+  ...CampaignSummary.fields,
+  ...CampaignBody.fields,
+  variants: Schema.optionalKey(Variants),
+});
 
 export type Campaign = typeof Campaign.Type;
 
@@ -396,6 +513,7 @@ export const CreateCampaignPayload = Schema.Struct({
   html: Schema.optionalKey(CampaignHtml),
   /** AND of attribute equalities; absent or `{}` means the whole list. */
   filter: Schema.optionalKey(ContactAttributes),
+  variants: Schema.optionalKey(Variants),
 });
 
 export type CreateCampaignPayload = typeof CreateCampaignPayload.Type;
@@ -412,14 +530,16 @@ export type ScheduleCampaignPayload = typeof ScheduleCampaignPayload.Type;
 export const UpdateContactPayload = Schema.Struct({
   email: Schema.optionalKey(EmailAddress),
   name: Schema.optionalKey(Schema.NullOr(EntityName)),
-  attributes: Schema.optionalKey(Schema.NullOr(ContactAttributes)),
+  /** Merged into the contact's attributes; null removes them all. */
+  attributes: Schema.optionalKey(Schema.NullOr(AttributePatch)),
 });
 
 export type UpdateContactPayload = typeof UpdateContactPayload.Type;
 
 /**
  * A draft edit, with `UpdateContactPayload`'s convention: absent leaves a field alone, and null
- * removes an optional one — the HTML body, or the filter so the campaign goes to the whole list.
+ * removes an optional one — the HTML body, the filter so the campaign goes to the whole list, or
+ * the variants. Variants are replaced as a whole.
  */
 export const UpdateCampaignPayload = Schema.Struct({
   listId: Schema.optionalKey(EntityId),
@@ -427,6 +547,7 @@ export const UpdateCampaignPayload = Schema.Struct({
   text: Schema.optionalKey(CampaignText),
   html: Schema.optionalKey(Schema.NullOr(CampaignHtml)),
   filter: Schema.optionalKey(Schema.NullOr(ContactAttributes)),
+  variants: Schema.optionalKey(Schema.NullOr(Variants)),
 });
 
 export type UpdateCampaignPayload = typeof UpdateCampaignPayload.Type;
@@ -494,7 +615,7 @@ const eachMailboxOnce = Schema.makeFilter(
 export const ImportContactsFile = Schema.Struct({ contacts: importEntries }).check(eachMailboxOnce);
 
 export const ImportContactsPayload = Schema.Struct({
-  contacts: importEntries.check(Schema.isMaxLength(maxImportEntries)),
+  contacts: importEntries.check(Schema.isMaxLength(maxBatchEntries)),
 }).check(eachMailboxOnce);
 
 export type ImportContactsPayload = typeof ImportContactsPayload.Type;
@@ -511,6 +632,42 @@ export const ImportContactsResult = Schema.Struct({
 
 export type ImportContactsResult = typeof ImportContactsResult.Type;
 
+/** A patch for the attributes of the contact holding an address. */
+export const AttributeUpdate = Schema.Struct({ email: EmailAddress, attributes: AttributePatch });
+
+const attributeUpdates = Schema.Array(AttributeUpdate).check(Schema.isNonEmpty());
+
+/** A whole attribute file as the CLI reads it, of any size; it sends the file in payloads. */
+export const SetAttributesFile = Schema.Struct({ contacts: attributeUpdates }).check(
+  eachMailboxOnce,
+);
+
+/** Patches merged into the contacts holding these addresses. */
+export const SetAttributesPayload = Schema.Struct({
+  contacts: attributeUpdates.check(Schema.isMaxLength(maxBatchEntries)),
+}).check(eachMailboxOnce);
+
+export type SetAttributesPayload = typeof SetAttributesPayload.Type;
+
+/** One entry per address, in payload order: its contact, or that no contact holds it. */
+export const SetAttributesResult = Schema.Struct({
+  contacts: Schema.Array(
+    Schema.Union([
+      Schema.Struct({
+        email: NormalizedEmailAddress,
+        outcome: Schema.Literal("updated"),
+        contactId: EntityId,
+      }),
+      Schema.Struct({ email: NormalizedEmailAddress, outcome: Schema.Literal("not-found") }),
+    ]),
+  ),
+});
+
+export type SetAttributesResult = typeof SetAttributesResult.Type;
+
+/** Which copy a test sends; the campaign's own when absent. */
+const testedCopy = { variant: Schema.optionalKey(CopyKey) };
+
 /** Explicit addresses, each at most once, or one list whose every member is a recipient. */
 export const TestSendPayload = Schema.Union([
   Schema.Struct({
@@ -519,8 +676,9 @@ export const TestSendPayload = Schema.Union([
       Schema.isMaxLength(maxTestRecipients),
       Schema.makeFilter(distinctMailboxes),
     ),
+    ...testedCopy,
   }),
-  Schema.Struct({ listId: EntityId }),
+  Schema.Struct({ listId: EntityId, ...testedCopy }),
 ]);
 
 export type TestSendPayload = typeof TestSendPayload.Type;

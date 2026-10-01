@@ -5,6 +5,7 @@ import { functionServicesLayer, lambdaBasics } from "../Lambda.ts";
 import { respondingToFailures } from "../Reporting.ts";
 import { compose, escapeHtml, senderSettings } from "../sending/Message.ts";
 import { CampaignReader } from "../storage/Campaigns.ts";
+import { copiesOf } from "./Copies.ts";
 import {
   maxPreviewTokenLength,
   PreviewFunction,
@@ -100,8 +101,8 @@ const displayedFrom = (settings: PreviewSender): string =>
 
 /**
  * Verifies before it reads: a forged or expired token costs no storage read. The campaign is read
- * afresh on every request, so a link shows the draft as it is now, composed exactly as a send
- * composes it, placeholder unsubscribe link aside.
+ * afresh on every request, so a link shows the draft as it is now, every copy composed exactly as
+ * a send composes it, placeholder unsubscribe link aside.
  */
 const showPreview = (settings: PreviewSender) =>
   HttpRouter.add(
@@ -118,20 +119,20 @@ const showPreview = (settings: PreviewSender) =>
 
       const reader = yield* CampaignReader;
       const campaign = yield* reader.getCampaign(campaignId.value);
-      const message = compose(campaign, placeholderUnsubscribeUrl, settings.postalAddress);
 
-      return respond(
-        200,
-        document(
-          `Preview: ${message.subject}`,
-          `<header><dl>
+      const copies = copiesOf(campaign).map(({ key, content, rule }) => {
+        const message = compose(content, placeholderUnsubscribeUrl, settings.postalAddress);
+
+        return `<header><dl>
+<dt>Copy</dt><dd>${escapeHtml(key)}, for ${escapeHtml(rule)}</dd>
 <dt>From</dt><dd>${escapeHtml(displayedFrom(settings))}</dd>
 <dt>Subject</dt><dd>${escapeHtml(message.subject)}</dd>
 </dl></header>
 <section><h2>HTML</h2>${htmlPart(message.html)}</section>
-<section><h2>Plain text</h2><pre>${escapeHtml(message.text)}</pre></section>`,
-        ),
-      );
+<section><h2>Plain text</h2><pre>${escapeHtml(message.text)}</pre></section>`;
+      });
+
+      return respond(200, document(`Preview: ${campaign.subject}`, copies.join("\n")));
     }).pipe(
       // A campaign deleted since the link was signed.
       Effect.catchTag("CampaignNotFound", () => Effect.succeed(notFound)),

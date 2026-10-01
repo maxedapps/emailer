@@ -479,7 +479,14 @@ describe("campaigns", () => {
         campaigns: {
           getCampaign: () => Effect.succeed(campaign),
           getCampaignControl: () => Effect.succeed(draft),
-          updateDraft: recording(calls, undefined),
+          updateDraft: (id, edit) =>
+            Effect.sync(() => {
+              const next = edit(campaign);
+
+              calls.push([id, next]);
+
+              return next;
+            }),
           deleteDraft: recording(calls, undefined),
         },
       });
@@ -491,7 +498,7 @@ describe("campaigns", () => {
       yield* call((client) => client.campaigns.remove({ params: { id: campaignId } }));
 
       expect(edited).toStrictEqual({ ...campaign, subject: "New" });
-      expect(calls).toStrictEqual([[edited], [campaignId]]);
+      expect(calls).toStrictEqual([[campaignId, edited], [campaignId]]);
     }),
   );
 
@@ -1252,6 +1259,23 @@ describe("request decoding", () => {
           "POST",
           "/campaigns",
           `{"listId":"${listId}","subject":"Release notes","text":"${"t".repeat(Schemas.maxTextBytes + 1)}"}`,
+        ),
+    ],
+    // Without the other selector declared `Never`, default decoding would drop `percent` here.
+    [
+      "a variant naming both selectors",
+      () =>
+        send(
+          "POST",
+          "/campaigns",
+          JSON.stringify({
+            listId,
+            subject: "Release notes",
+            text: "Hello",
+            variants: [
+              { key: "b", when: { plan: "pro" }, percent: 50, subject: "B", text: "Copy B" },
+            ],
+          }),
         ),
     ],
   ] as const)("answers 400 for %s, reaching no service", ([_label, request]) =>

@@ -35,6 +35,8 @@ const FeedbackRow = Schema.Struct({
   feedbackId: Schema.String,
   recipient: Schema.String,
   messageId: Schema.String,
+  /** The copy the mail was, from its tag; mail sent before copies were tagged has none. */
+  variant: Schema.optional(Schema.String),
   outcome: FeedbackOutcome,
   receivedAt: Schemas.Timestamp,
   bounceType: Schema.optional(Schema.String),

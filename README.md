@@ -7,6 +7,7 @@ Self-hosted marketing email over Amazon SES. Deploy it to your own AWS account, 
 - **Audience:** contacts with up to 20 `key=value` attributes, lists, and JSON or CSV imports.
 - **Campaigns** written in Markdown and rendered to email-safe HTML and plain text, or supplied as your own text and HTML files.
 - **Targeting:** send to a whole list, or only to members whose attributes match a filter.
+- **Variants:** up to four alternate copies in one campaign, sent by contact attribute or as a random or weighted split ([Different copies for different members](#different-copies-for-different-members)).
 - **Drafting:** preview links that open on any device, and `[Test]` copies to up to 20 addresses.
 - **Delivery:** send now or schedule for later; cancel a pending send and resume a paused one.
 - **Sign-ups:** an API for your website's newsletter form, with double opt-in and stored consent evidence, reached with scoped keys ([Sign-ups from your website](#sign-ups-from-your-website)).
@@ -20,7 +21,7 @@ Self-hosted marketing email over Amazon SES. Deploy it to your own AWS account, 
 
 - There is no web interface. You manage everything from the CLI.
 - There are no hosted sign-up or confirm pages. Your site hosts both and calls the sign-up API.
-- There is no personalization. Every recipient gets the same content, apart from their own unsubscribe link.
+- There are no merge fields. Each recipient gets one of the campaign's copies as written, apart from their own unsubscribe link.
 - There is no open or click tracking.
 - Markdown campaigns share one fixed layout. For any other design, supply your own HTML.
 
@@ -276,20 +277,37 @@ Every command also accepts:
 
 **Writing in Markdown.** The CLI renders both parts from the same file: HTML with inline styles in a 600px layout, and plain text. Use absolute `https://` image URLs. Raw HTML passes through unstyled. The service stores only the rendered result, so keep your Markdown file. For your own design, pass `--text` and `--html` files instead of `--markdown`.
 
+### Different copies for different members
+
+A campaign's own subject and body are its **default** copy. Add up to four **variants**, each with its own subject and body:
+
+```sh
+pnpm emailer campaigns variants set <campaignId> beginners --subject "Start here" --markdown beginners.md --when level=beginner
+pnpm emailer campaigns variants set <campaignId> b --subject "Release notes" --markdown b.md --percent 50
+```
+
+- **Who gets which copy:** the first `--when` variant, in the order you added them, whose `key=value` entries all match the member's attributes. Everyone else is split: each `--percent` variant takes its share, and the default copy takes the rest. So `--when` alone gives segment copies with a default, `--percent` alone an A/B or weighted test, and both together "these segments get their copy, everyone else is split".
+- **The split is fresh per campaign and stable within it:** a member lands in the same share on every delivery of that campaign, but may land in another share in the next campaign.
+- **Attributes count until the member is reached.** A change before the dispatcher gets to a member changes their copy; after that, the copy is fixed.
+- **Compare copies through your site's analytics:** give each copy's links their own `utm_content`. There is no open or click tracking. Each send row, and each bounce or complaint, records the copy's key, and every message carries it as the SES tag `variant`.
+- `campaigns preview` shows every copy, each with its rule. `campaigns test --variant <key>` sends one of them.
+- To get a segment attribute onto existing contacts, use `contacts set-attributes --file segments.csv`.
+
 ### Commands
 
 Each command below is run as `pnpm emailer <command>`. `[…]` marks an optional flag, `a | b` marks alternatives, and `…` marks a flag you can repeat.
 
 **Contacts**
 
-| Command                                                                                                | What it does                                             |
-| ------------------------------------------------------------------------------------------------------ | -------------------------------------------------------- |
-| `contacts create --email <address> [--name <name>] [--attr key=value …]`                               | Create a contact                                         |
-| `contacts get <contactId>`                                                                             | Show a contact                                           |
-| `contacts by-email --email <address>`                                                                  | Find the contact that holds an address                   |
-| `contacts list [--limit <n>] [--cursor <cursor>]`                                                      | List contacts in the order they were created             |
-| `contacts update <contactId> [--email <address>] [--name <name> \| --clear-name] [--attr key=value …]` | Change a contact; an omitted flag leaves its field alone |
-| `contacts delete <contactId>`                                                                          | Delete a contact and remove it from every list           |
+| Command                                                                                                                                       | What it does                                                   |
+| --------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| `contacts create --email <address> [--name <name>] [--attr key=value …]`                                                                      | Create a contact                                               |
+| `contacts get <contactId>`                                                                                                                    | Show a contact                                                 |
+| `contacts by-email --email <address>`                                                                                                         | Find the contact that holds an address                         |
+| `contacts list [--limit <n>] [--cursor <cursor>]`                                                                                             | List contacts in the order they were created                   |
+| `contacts update <contactId> [--email <address>] [--name <name> \| --clear-name] [--attr key=value …] [--unset <key> …] [--clear-attributes]` | Change a contact; an omitted flag leaves its field alone       |
+| `contacts set-attributes --file <csv>`                                                                                                        | Merge each row's attributes into the contact holding its email |
+| `contacts delete <contactId>`                                                                                                                 | Delete a contact and remove it from every list                 |
 
 **Lists**
 
@@ -312,7 +330,9 @@ Each command below is run as `pnpm emailer <command>`. `[…]` marks an optional
 | `campaigns create --list <listId> --subject <subject> (--markdown <file> \| --text <file> [--html <file>]) [--filter key=value …]`                                    | Create a draft                                                |
 | `campaigns update <campaignId> [--list <listId>] [--subject <subject>] [--markdown <file> \| --text <file> [--html <file>]] [--filter key=value … \| --clear-filter]` | Change a draft; an omitted flag leaves its field alone        |
 | `campaigns preview <campaignId> [--open]`                                                                                                                             | Create a 24-hour preview link                                 |
-| `campaigns test <campaignId> (--to <address> … \| --list <listId> [--yes])`                                                                                           | Send a `[Test]` copy now                                      |
+| `campaigns variants set <campaignId> <key> --subject <subject> (--markdown <file> \| --text <file> [--html <file>]) (--when key=value … \| --percent <n>)`            | Add a variant to a draft, or replace the one with this key    |
+| `campaigns variants remove <campaignId> <key>`                                                                                                                        | Remove a variant from a draft                                 |
+| `campaigns test <campaignId> (--to <address> … \| --list <listId> [--yes]) [--variant <key>]`                                                                         | Send a `[Test]` copy now                                      |
 | `campaigns send <campaignId>`                                                                                                                                         | Queue the campaign for sending now                            |
 | `campaigns schedule <campaignId> --at <date-time>`                                                                                                                    | Send the campaign at a future time                            |
 | `campaigns cancel <campaignId>`                                                                                                                                       | Withdraw a scheduled or queued send                           |
@@ -342,7 +362,9 @@ Each command below is run as `pnpm emailer <command>`. `[…]` marks an optional
 - **Listings:** `{ items, nextCursor? }`. Pass `nextCursor` as `--cursor` to get the next page.
 - **`lists add-contact` / `remove-contact`:** `{ listId, contactId, member }`. **Deletes:** `{ id, deleted: true }`.
 - **`lists import`:** `{ contacts: [{ email, contactId, member }] }`, one entry per imported address, in file order.
-- **A campaign:** `{ id, listId, subject, createdAt, filter?, submission, text, html? }`; `campaigns list` leaves out `text` and `html`.
+- **`contacts set-attributes`:** `{ contacts: [{ email, outcome, contactId? }] }` in file order. `outcome` is `updated`, with the `contactId`, or `not-found` when no contact holds the address.
+- **A campaign:** `{ id, listId, subject, createdAt, filter?, submission, text, html?, variants? }`; `campaigns list` leaves out `text`, `html` and `variants`.
+  - Each variant is `{ key, subject, text, html?, when }` or `{ key, subject, text, html?, percent }`.
   - `submission.state` is `draft`, `scheduled` (with `sendAt`), `queued`, `sending`, `paused` (with a `reason`) or `completed`.
   - From `sending` on, it carries `progress` (`accepted`, `rejected`, `uncertain`, `skipped`) and `feedback` (`bounced`, `complained`).
 - **`campaigns test`:** `{ recipients: [{ email, outcome, … }] }`. The `outcome` is one of:
@@ -358,31 +380,34 @@ Each command below is run as `pnpm emailer <command>`. `[…]` marks an optional
 - **A failure** goes to stderr as the error the API answered, named by its `_tag`, and the command exits non-zero:
   - **400** for a request the contract refuses, including a value over a limit below;
   - **401** `Unauthorized` for a missing or wrong API token;
-  - **404** `ContactNotFound`, `ListNotFound`, `CampaignNotFound` or `ApiKeyNotFound`;
-  - **409** for a conflict: `EmailAlreadyUsed`, `AddressOptedOut`, `ContactChanged`, `CampaignStateConflict`, `SendAtNotInFuture` or `TestAudienceTooLarge`;
+  - **404** `ContactNotFound`, `ListNotFound`, `CampaignNotFound`, `VariantNotFound` or `ApiKeyNotFound`;
+  - **409** for a conflict: `EmailAlreadyUsed`, `AddressOptedOut`, `ContactChanged`, `DraftChanged`, `CampaignStateConflict`, `SendAtNotInFuture` or `TestAudienceTooLarge`;
+  - **422** `TooManyAttributes` when a merge would leave a contact with more than 20 attributes;
   - **503** when sending is halted (`SendingPaused`) or a dependency is unavailable: `StorageUnavailable`, `EmailServiceUnavailable`, `QueueUnavailable`, `SchedulerUnavailable` or `AlarmsUnavailable`, each naming the `operation` and the `failure`.
 
 ### Limits
 
-| What                   | Limit                                                                                |
-| ---------------------- | ------------------------------------------------------------------------------------ |
-| Subject                | 200 characters                                                                       |
-| Contact and list names | 200 characters                                                                       |
-| Text body              | 64 KB (UTF-8), including a body rendered from Markdown                               |
-| HTML body              | 256 KB (UTF-8), including a body rendered from Markdown                              |
-| Contact attributes     | 20 entries; keys up to 64 characters, values up to 512                               |
-| `lists import`         | any file size, sent 20 contacts per call; one address may not appear twice in a file |
-| `campaigns test`       | 20 recipients                                                                        |
-| Listings               | `--limit` 1–100, default 25                                                          |
-| Sign-up consent        | `wording` 1,000 characters, `source` 200, `ip` 45                                    |
-| Key confirm page       | an absolute `https:` URL, 2,000 characters                                           |
+| What                                      | Limit                                                                                                                            |
+| ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| Subject                                   | 200 characters                                                                                                                   |
+| Contact and list names                    | 200 characters                                                                                                                   |
+| Text body                                 | 64 KB (UTF-8), including a body rendered from Markdown                                                                           |
+| HTML body                                 | 256 KB (UTF-8), including a body rendered from Markdown                                                                          |
+| Contact attributes                        | 20 entries; keys up to 64 characters, values up to 512                                                                           |
+| Variants                                  | 4 per campaign; keys 1–32 letters, digits, `_` or `-`, not `default`; `--when` 1–4 entries; percents 1–100, at most 100 together |
+| `lists import`, `contacts set-attributes` | any file size, sent 20 contacts per call; one address may not appear twice in a file                                             |
+| `campaigns test`                          | 20 recipients                                                                                                                    |
+| Listings                                  | `--limit` 1–100, default 25                                                                                                      |
+| Sign-up consent                           | `wording` 1,000 characters, `source` 200, `ip` 45                                                                                |
+| Key confirm page                          | an absolute `https:` URL, 2,000 characters                                                                                       |
 
 ### Behavior
 
 - An address identifies at most one contact, case-insensitively. Creating or updating onto an address another contact holds answers **409** `EmailAlreadyUsed`.
 - An update, delete or import that races another change to the same contact tries again twice, then answers **409** `ContactChanged`; run it again.
-- `--attr` replaces the whole attribute map; it does not merge. Repeat it per entry. `--clear-name` removes the name.
-- `lists import` rejects a file with a key the format does not declare, such as a misspelled `attributs`, before anything is sent, and names the key's path. It reports where each address stands after the import, not what changed, so running the same file again is safe and returns the same answer. An address that already has a contact gains the membership but keeps its name and attributes; use `contacts update` for those.
+- `contacts update --attr` sets the attributes it names and keeps the others; repeat it per entry. `--unset <key>` removes one attribute and `--clear-attributes` removes them all. `--clear-name` removes the name.
+- `lists import` rejects a file with a key the format does not declare, such as a misspelled `attributs`, before anything is sent, and names the key's path. It reports where each address stands after the import, not what changed, so running the same file again is safe and returns the same answer. An address that already has a contact gains the membership but keeps its name and attributes; use `contacts set-attributes` or `contacts update` for those.
+- `contacts set-attributes` reads a CSV file with an `email` column and one column per attribute. It merges each row into the contact holding that address and keeps that contact's other attributes; a blank cell changes nothing, and a `name` column is refused. It adds no one to a list and creates no contact: an address no contact holds is reported `not-found`. It sends the file like `lists import`, and running it again is safe.
 - `lists import` sends the file 20 contacts per call, 4 calls at a time: about 250 contacts a second into one list, near the most DynamoDB takes for one list without throttling. A call that fails in transit, times out or answers 408, 429 or 5xx is sent again for about two minutes. Progress goes to stderr every 1,000 contacts. If the import stops, stderr says how many contacts went in; running the same file again completes it.
 - A `.csv` file is read as CSV. The header's `email` and `name` columns match in any case, and every other column becomes an attribute named by its header, so delete export columns you don't want first. Empty cells are left out. A missing `email` column or a column named twice is rejected, and a row that fails the checks is named by its line.
 - `--filter` keeps members whose attributes equal every `key=value` (AND). Omit it for the whole list. Members that don't match are left out entirely and are not counted in `skipped`.
@@ -393,9 +418,10 @@ Each command below is run as `pnpm emailer <command>`. `[…]` marks an optional
 - `campaigns send` exits zero when the campaign is **queued**. Poll `campaigns get` for `progress`, `feedback` and a `paused` reason.
 - `campaigns schedule` exits zero when the campaign is `scheduled`. `--at` is an ISO date (`YYYY-MM-DD`) or date-time; no zone means UTC. Past instants are **409**. The scheduler fires with 60-second precision. `campaigns send` on a scheduled campaign sends now.
 - `campaigns cancel` withdraws a pending send. A `scheduled` campaign, or a `queued` first send that never started, returns to `draft`. A `queued` resume returns to `paused` with reason `manual`. A campaign that is `sending` or `completed`, or whose send another command replaced in the meantime, answers **409** `CampaignStateConflict`. Cancel does not stop messages already handed to SES, or recall mail.
+- `campaigns variants set` adds a variant, or replaces the one with the same key where it stands; `remove` drops one. Both edit drafts only, and a draft edited by someone else at the same moment is re-read and edited again.
 - `campaigns update` and `campaigns delete` apply to drafts only; any other state is **409** `CampaignStateConflict`. Cancel a scheduled campaign to edit it. Content flags replace the whole body: `--text` without `--html` drops an earlier HTML body. `--markdown` excludes `--text`/`--html`. `--clear-filter` sends to the whole list again.
 - `campaigns preview`: anyone holding the link sees that campaign until it expires, so share it like a password. It always renders the campaign as it is now, with a placeholder instead of the recipient's unsubscribe link. A single link cannot be revoked; destroying the stage revokes all of them.
-- `campaigns test` sends right away to the `--to` addresses, or to every member of a `--list`; the campaign's filter does not apply. For `--list` it shows the member count and asks on stderr; pass `--yes` when no one can answer (a script or pipe). The subject gets a `[Test] ` prefix. Unsubscribed, suppressed and bouncing addresses are skipped, and each address gets one attempt. It uses the account's daily quota and send pacing, and answers **503** `SendingPaused` while a reputation halt or the daily budget stops sending. **The unsubscribe link in a test message is real**: clicking it opts that address out of the campaign's list, whichever list the test went to. Addresses that left the campaign's list are skipped for the same reason. A test bounce or complaint suppresses the address but never counts against the campaign.
+- `campaigns test` sends right away to the `--to` addresses, or to every member of a `--list`; the campaign's filter does not apply. For `--list` it shows the member count and asks on stderr; pass `--yes` when no one can answer (a script or pipe). The subject gets a `[Test] ` prefix. `--variant <key>` sends that variant's copy instead of the campaign's own; an unknown key is **404** `VariantNotFound`. Unsubscribed, suppressed and bouncing addresses are skipped, and each address gets one attempt. It uses the account's daily quota and send pacing, and answers **503** `SendingPaused` while a reputation halt or the daily budget stops sending. **The unsubscribe link in a test message is real**: clicking it opts that address out of the campaign's list, whichever list the test went to. Addresses that left the campaign's list are skipped for the same reason. A test bounce or complaint suppresses the address but never counts against the campaign.
 - An individual recipient is never retried automatically. A recipient whose SES response was lost stays `uncertain`.
 
 Every campaign and test message gets a postal footer, `List-Unsubscribe` and one-click `List-Unsubscribe-Post`. Open/click tracking is off.
@@ -432,7 +458,7 @@ Send the key as `Authorization: Bearer <key>` and a JSON body:
 }
 ```
 
-`name` and `attributes` are optional. `consent.wording` is the text the subscriber agreed to, `consent.source` names the form, and `ip` is the subscriber's address as your server saw it. All three are stored as consent evidence.
+`name` and `attributes` are optional. Attributes are stored only on a new contact; an address that already has one keeps its own, so a public form never overwrites what you set. `consent.wording` is the text the subscriber agreed to, `consent.source` names the form, and `ip` is the subscriber's address as your server saw it. All three are stored as consent evidence.
 
 | Status | `_tag`                                                                                  | Meaning                                                                                 |
 | ------ | --------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |

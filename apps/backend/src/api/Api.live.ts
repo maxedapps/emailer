@@ -55,7 +55,7 @@ const importSuccessContacts = (
       contacts.push({ email: simulator("success", runId, n) });
     }
 
-    const batchSize = Schemas.maxImportEntries;
+    const batchSize = Schemas.maxBatchEntries;
 
     for (let start = 0; start < contacts.length; start += batchSize) {
       yield* client.lists.import({
@@ -496,7 +496,7 @@ export const apiSuite = (test: LiveTest) => {
           contacts.push({ email: simulator("success", runId, n) });
         }
 
-        const batchSize = Schemas.maxImportEntries;
+        const batchSize = Schemas.maxBatchEntries;
 
         for (let start = 0; start < contacts.length; start += batchSize) {
           yield* client.lists.import({

@@ -120,11 +120,14 @@ const configurationSetTag = "ses:configuration-set";
 
 const campaignTag = "campaignId";
 
+const variantTag = "variant";
+
 export const expectedConfigurationSet = Config.String("EMAILER_CONFIGURATION_SET");
 
 const record = Effect.fn("Feedback.record")(function* (event: EmailEvent) {
   const classified = classify(event);
   const campaignId = event.mail.tags?.[campaignTag]?.[0];
+  const variant = event.mail.tags?.[variantTag]?.[0];
   const messageId = event.mail.messageId;
 
   const storage = yield* FeedbackStore;
@@ -164,6 +167,7 @@ const record = Effect.fn("Feedback.record")(function* (event: EmailEvent) {
           feedbackId: classified.feedbackId,
           recipient,
           messageId,
+          variant,
           outcome: classified.outcome,
           receivedAt,
           bounceType: classified.bounceType,

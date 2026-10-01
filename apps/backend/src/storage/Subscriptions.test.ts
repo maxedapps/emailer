@@ -294,6 +294,7 @@ describe("confirmSubscription", () => {
                   email: { S: email },
                   name: { S: "Sam" },
                   createdAt: { S: confirmedAt },
+                  revision: { N: "1" },
                 },
                 ConditionExpression: "attribute_not_exists(pk)",
               },

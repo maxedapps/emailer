@@ -71,7 +71,12 @@ class ContactsGroup extends HttpApiGroup.make("contacts")
       success: Schemas.page(Schemas.Contact, Schemas.EntityCursor),
       error: storage,
     }),
-    // A static segment wins over ":id" in the router regardless of declaration order.
+    // Static segments win over ":id" in the router regardless of declaration order.
+    HttpApiEndpoint.post("setAttributes", "/attributes", {
+      payload: Schemas.SetAttributesPayload,
+      success: Schemas.SetAttributesResult,
+      error: [...storage, Errors.ContactChanged, Errors.TooManyAttributes],
+    }),
     HttpApiEndpoint.get("getByEmail", "/by-email", {
       query: { email: Schemas.EmailAddress },
       success: Schemas.Contact,
@@ -92,6 +97,7 @@ class ContactsGroup extends HttpApiGroup.make("contacts")
         Errors.EmailAlreadyUsed,
         Errors.AddressOptedOut,
         Errors.ContactChanged,
+        Errors.TooManyAttributes,
       ],
     }),
     HttpApiEndpoint.delete("remove", "/:id", {
@@ -181,12 +187,18 @@ class CampaignsGroup extends HttpApiGroup.make("campaigns")
         Errors.CampaignNotFound,
         Errors.ListNotFound,
         Errors.CampaignStateConflict,
+        Errors.DraftChanged,
       ],
     }),
     HttpApiEndpoint.delete("remove", "/:id", {
       params: { id: Schemas.EntityId },
       success: HttpApiSchema.NoContent,
-      error: [...storage, Errors.CampaignNotFound, Errors.CampaignStateConflict],
+      error: [
+        ...storage,
+        Errors.CampaignNotFound,
+        Errors.CampaignStateConflict,
+        Errors.DraftChanged,
+      ],
     }),
     HttpApiEndpoint.post("preview", "/:id/preview", {
       params: { id: Schemas.EntityId },
@@ -203,6 +215,7 @@ class CampaignsGroup extends HttpApiGroup.make("campaigns")
         Errors.EmailServiceUnavailable,
         Errors.AlarmsUnavailable,
         Errors.CampaignNotFound,
+        Errors.VariantNotFound,
         Errors.ListNotFound,
         Errors.TestAudienceTooLarge,
         Errors.SendingPaused,

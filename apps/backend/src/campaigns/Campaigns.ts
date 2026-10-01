@@ -29,12 +29,19 @@ export const create = Effect.fn("Campaigns.create")(function* (
   return created;
 });
 
-/** Absent fields keep their value; null removes the HTML body or the filter. */
+/** What an optional field becomes: absent keeps it, null removes it. */
+const changed = <A>(current: A | undefined, change: A | null | undefined): A | undefined =>
+  change === undefined ? current : (change ?? undefined);
+
+/** Absent fields keep their value; null removes the HTML body, the filter or the variants. */
 const edited = (
   current: Schemas.Campaign,
   change: Schemas.UpdateCampaignPayload,
 ): Schemas.Campaign => {
-  const { html, filter, ...rest } = current;
+  const { html, filter, variants, ...rest } = current;
+  const nextHtml = changed(html, change.html);
+  const nextFilter = changed(filter, change.filter);
+  const nextVariants = changed(variants, change.variants);
 
   const campaign = {
     ...rest,
@@ -43,37 +50,29 @@ const edited = (
     text: change.text ?? current.text,
   };
 
-  const nextHtml = change.html === undefined ? html : (change.html ?? undefined);
-  const nextFilter = change.filter === undefined ? filter : (change.filter ?? undefined);
   const withHtml = nextHtml === undefined ? campaign : { ...campaign, html: nextHtml };
+  const withFilter = nextFilter === undefined ? withHtml : { ...withHtml, filter: nextFilter };
 
-  return nextFilter === undefined ? withHtml : { ...withHtml, filter: nextFilter };
+  return nextVariants === undefined ? withFilter : { ...withFilter, variants: nextVariants };
 };
 
-/** Edits a draft. The whole merged campaign is written, and only while it is still a draft. */
+/**
+ * Edits a draft. The whole merged campaign is written, and only while it is still a draft; a
+ * campaign that left draft or was deleted meanwhile is refused, as found.
+ */
 export const update = Effect.fn("Campaigns.update")(function* (
   campaignId: string,
   change: Schemas.UpdateCampaignPayload,
 ) {
   const audience = yield* AudienceStore;
   const campaigns = yield* CampaignStore;
-  const current = yield* campaigns.getCampaign(campaignId);
-
-  if (current.submission.state !== "draft") {
-    return yield* new CampaignStateConflict({ state: current.submission.state });
-  }
 
   // Read only to answer NotFound for a list that does not exist.
   if (change.listId !== undefined) {
     yield* audience.getList(change.listId);
   }
 
-  const next = edited(current, change);
-
-  // A campaign that left draft or was deleted meanwhile is refused, as found.
-  yield* campaigns.updateDraft(next);
-
-  return next;
+  return yield* campaigns.updateDraft(campaignId, (current) => edited(current, change));
 });
 
 /**

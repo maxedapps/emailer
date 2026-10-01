@@ -157,6 +157,16 @@ export const fakeService = (seed: Seed = {}) => {
           Effect.andThen(found(contacts.get(request.params.id), new Errors.ContactNotFound())),
         ),
       getByEmail: unused("contacts.getByEmail"),
+      setAttributes: (request) =>
+        receive("contacts.setAttributes", { payload: request.payload }).pipe(
+          Effect.as({
+            contacts: request.payload.contacts.map((entry) => ({
+              email: entry.email,
+              outcome: "updated" as const,
+              contactId,
+            })),
+          }),
+        ),
       remove: unused("contacts.remove"),
     }),
   );

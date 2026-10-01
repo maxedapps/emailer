@@ -1,6 +1,7 @@
 import { makeEmailerClient } from "@emailer/api/Client";
 import type { EmailerClient } from "@emailer/api/Client";
-import { Config, Console, Duration, Effect, Inspectable, Schedule } from "effect";
+import * as Schemas from "@emailer/api/Schemas";
+import { Array as Arr, Config, Console, Duration, Effect, Inspectable, Schedule } from "effect";
 import { FetchHttpClient, HttpClient, HttpClientError } from "effect/unstable/http";
 
 /**
@@ -67,3 +68,58 @@ export const withClient = Effect.fn("Client.withClient")(function* <A, E>(
 }, Effect.provide(FetchHttpClient.layer));
 
 export const report = <Value>(value: Value) => Console.log(Inspectable.toStringUnknown(value));
+
+/**
+ * Calls in flight at once. One list's member items share a DynamoDB partition, and past its limit
+ * DynamoDB throttles the transactions and still bills their attempts. On the live gate, four calls
+ * imported about 280 contacts a second with almost no throttling; eight were slower and used 38%
+ * more write units (ADR-0025).
+ */
+const batchConcurrency = 4;
+
+const progressStep = 1_000;
+
+const count = (value: number) => value.toLocaleString("en-US");
+
+/**
+ * A file's contacts of any size go out in payloads of `maxBatchEntries`, several at once, with
+ * progress on stderr. Each answer is the converged state of its batch, so the joined answers are the
+ * file's, in file order, and running the same file again — after a failure too — changes nothing
+ * it already did. `done` names what a confirmed batch did, as in "Imported 1,000 of 5,000".
+ */
+export const inBatches = <Entry, Answer extends { readonly contacts: ReadonlyArray<unknown> }, E>(
+  entries: ReadonlyArray<Entry>,
+  send: (client: EmailerClient, batch: ReadonlyArray<Entry>) => Effect.Effect<Answer, E>,
+  done: string,
+) => {
+  const total = entries.length;
+  let confirmed = 0;
+
+  return withClient(
+    (client) =>
+      Effect.forEach(
+        Arr.chunksOf(entries, Schemas.maxBatchEntries),
+        (batch) =>
+          send(client, batch).pipe(
+            Effect.tap(() => {
+              const before = confirmed;
+
+              confirmed += batch.length;
+
+              return Math.floor(confirmed / progressStep) > Math.floor(before / progressStep)
+                ? Console.error(`${done} ${count(confirmed)} of ${count(total)} contacts`)
+                : Effect.void;
+            }),
+          ),
+        { concurrency: batchConcurrency },
+      ),
+    { retryTransient: true },
+  ).pipe(
+    Effect.map((answers) => answers.flatMap((answer): Answer["contacts"] => answer.contacts)),
+    Effect.tapError(() =>
+      Console.error(
+        `Stopped with ${count(confirmed)} of ${count(total)} contacts confirmed; running the same file again is safe`,
+      ),
+    ),
+  );
+};

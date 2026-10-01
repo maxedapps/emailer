@@ -1,7 +1,9 @@
-import { CampaignNotFound, CampaignStateConflict } from "@emailer/api/Errors";
+import { CampaignNotFound, CampaignStateConflict, DraftChanged } from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
 import * as AWS from "alchemy/AWS";
-import { Context, Crypto, Data, Effect, Layer, Schema } from "effect";
+import { Context, Crypto, Data, Effect, Layer, Option, Predicate, Schema } from "effect";
+
+import { CorruptItem } from "../Errors.ts";
 
 import {
   bodyKey,
@@ -13,12 +15,14 @@ import {
   str,
   strMap,
   tableLogicalId,
+  variantBodyKey,
 } from "./Items.ts";
 import { allPrimitives, readPrimitives } from "./Primitives.ts";
 import { AllTableOperationsHttp, allTableOperations, dataTable } from "./Table.ts";
 
 import type { TableOperations } from "./Items.ts";
 import type {
+  Action,
   PagePrimitives,
   ReadPrimitives,
   StoredItem,
@@ -113,9 +117,34 @@ const readSending = itemReader(SendingRecord);
 
 const writeCampaign = itemWriter(CampaignRecord);
 
-const readBody = itemReader(Schemas.CampaignBody);
+/**
+ * The campaign's own copy, which also records the alternate copies' rules in order: the one item a
+ * slice already reads, rather than `META`, which every settlement rewrites and pays for by size.
+ * The rules are a JSON string, which nothing evaluates into. `revision` counts draft edits, so an
+ * edit or a delete writes only against the copies it read; a body from before revisions has none.
+ */
+const BodyRecord = Schema.Struct({
+  ...Schemas.CampaignBody.fields,
+  variants: Schema.optionalKey(Schema.fromJsonString(Schemas.VariantRoutes)),
+  revision: Schema.optionalKey(Schema.Int),
+});
 
-const writeBody = itemWriter(Schemas.CampaignBody);
+type BodyRecord = typeof BodyRecord.Type;
+
+const readBody = itemReader(BodyRecord);
+
+const writeBody = itemWriter(BodyRecord);
+
+/** An alternate copy's content, one item per variant; its rule lives on the default body. */
+const VariantBody = Schema.Struct({
+  subject: Schemas.CampaignSubject,
+  text: Schemas.CampaignText,
+  html: Schema.optionalKey(Schemas.CampaignHtml),
+});
+
+const readVariantBody = itemReader(VariantBody);
+
+const writeVariantBody = itemWriter(VariantBody);
 
 /** A send row is claimed before its submission and settled after it, or skipped outright. */
 const SendRecord = Schema.Union([
@@ -124,6 +153,7 @@ const SendRecord = Schema.Union([
     sendId: Schemas.EntityId,
     contactId: Schemas.EntityId,
     recipient: Schemas.NormalizedEmailAddress,
+    variant: Schemas.CopyKey,
     startedAt: Schemas.Timestamp,
   }),
   Schema.Struct({
@@ -185,6 +215,9 @@ export class SettlementNotApplied extends Data.TaggedError("SettlementNotApplied
 
 /** Another slice already wrote this recipient's send row. */
 class AlreadyClaimed extends Data.TaggedError("AlreadyClaimed") {}
+
+/** A draft edit changed the copies between reading the body and reading a variant it named. */
+class CopiesMoved extends Data.TaggedError("CopiesMoved") {}
 
 const superseded = () => new RunSuperseded();
 
@@ -314,22 +347,133 @@ const settlementWrite = (settlement: SubmissionOutcome) => {
   }
 };
 
-const bodyItem = (campaign: Schemas.Campaign) =>
-  Effect.map(writeBody(campaign), (attributes) => ({ ...bodyKey(campaign.id), ...attributes }));
+/** A variant's rule, without its content. */
+const routeOf = (variant: Schemas.Variant): Schemas.VariantRoute =>
+  variant.when === undefined
+    ? { key: variant.key, percent: variant.percent }
+    : { key: variant.key, when: variant.when };
 
-/** The two reads a campaign's content needs, and all the public preview function may do. */
+const variantOf = (route: Schemas.VariantRoute, body: typeof VariantBody.Type): Schemas.Variant =>
+  route.when === undefined
+    ? { key: route.key, percent: route.percent, ...body }
+    : { key: route.key, when: route.when, ...body };
+
+/** Every copy's item, the campaign's own body first; `revision` is the edit it is written as. */
+const copyItems = (campaign: Schemas.Campaign, revision: number) =>
+  Effect.gen(function* () {
+    const text = { text: campaign.text, revision };
+    const withHtml = campaign.html === undefined ? text : { ...text, html: campaign.html };
+
+    const own = yield* writeBody(
+      campaign.variants === undefined
+        ? withHtml
+        : { ...withHtml, variants: campaign.variants.map(routeOf) },
+    );
+
+    const variants = yield* Effect.forEach(
+      campaign.variants ?? [],
+      ({ key, when: _when, percent: _percent, ...content }) =>
+        Effect.map(writeVariantBody(content), (attributes) => ({
+          ...variantBodyKey(campaign.id, key),
+          ...attributes,
+        })),
+    );
+
+    return { own: { ...bodyKey(campaign.id), ...own }, variants };
+  });
+
+/** The condition a draft write asserts on the body it read: the same edit, or none before them. */
+const sameRevision = (revision: number | undefined) =>
+  revision === undefined
+    ? { ConditionExpression: "attribute_not_exists(revision)" }
+    : {
+        ConditionExpression: "revision = :revision",
+        ExpressionAttributeValues: { ":revision": num(revision) },
+      };
+
+/** A draft write that lost a race with another edit or a delete retries from a fresh read. */
+const retryDraftRace = <A, E, R>(write: Effect.Effect<A, E, R>) =>
+  Effect.retry(write, { times: 2, while: Predicate.isTagged("DraftChanged") });
+
+/** The reads a campaign's content needs, and all the public preview function may do. */
 const campaignReads = (primitives: ReadPrimitives) => {
   const { readItem } = primitives;
 
-  // No absent case: every caller holds a META that proves the campaign exists, so a missing body
-  // is corrupt, which decoding an undefined item reports.
-  const getCampaignBody = Effect.fn("Storage.getCampaignBody")(function* (campaignId: string) {
-    const response = yield* readItem("getCampaignBody", bodyKey(campaignId));
+  /**
+   * Every copy: the campaign's own body, then each variant its rules name, each by `GetItem`, so
+   * the preview function needs nothing broader. None when there is no body, which a caller holding
+   * a META reads as corrupt. The separate reads can straddle a draft edit: a variant it removed
+   * after the body was read is gone, and then the body is read again. Only a variant missing under
+   * unchanged rules is corrupt.
+   */
+  const readCopies = Effect.fn("Storage.readCopies")(
+    function* (campaignId: string) {
+      const own = yield* readItem("getCopies", bodyKey(campaignId));
 
-    return yield* readBody("getCampaignBody", response.Item);
+      if (own.Item === undefined) {
+        return Option.none();
+      }
+
+      const stored = yield* readBody("getCopies", own.Item);
+
+      const read = yield* Effect.forEach(
+        stored.variants ?? [],
+        (route) =>
+          Effect.map(readItem("getCopies", variantBodyKey(campaignId, route.key)), (response) => ({
+            route,
+            item: response.Item,
+          })),
+        { concurrency: "unbounded" },
+      );
+
+      if (read.some(({ item }) => item === undefined)) {
+        const again = yield* readItem("getCopies", bodyKey(campaignId));
+
+        if (again.Item === undefined) {
+          return Option.none();
+        }
+
+        if ((yield* readBody("getCopies", again.Item)).revision === stored.revision) {
+          return yield* Effect.die(new CorruptItem({ operation: "getCopies" }));
+        }
+
+        return yield* new CopiesMoved();
+      }
+
+      const variants = yield* Effect.forEach(read, ({ route, item }) =>
+        Effect.map(readVariantBody("getCopies", item), (body) => variantOf(route, body)),
+      );
+
+      const body: Schemas.CampaignBody =
+        stored.html === undefined
+          ? { text: stored.text }
+          : { text: stored.text, html: stored.html };
+
+      return Option.some({ body, variants, revision: stored.revision });
+    },
+    // Each round needs another edit to have landed in between, so running out is a defect.
+    (read) =>
+      Effect.retry(read, { times: 3, while: Predicate.isTagged("CopiesMoved") }).pipe(
+        Effect.catchTag("CopiesMoved", (moved) => Effect.die(moved)),
+      ),
+  );
+
+  /** Every copy of a campaign whose META the caller holds, so a missing body is corrupt. */
+  const getCopies = Effect.fn("Storage.getCopies")(function* (campaignId: string) {
+    const copies = yield* readCopies(campaignId);
+
+    return Option.isSome(copies)
+      ? copies.value
+      : yield* Effect.die(new CorruptItem({ operation: "getCopies" }));
   });
 
-  const getCampaign = Effect.fn("Storage.getCampaign")(function* (campaignId: string) {
+  /**
+   * The whole campaign, and the revision of the copies it was read at. The copies are read before
+   * META, so an edit landing after the revision was read fails a write made against it, and one
+   * landing before is in the META read after it: META's fields are never older than the revision.
+   */
+  const loadCampaign = Effect.fn("Storage.loadCampaign")(function* (campaignId: string) {
+    const copies = yield* readCopies(campaignId);
     const response = yield* readItem("getCampaign", campaignKey(campaignId));
 
     if (response.Item === undefined) {
@@ -337,12 +481,23 @@ const campaignReads = (primitives: ReadPrimitives) => {
     }
 
     const stored = yield* readCampaign("getCampaign", response.Item);
-    const body = yield* getCampaignBody(campaignId);
 
-    return { ...summaryOf(stored), ...body } satisfies Schemas.Campaign;
+    // A META without a body is corrupt: the body is written first and deleted with it.
+    if (Option.isNone(copies)) {
+      return yield* Effect.die(new CorruptItem({ operation: "getCampaign" }));
+    }
+
+    const { body, variants, revision } = copies.value;
+    const campaign: Schemas.Campaign = { ...summaryOf(stored), ...body };
+
+    return { campaign: variants.length === 0 ? campaign : { ...campaign, variants }, revision };
   });
 
-  return { getCampaignBody, getCampaign } as const;
+  const getCampaign = Effect.fn("Storage.getCampaign")(function* (campaignId: string) {
+    return (yield* loadCampaign(campaignId)).campaign;
+  });
+
+  return { getCopies, loadCampaign, getCampaign } as const;
 };
 
 export const campaignOperations = (
@@ -353,18 +508,28 @@ export const campaignOperations = (
     PagePrimitives,
 ) => {
   const { readEntityPage, readItem, recordOnce, transact, updateIf } = primitives;
-  const { getCampaignBody, getCampaign } = campaignReads(primitives);
+  const { getCopies, loadCampaign, getCampaign } = campaignReads(primitives);
 
-  // Both keys are fresh identifiers, so an item already there can only be this request landing
-  // again after a lost response: `recordOnce` reports that as done, which it is. BODY goes first
-  // so that META is the commit point: a create interrupted between the two leaves nothing that
-  // any key, index entry or query can reach.
+  // Every key is fresh, so an item already there can only be this request landing again after a
+  // lost response: `recordOnce` reports that as done, which it is. The bodies go first so that
+  // META is the commit point: a create interrupted before it leaves nothing that any key, index
+  // entry or query can reach.
   const createCampaign = Effect.fn("Storage.createCampaign")(function* (
     campaign: Schemas.Campaign,
   ) {
-    yield* recordOnce("createCampaign", yield* bodyItem(campaign));
+    const copies = yield* copyItems(campaign, 1);
 
-    const { text: _text, html: _html, submission: _submission, ...summary } = campaign;
+    for (const item of [...copies.variants, copies.own]) {
+      yield* recordOnce("createCampaign", item);
+    }
+
+    const {
+      text: _text,
+      html: _html,
+      variants: _variants,
+      submission: _submission,
+      ...summary
+    } = campaign;
 
     const stored = yield* writeCampaign({
       ...summary,
@@ -557,6 +722,7 @@ export const campaignOperations = (
     runToken: string,
     contactId: string,
     recipient: string,
+    variant: Schemas.CopyKey,
     sendId: string,
     now: string,
   ) {
@@ -565,6 +731,7 @@ export const campaignOperations = (
       sendId,
       contactId,
       recipient,
+      variant,
       startedAt: now,
     });
 
@@ -766,42 +933,82 @@ export const campaignOperations = (
     );
   });
 
-  // One fixed shape: the caller merges the change into the whole draft, so META's editable fields
-  // and BODY are rewritten together, and only while the campaign is still a draft. A campaign
-  // deleted meanwhile fails the same condition, since its state no longer exists, and the item the
-  // condition returns tells the two apart.
-  const updateDraft = Effect.fn("Storage.updateDraft")(function* (campaign: Schemas.Campaign) {
+  /**
+   * Rewrites a draft as `edit` makes it from the draft just read, in one fixed shape: META's
+   * editable fields, only while the campaign is still a draft, and every copy, with the bodies of
+   * dropped variants deleted. The body is written only against the revision read, so a concurrent
+   * edit or delete makes this one retry from a fresh read rather than leave a body behind. A
+   * campaign deleted meanwhile fails META's condition, since its state no longer exists, and the
+   * item the condition returns tells the two apart.
+   */
+  const updateDraft = Effect.fn("Storage.updateDraft")(function* (
+    campaignId: string,
+    edit: (current: Schemas.Campaign) => Schemas.Campaign,
+  ) {
+    const { campaign: current, revision } = yield* loadCampaign(campaignId);
+
+    if (current.submission.state !== "draft") {
+      return yield* new CampaignStateConflict({ state: current.submission.state });
+    }
+
+    const next = edit(current);
+    const copies = yield* copyItems(next, (revision ?? 0) + 1);
+    const kept = new Set((next.variants ?? []).map((variant) => variant.key));
+
     const values = {
-      ":subject": str(campaign.subject),
-      ":listId": str(campaign.listId),
+      ":subject": str(next.subject),
+      ":listId": str(next.listId),
       ":draft": str("draft"),
     };
 
-    yield* transact("updateDraft", [
+    const actions: Array<Action<CampaignNotFound | CampaignStateConflict | DraftChanged>> = [
       {
         Update: {
           Table: tableLogicalId,
-          Key: campaignKey(campaign.id),
+          Key: campaignKey(campaignId),
           ConditionExpression: "#state = :draft",
           ExpressionAttributeNames: draftNames,
           ReturnValuesOnConditionCheckFailure: "ALL_OLD",
-          ...(campaign.filter === undefined
+          ...(next.filter === undefined
             ? {
                 UpdateExpression: "SET subject = :subject, listId = :listId REMOVE #filter",
                 ExpressionAttributeValues: values,
               }
             : {
                 UpdateExpression: "SET subject = :subject, listId = :listId, #filter = :filter",
-                ExpressionAttributeValues: { ...values, ":filter": strMap(campaign.filter) },
+                ExpressionAttributeValues: { ...values, ":filter": strMap(next.filter) },
               }),
         },
         refused: notADraft("updateDraft"),
       },
-      { Put: { Table: tableLogicalId, Item: yield* bodyItem(campaign) } },
-    ]);
-  });
+      {
+        Put: { Table: tableLogicalId, Item: copies.own, ...sameRevision(revision) },
+        refused: () => new DraftChanged(),
+      },
+      ...copies.variants.map((item) => ({ Put: { Table: tableLogicalId, Item: item } })),
+      ...(current.variants ?? [])
+        .filter((variant) => !kept.has(variant.key))
+        .map((variant) => ({
+          Delete: { Table: tableLogicalId, Key: variantBodyKey(campaignId, variant.key) },
+        })),
+    ];
 
+    yield* transact("updateDraft", actions);
+
+    return next;
+  }, retryDraftRace);
+
+  /** Deletes a draft and every copy the body it read names, only while that body is unchanged. */
   const deleteDraft = Effect.fn("Storage.deleteDraft")(function* (id: string) {
+    // Read first, so a campaign another delete already removed is simply not found.
+    const response = yield* readItem("deleteDraft", bodyKey(id));
+
+    if (response.Item === undefined) {
+      return yield* new CampaignNotFound();
+    }
+
+    const { variants = [], revision } = yield* readBody("deleteDraft", response.Item);
+
     yield* transact("deleteDraft", [
       {
         Delete: {
@@ -814,13 +1021,19 @@ export const campaignOperations = (
         },
         refused: notADraft("deleteDraft"),
       },
-      { Delete: { Table: tableLogicalId, Key: bodyKey(id) } },
+      {
+        Delete: { Table: tableLogicalId, Key: bodyKey(id), ...sameRevision(revision) },
+        refused: () => new DraftChanged(),
+      },
+      ...variants.map((variant) => ({
+        Delete: { Table: tableLogicalId, Key: variantBodyKey(id, variant.key) },
+      })),
     ]);
-  });
+  }, retryDraftRace);
 
   return {
     createCampaign,
-    getCampaignBody,
+    getCopies,
     getCampaign,
     listCampaigns,
     getCampaignControl,

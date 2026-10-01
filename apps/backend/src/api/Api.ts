@@ -44,6 +44,7 @@ const contactsHandlers = HttpApiBuilder.group(EmailerApi, "contacts", (handlers)
       getByEmail: (request) => audience.getContactByEmail(request.query.email),
       list: (request) => audience.listContacts(pageOf(request.query), request.query.cursor),
       update: (request) => audience.updateContact(request.params.id, request.payload),
+      setAttributes: (request) => audience.setAttributes(request.payload.contacts),
       remove: (request) => audience.deleteContact(request.params.id),
     });
   }),

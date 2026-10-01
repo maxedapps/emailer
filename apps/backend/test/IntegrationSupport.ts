@@ -32,7 +32,7 @@ import {
   Scope,
   Stream,
 } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
+import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http";
 
 import { newIdentifier, nowIso } from "../src/Identifiers.ts";
 import { campaignKey, itemReader, str, tableLogicalId } from "../src/storage/Items.ts";
@@ -77,8 +77,17 @@ const readSendRow = itemReader(
     contactId: Schemas.EntityId,
     recipient: Schema.String,
     state: Schema.Literals(["unconfirmed", "accepted", "rejected", "uncertain", "skipped"]),
+    variant: Schema.optionalKey(Schemas.CopyKey),
     finishedAt: Schema.optionalKey(Schemas.Timestamp),
     skipReason: Schema.optionalKey(Schema.String),
+  }),
+);
+
+const readFeedbackRow = itemReader(
+  Schema.Struct({
+    recipient: Schema.String,
+    kind: Schemas.SuppressionReason,
+    variant: Schema.optionalKey(Schema.String),
   }),
 );
 
@@ -519,6 +528,14 @@ export const awaitCampaignFeedback = (
 
 /** Every SEND row of a campaign, across pages: Distilled carries `LastEvaluatedKey` forward. */
 export const sendRows = (campaignId: string) =>
+  campaignRows(campaignId, "SEND#", (item) => readSendRow("sendRows", item));
+
+/** The rows of one kind under a campaign's partition, read strongly consistently. */
+const campaignRows = <A>(
+  campaignId: string,
+  prefix: string,
+  read: (item: dynamodb.AttributeMap) => Effect.Effect<A>,
+) =>
   Effect.gen(function* () {
     const { tableName } = yield* Deployment;
 
@@ -526,17 +543,17 @@ export const sendRows = (campaignId: string) =>
       .items({
         TableName: tableName,
         KeyConditionExpression: "pk = :pk AND begins_with(sk, :prefix)",
-        ExpressionAttributeValues: {
-          ":pk": str(`CAMPAIGN#${campaignId}`),
-          ":prefix": str("SEND#"),
-        },
+        ExpressionAttributeValues: { ":pk": str(`CAMPAIGN#${campaignId}`), ":prefix": str(prefix) },
         ConsistentRead: true,
       })
-      .pipe(
-        Stream.mapEffect((item) => readSendRow("sendRows", item)),
-        Stream.runCollect,
-      );
+      .pipe(Stream.mapEffect(read), Stream.runCollect);
   });
+
+export const feedbackRows = (campaignId: string) =>
+  campaignRows(campaignId, "FEEDBACK#", (item) => readFeedbackRow("feedbackRows", item));
+
+export const fetchPage = (url: string) =>
+  Effect.flatMap(HttpClient.HttpClient, (client) => client.execute(HttpClientRequest.get(url)));
 
 export const campaignMeta = (campaignId: string) =>
   Effect.gen(function* () {

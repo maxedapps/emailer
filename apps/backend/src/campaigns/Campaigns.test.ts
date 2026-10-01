@@ -178,14 +178,19 @@ const fixture = (scenario: Scenario = {}) => {
 
           return scenario.runRefusal === undefined ? Effect.void : Effect.fail(scenario.runRefusal);
         }),
-      updateDraft: (next) =>
+      // The store applies the edit to the draft it reads; its own suite covers the refusals.
+      updateDraft: (_id, edit) =>
         Effect.suspend(() => {
+          if (scenario.draftRefusal !== undefined) {
+            return Effect.fail(scenario.draftRefusal);
+          }
+
+          const next = edit(campaign === "missing" ? draftCampaign : campaign);
+
           recorded.calls.push("updateDraft");
           recorded.drafts.push(next);
 
-          return scenario.draftRefusal === undefined
-            ? Effect.void
-            : Effect.fail(scenario.draftRefusal);
+          return Effect.succeed(next);
         }),
       deleteDraft: (id) =>
         Effect.suspend(() => {
@@ -193,7 +198,7 @@ const fixture = (scenario: Scenario = {}) => {
           recorded.deleted.push(id);
 
           return scenario.draftRefusal === undefined
-            ? Effect.void
+            ? Effect.undefined
             : Effect.fail(scenario.draftRefusal);
         }),
     }),
@@ -413,26 +418,28 @@ describe("update", () => {
     }),
   );
 
-  it.effect("answers NotFound for a campaign that does not exist", () =>
+  it.effect("replaces the variants as a whole, and null removes them", () =>
     Effect.gen(function* () {
-      const fix = fixture({ campaign: "missing" });
+      const half: Schemas.Variant = { key: "half", percent: 50, subject: "Half", text: "Split" };
 
-      const attempt = yield* runWith(fix, Campaigns.update(campaignId, { subject: "x" }));
+      const berlin: Schemas.Variant = {
+        key: "berlin",
+        when: { city: "Berlin" },
+        subject: "Hallo",
+        text: "Berlin",
+      };
 
-      expect(failureOf(attempt)).toStrictEqual(new Errors.CampaignNotFound());
-    }),
-  );
+      const fix = fixture({ campaign: { ...draftCampaign, variants: [half] } });
 
-  it.effect("refuses to edit a campaign that is no longer a draft, writing nothing", () =>
-    Effect.gen(function* () {
-      const fix = fixture({ campaign: sendingCampaign });
+      yield* runWith(fix, Campaigns.update(campaignId, { variants: [berlin] }));
+      yield* runWith(fix, Campaigns.update(campaignId, { subject: "Kept variants" }));
+      yield* runWith(fix, Campaigns.update(campaignId, { variants: null }));
 
-      const attempt = yield* runWith(fix, Campaigns.update(campaignId, { subject: "x" }));
-
-      expect(failureOf(attempt)).toStrictEqual(
-        new Errors.CampaignStateConflict({ state: "sending" }),
-      );
-      expect(fix.recorded.calls).toStrictEqual([]);
+      expect(fix.recorded.drafts).toStrictEqual([
+        { ...draftCampaign, variants: [berlin] },
+        { ...draftCampaign, subject: "Kept variants", variants: [half] },
+        draftCampaign,
+      ]);
     }),
   );
 

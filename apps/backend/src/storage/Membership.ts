@@ -8,6 +8,7 @@ import {
   contactItem,
   contactKey,
   readContact,
+  readHolders,
   reservationItem,
   reservationKey,
   retryLostRace,
@@ -41,14 +42,6 @@ const Member = Schema.Struct({
 });
 
 const readMember = itemReader(Member);
-
-/** A reservation read back by batch, keyed by the mailbox its key names. */
-const readHeldReservation = itemReader(
-  Schema.Struct({
-    pk: Schema.String.check(Schema.isStartsWith("EMAIL#")),
-    contactId: Schemas.EntityId,
-  }),
-);
 
 const decodeMemberCursor = Schema.decodeUnknownEffect(
   keyCodec(Schema.Struct({ sk: Schema.String.check(Schema.isStartsWith("MEMBER#")) })),
@@ -92,29 +85,6 @@ const joinMember = (
 });
 
 /**
- * Which contact holds each candidate's address, by mailbox, read strongly consistently. The read is
- * advice only — a strong read still does not make a later write atomic — which `joinActions`
- * turns into conditions its transaction asserts.
- */
-export const readHolders = Effect.fnUntraced(function* (
-  primitives: Pick<BatchPrimitives, "readItems">,
-  operation: string,
-  emails: ReadonlyArray<string>,
-) {
-  const reserved = yield* primitives.readItems(operation, emails.map(reservationKey));
-
-  const holders = new Map<string, string>();
-
-  for (const item of reserved) {
-    const entry = yield* readHeldReservation(operation, item);
-
-    holders.set(entry.pk.slice("EMAIL#".length), entry.contactId);
-  }
-
-  return holders;
-});
-
-/**
  * The actions that join each candidate to a list, creating the contact where no one holds its
  * address, and the converged result they leave. Members are written with `Update` rather than
  * `Put`: a conditional `Put` would fail for anyone already in the list and cancel the whole batch,
@@ -145,7 +115,7 @@ export const joinActions = Effect.fnUntraced(function* (
         {
           Put: {
             Table: tableLogicalId,
-            Item: yield* contactItem(candidate),
+            Item: yield* contactItem(candidate, 1),
             ConditionExpression: "attribute_not_exists(pk)",
           },
         },
