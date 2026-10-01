@@ -29,36 +29,10 @@ export const create = Effect.fn("Campaigns.create")(function* (
   return created;
 });
 
-/** What an optional field becomes: absent keeps it, null removes it. */
-const changed = <A>(current: A | undefined, change: A | null | undefined): A | undefined =>
-  change === undefined ? current : (change ?? undefined);
-
-/** Absent fields keep their value; null removes the HTML body, the filter or the variants. */
-const edited = (
-  current: Schemas.Campaign,
-  change: Schemas.UpdateCampaignPayload,
-): Schemas.Campaign => {
-  const { html, filter, variants, ...rest } = current;
-  const nextHtml = changed(html, change.html);
-  const nextFilter = changed(filter, change.filter);
-  const nextVariants = changed(variants, change.variants);
-
-  const campaign = {
-    ...rest,
-    listId: change.listId ?? current.listId,
-    subject: change.subject ?? current.subject,
-    text: change.text ?? current.text,
-  };
-
-  const withHtml = nextHtml === undefined ? campaign : { ...campaign, html: nextHtml };
-  const withFilter = nextFilter === undefined ? withHtml : { ...withHtml, filter: nextFilter };
-
-  return nextVariants === undefined ? withFilter : { ...withFilter, variants: nextVariants };
-};
-
 /**
- * Edits a draft. The whole merged campaign is written, and only while it is still a draft; a
- * campaign that left draft or was deleted meanwhile is refused, as found.
+ * Edits a draft's own copy and settings: absent fields keep their value, and null removes the HTML
+ * body or the filter. Only while it is still a draft; a campaign that left draft or was deleted
+ * meanwhile is refused, as found.
  */
 export const update = Effect.fn("Campaigns.update")(function* (
   campaignId: string,
@@ -72,11 +46,38 @@ export const update = Effect.fn("Campaigns.update")(function* (
     yield* audience.getList(change.listId);
   }
 
-  return yield* campaigns.updateDraft(campaignId, (current) => edited(current, change));
+  yield* campaigns.updateDraft(campaignId, change);
+
+  return yield* campaigns.getCampaign(campaignId);
+});
+
+/** Adds a variant to a draft, or replaces the one with its key, and answers the campaign. */
+export const setVariant = Effect.fn("Campaigns.setVariant")(function* (
+  campaignId: string,
+  key: string,
+  variant: Schemas.VariantPayload,
+) {
+  const campaigns = yield* CampaignStore;
+
+  yield* campaigns.setVariant(campaignId, key, variant);
+
+  return yield* campaigns.getCampaign(campaignId);
+});
+
+/** Removes a variant from a draft, and answers the campaign; repeating it changes nothing. */
+export const removeVariant = Effect.fn("Campaigns.removeVariant")(function* (
+  campaignId: string,
+  key: string,
+) {
+  const campaigns = yield* CampaignStore;
+
+  yield* campaigns.removeVariant(campaignId, key);
+
+  return yield* campaigns.getCampaign(campaignId);
 });
 
 /**
- * Deletes a draft and its body together. A schedule left behind by an earlier cancel is not
+ * Deletes a draft and all its copies together. A schedule left behind by an earlier cancel is not
  * chased: if it fires, its wake finds no campaign, is discarded as stale, and the schedule deletes
  * itself.
  */

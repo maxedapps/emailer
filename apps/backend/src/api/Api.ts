@@ -80,6 +80,10 @@ const campaignsHandlers = HttpApiBuilder.group(EmailerApi, "campaigns", (handler
       get: (request) => campaigns.getCampaign(request.params.id),
       update: (request) => Campaigns.update(request.params.id, request.payload),
       remove: (request) => Campaigns.remove(request.params.id),
+      getVariant: (request) => campaigns.getVariant(request.params.id, request.params.key),
+      setVariant: (request) =>
+        Campaigns.setVariant(request.params.id, request.params.key, request.payload),
+      removeVariant: (request) => Campaigns.removeVariant(request.params.id, request.params.key),
       test: (request) => sendTest(request.params.id, request.payload),
       // The campaign's control item is enough to know it exists; its body is not read.
       preview: (request) =>

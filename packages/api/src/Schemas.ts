@@ -6,7 +6,7 @@ const maxSubjectLength = 200;
 
 export const maxTextBytes = 64 * 1024;
 
-const maxHtmlBytes = 256 * 1024;
+export const maxHtmlBytes = 256 * 1024;
 
 export const maxEmailLength = 254;
 
@@ -298,11 +298,18 @@ export type CampaignBody = typeof CampaignBody.Type;
 /** The key the campaign's own copy — its subject, text and HTML — is sent and recorded under. */
 export const defaultCopy = "default";
 
-const maxVariants = 4;
+export const maxVariants = 50;
 
 const maxTargetingEntries = 4;
 
-const maxPercent = 100;
+/**
+ * A `when` as stored, in UTF-8 JSON. Every rule of ASCII within the entry bounds fits, even one of
+ * quotes, which JSON escapes; the cap only stops control characters and wide characters from
+ * pushing fifty rules past one item.
+ */
+const maxRuleBytes = 5 * 1024;
+
+export const maxPercent = 100;
 
 /**
  * Which copy a recipient got. Short, and a valid SES tag value, which allows only ASCII letters,
@@ -334,6 +341,11 @@ const targeted = {
     Schema.isPropertyNames(AttributeKey),
     Schema.isMinProperties(1),
     Schema.isMaxProperties(maxTargetingEntries),
+    Schema.makeFilter((when: Readonly<Record<string, string>>) =>
+      utf8ByteLength(JSON.stringify(when)) <= maxRuleBytes
+        ? undefined
+        : `Expected the rule to encode to at most ${maxRuleBytes} bytes`,
+    ),
   ),
   percent: Schema.optionalKey(Schema.Never),
 };
@@ -357,6 +369,14 @@ const variantContent = {
   html: Schema.optionalKey(CampaignHtml),
 };
 
+/** A variant as set: its rule and content, under the key its path names. */
+export const VariantPayload = Schema.Union([
+  Schema.Struct({ ...targeted, ...variantContent }),
+  Schema.Struct({ ...split, ...variantContent }),
+]);
+
+export type VariantPayload = typeof VariantPayload.Type;
+
 export const Variant = Schema.Union([
   Schema.Struct({ key: VariantKey, ...targeted, ...variantContent }),
   Schema.Struct({ key: VariantKey, ...split, ...variantContent }),
@@ -364,41 +384,38 @@ export const Variant = Schema.Union([
 
 export type Variant = typeof Variant.Type;
 
-type Routed = ReadonlyArray<{ readonly key: string; readonly percent?: number }>;
+/** The percent variants' shares together; the default copy takes what is left of 100. */
+export const splitPercent = (routes: ReadonlyArray<{ readonly percent?: number }>) =>
+  routes.reduce((sum, route) => sum + (route.percent ?? 0), 0);
 
-/** Keys name one copy each, and the default copy takes whatever share the percents leave. */
-const routeChecks = [
-  Schema.isMinLength(1),
+/**
+ * A campaign's variant rules, in the order they are tried. Keys name one copy each. Setting a
+ * variant checks the count and the percents against the stored rules, so their refusals are typed.
+ */
+export const VariantRoutes = Schema.Array(VariantRoute).check(
   Schema.isMaxLength(maxVariants),
-  Schema.makeFilter((routes: Routed) =>
+  Schema.makeFilter((routes: ReadonlyArray<{ readonly key: string }>) =>
     new Set(routes.map((route) => route.key)).size === routes.length
       ? undefined
       : "Expected each variant key at most once",
   ),
-  Schema.makeFilter((routes: Routed) =>
-    routes.reduce((sum, route) => sum + (route.percent ?? 0), 0) <= maxPercent
+  Schema.makeFilter((routes: ReadonlyArray<{ readonly percent?: number }>) =>
+    splitPercent(routes) <= maxPercent
       ? undefined
       : `Expected the percents to add up to at most ${maxPercent}`,
   ),
-] as const;
-
-export const VariantRoutes = Schema.Array(VariantRoute).check(...routeChecks);
+);
 
 export type VariantRoutes = typeof VariantRoutes.Type;
 
-/** A campaign's alternate copies, in the order their rules are tried. */
-export const Variants = Schema.Array(Variant).check(...routeChecks);
-
-export type Variants = typeof Variants.Type;
-
 /**
- * A campaign is its summary, which `list` answers alone, plus its own copy's body and any
- * alternate copies.
+ * A campaign is its summary, which `list` answers alone, plus its own copy's body and the rules of
+ * any alternate copies; each variant's content is read on its own.
  */
 export const Campaign = Schema.Struct({
   ...CampaignSummary.fields,
   ...CampaignBody.fields,
-  variants: Schema.optionalKey(Variants),
+  variants: Schema.optionalKey(VariantRoutes),
 });
 
 export type Campaign = typeof Campaign.Type;
@@ -513,7 +530,6 @@ export const CreateCampaignPayload = Schema.Struct({
   html: Schema.optionalKey(CampaignHtml),
   /** AND of attribute equalities; absent or `{}` means the whole list. */
   filter: Schema.optionalKey(ContactAttributes),
-  variants: Schema.optionalKey(Variants),
 });
 
 export type CreateCampaignPayload = typeof CreateCampaignPayload.Type;
@@ -537,9 +553,9 @@ export const UpdateContactPayload = Schema.Struct({
 export type UpdateContactPayload = typeof UpdateContactPayload.Type;
 
 /**
- * A draft edit, with `UpdateContactPayload`'s convention: absent leaves a field alone, and null
- * removes an optional one — the HTML body, the filter so the campaign goes to the whole list, or
- * the variants. Variants are replaced as a whole.
+ * A draft edit of the campaign's own copy and settings, with `UpdateContactPayload`'s convention:
+ * absent leaves a field alone, and null removes an optional one — the HTML body, or the filter so
+ * the campaign goes to the whole list. Variants are set and removed one at a time.
  */
 export const UpdateCampaignPayload = Schema.Struct({
   listId: Schema.optionalKey(EntityId),
@@ -547,7 +563,6 @@ export const UpdateCampaignPayload = Schema.Struct({
   text: Schema.optionalKey(CampaignText),
   html: Schema.optionalKey(Schema.NullOr(CampaignHtml)),
   filter: Schema.optionalKey(Schema.NullOr(ContactAttributes)),
-  variants: Schema.optionalKey(Schema.NullOr(Variants)),
 });
 
 export type UpdateCampaignPayload = typeof UpdateCampaignPayload.Type;

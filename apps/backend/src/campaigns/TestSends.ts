@@ -1,4 +1,4 @@
-import { SendingPaused, TestAudienceTooLarge, VariantNotFound } from "@emailer/api/Errors";
+import { SendingPaused, TestAudienceTooLarge } from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
 import { Effect } from "effect";
 
@@ -7,7 +7,7 @@ import { accepted, failureOutcomes, Mail, Mailer } from "../sending/Mailer.ts";
 import { SendGuard } from "../sending/SendGuard.ts";
 import { AudienceStore } from "../storage/Audience.ts";
 import { CampaignStore } from "../storage/Campaigns.ts";
-import { copiesOf } from "./Copies.ts";
+import { copyContent } from "./Copies.ts";
 
 /**
  * A list's members, if a test may reach them all. One member past the limit is requested, and a
@@ -28,9 +28,10 @@ const listRecipients = Effect.fn("TestSends.listRecipients")(function* (listId: 
 /**
  * Sends a `[Test]` of one of a campaign's copies — its own, unless the payload names a variant — to
  * a few addresses, now, and reports each outcome. It shares everything account-wide with a campaign
- * run — the guard, the daily budget and the pacing slot — and touches nothing of the campaign's: no send rows, no counters, and no message tags, so the
- * feedback a test draws suppresses an address without reaching the campaign's breaker. Each
- * recipient gets one attempt; the operator repeats a test rather than the API retrying it.
+ * run — the guard, the daily budget and the pacing slot — and touches nothing of the campaign's:
+ * no send rows, no counters, and no message tags, so the feedback a test draws suppresses an
+ * address without reaching the campaign's breaker. Each recipient gets one attempt; the operator
+ * repeats a test rather than the API retrying it. Only the copy it sends is read.
  */
 export const sendTest = Effect.fn("TestSends.sendTest")(function* (
   campaignId: string,
@@ -40,13 +41,8 @@ export const sendTest = Effect.fn("TestSends.sendTest")(function* (
   const campaigns = yield* CampaignStore;
   const guard = yield* SendGuard;
   const mailer = yield* Mailer;
-  const campaign = yield* campaigns.getCampaign(campaignId);
-  const key = payload.variant ?? Schemas.defaultCopy;
-  const copy = copiesOf(campaign).find((candidate) => candidate.key === key);
-
-  if (copy === undefined) {
-    return yield* new VariantNotFound({ variant: key });
-  }
+  const campaign = yield* campaigns.getSummary(campaignId);
+  const copy = yield* copyContent(campaign, payload.variant ?? Schemas.defaultCopy);
 
   const recipients = "to" in payload ? payload.to : yield* listRecipients(payload.listId);
   const allowance = yield* guard.current;
@@ -55,7 +51,7 @@ export const sendTest = Effect.fn("TestSends.sendTest")(function* (
     return yield* new SendingPaused({ reason: allowance.refusal });
   }
 
-  const content = { ...copy.content, subject: `[Test] ${copy.content.subject}` };
+  const content = { ...copy, subject: `[Test] ${copy.subject}` };
 
   const outcomes: Array<Schemas.TestSendOutcome> = [];
 

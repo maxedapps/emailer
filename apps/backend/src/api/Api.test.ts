@@ -479,14 +479,7 @@ describe("campaigns", () => {
         campaigns: {
           getCampaign: () => Effect.succeed(campaign),
           getCampaignControl: () => Effect.succeed(draft),
-          updateDraft: (id, edit) =>
-            Effect.sync(() => {
-              const next = edit(campaign);
-
-              calls.push([id, next]);
-
-              return next;
-            }),
+          updateDraft: recording(calls, undefined),
           deleteDraft: recording(calls, undefined),
         },
       });
@@ -497,8 +490,61 @@ describe("campaigns", () => {
 
       yield* call((client) => client.campaigns.remove({ params: { id: campaignId } }));
 
-      expect(edited).toStrictEqual({ ...campaign, subject: "New" });
-      expect(calls).toStrictEqual([[campaignId, edited], [campaignId]]);
+      expect(edited).toStrictEqual(campaign);
+      expect(calls).toStrictEqual([[campaignId, { subject: "New" }], [campaignId]]);
+    }),
+  );
+
+  it.effect("sets, reads and removes one variant under its path's key", () =>
+    Effect.gen(function* () {
+      const calls: Array<ReadonlyArray<unknown>> = [];
+      const half = { percent: 50, subject: "Half", text: "Split copy" };
+
+      const { call } = yield* api({
+        campaigns: {
+          getCampaign: () => Effect.succeed(campaign),
+          getVariant: (_id, key) => Effect.succeed({ key, ...half }),
+          setVariant: recording(calls, undefined),
+          removeVariant: recording(calls, undefined),
+        },
+      });
+
+      const params = { id: campaignId, key: "half" };
+
+      expect(
+        yield* call((client) => client.campaigns.setVariant({ params, payload: half })),
+      ).toStrictEqual(campaign);
+      expect(yield* call((client) => client.campaigns.getVariant({ params }))).toStrictEqual({
+        key: "half",
+        ...half,
+      });
+      expect(yield* call((client) => client.campaigns.removeVariant({ params }))).toStrictEqual(
+        campaign,
+      );
+      expect(calls).toStrictEqual([
+        [campaignId, "half", half],
+        [campaignId, "half"],
+      ]);
+    }),
+  );
+
+  it.effect.each([
+    [new Errors.TooManyVariants({ limit: Schemas.maxVariants }), 422],
+    [new Errors.SplitOverfull({ percent: 101 }), 422],
+    [new Errors.DraftChanged(), 409],
+  ] as const)("answers a refused variant as %s", ([refusal, status]) =>
+    Effect.gen(function* () {
+      const { respond } = yield* api({ campaigns: { setVariant: () => Effect.fail(refusal) } });
+
+      const response = yield* respond(
+        send(
+          "PUT",
+          `/campaigns/${campaignId}/variants/half`,
+          '{"percent":50,"subject":"Half","text":"Split copy"}',
+        ),
+      );
+
+      expect(response.status).toBe(status);
     }),
   );
 
@@ -508,7 +554,10 @@ describe("campaigns", () => {
 
       const { call } = yield* api({
         audience: { addressStatus: () => Effect.succeed("mailable" as const) },
-        campaigns: { getCampaign: () => Effect.succeed(campaign) },
+        campaigns: {
+          getSummary: () => Effect.succeed(campaign),
+          getBody: () => Effect.succeed({ text: campaign.text }),
+        },
         guard: {
           current: Effect.succeed({ limit: 14 }),
           recent: recentNotRead,
@@ -970,7 +1019,10 @@ describe("public errors", () => {
         audience: {
           listMembers: () => Effect.succeed({ items: [contact], nextCursor: contactId }),
         },
-        campaigns: { getCampaign: () => Effect.succeed(campaign) },
+        campaigns: {
+          getSummary: () => Effect.succeed(campaign),
+          getBody: () => Effect.succeed({ text: campaign.text }),
+        },
       },
     },
     {
@@ -978,7 +1030,10 @@ describe("public errors", () => {
       status: 503,
       request: () => send("POST", `/campaigns/${campaignId}/test`, `{"to":["${email}"]}`),
       stubs: {
-        campaigns: { getCampaign: () => Effect.succeed(campaign) },
+        campaigns: {
+          getSummary: () => Effect.succeed(campaign),
+          getBody: () => Effect.succeed({ text: campaign.text }),
+        },
         guard: {
           current: Effect.succeed({ limit: 14, refusal: "reputation" as const }),
           recent: recentNotRead,
@@ -1070,7 +1125,10 @@ describe("failure reporting", () => {
       failure: "ThrottlingException",
       request: () => send("POST", `/campaigns/${campaignId}/test`, `{"to":["${email}"]}`),
       stubs: {
-        campaigns: { getCampaign: () => Effect.succeed(campaign) },
+        campaigns: {
+          getSummary: () => Effect.succeed(campaign),
+          getBody: () => Effect.succeed({ text: campaign.text }),
+        },
         guard: {
           current: Effect.fail(
             new Errors.AlarmsUnavailable({ operation: "describeAlarms", ...unavailable }),
@@ -1266,16 +1324,18 @@ describe("request decoding", () => {
       "a variant naming both selectors",
       () =>
         send(
-          "POST",
-          "/campaigns",
-          JSON.stringify({
-            listId,
-            subject: "Release notes",
-            text: "Hello",
-            variants: [
-              { key: "b", when: { plan: "pro" }, percent: 50, subject: "B", text: "Copy B" },
-            ],
-          }),
+          "PUT",
+          `/campaigns/${campaignId}/variants/b`,
+          JSON.stringify({ when: { plan: "pro" }, percent: 50, subject: "B", text: "Copy B" }),
+        ),
+    ],
+    [
+      "a variant under the default copy's key",
+      () =>
+        send(
+          "PUT",
+          `/campaigns/${campaignId}/variants/default`,
+          JSON.stringify({ percent: 50, subject: "B", text: "Copy B" }),
         ),
     ],
   ] as const)("answers 400 for %s, reaching no service", ([_label, request]) =>

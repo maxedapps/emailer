@@ -7,7 +7,7 @@ Self-hosted marketing email over Amazon SES. Deploy it to your own AWS account, 
 - **Audience:** contacts with up to 20 `key=value` attributes, lists, and JSON or CSV imports.
 - **Campaigns** written in Markdown and rendered to email-safe HTML and plain text, or supplied as your own text and HTML files.
 - **Targeting:** send to a whole list, or only to members whose attributes match a filter.
-- **Variants:** up to four alternate copies in one campaign, sent by contact attribute or as a random or weighted split ([Different copies for different members](#different-copies-for-different-members)).
+- **Variants:** up to 50 alternate copies in one campaign, sent by contact attribute or as a random or weighted split ([Different copies for different members](#different-copies-for-different-members)).
 - **Drafting:** preview links that open on any device, and `[Test]` copies to up to 20 addresses.
 - **Delivery:** send now or schedule for later; cancel a pending send and resume a paused one.
 - **Sign-ups:** an API for your website's newsletter form, with double opt-in and stored consent evidence, reached with scoped keys ([Sign-ups from your website](#sign-ups-from-your-website)).
@@ -279,7 +279,7 @@ Every command also accepts:
 
 ### Different copies for different members
 
-A campaign's own subject and body are its **default** copy. Add up to four **variants**, each with its own subject and body:
+A campaign's own subject and body are its **default** copy. Add up to 50 **variants**, each with its own subject and body:
 
 ```sh
 pnpm emailer campaigns variants set <campaignId> beginners --subject "Start here" --markdown beginners.md --when level=beginner
@@ -290,7 +290,7 @@ pnpm emailer campaigns variants set <campaignId> b --subject "Release notes" --m
 - **The split is fresh per campaign and stable within it:** a member lands in the same share on every delivery of that campaign, but may land in another share in the next campaign.
 - **Attributes count until the member is reached.** A change before the dispatcher gets to a member changes their copy; after that, the copy is fixed.
 - **Compare copies through your site's analytics:** give each copy's links their own `utm_content`. There is no open or click tracking. Each send row, and each bounce or complaint, records the copy's key, and every message carries it as the SES tag `variant`.
-- `campaigns preview` shows every copy, each with its rule. `campaigns test --variant <key>` sends one of them.
+- `campaigns get` shows the variants' rules; `campaigns variants get <campaignId> <key>` shows one variant's content. The preview page shows the default copy and lists every variant with its rule, each linking to its own page. `campaigns test --variant <key>` sends one of them.
 - To get a segment attribute onto existing contacts, use `contacts set-attributes --file segments.csv`.
 
 ### Commands
@@ -331,13 +331,14 @@ Each command below is run as `pnpm emailer <command>`. `[…]` marks an optional
 | `campaigns update <campaignId> [--list <listId>] [--subject <subject>] [--markdown <file> \| --text <file> [--html <file>]] [--filter key=value … \| --clear-filter]` | Change a draft; an omitted flag leaves its field alone        |
 | `campaigns preview <campaignId> [--open]`                                                                                                                             | Create a 24-hour preview link                                 |
 | `campaigns variants set <campaignId> <key> --subject <subject> (--markdown <file> \| --text <file> [--html <file>]) (--when key=value … \| --percent <n>)`            | Add a variant to a draft, or replace the one with this key    |
+| `campaigns variants get <campaignId> <key>`                                                                                                                           | Show one variant with its rule and content                    |
 | `campaigns variants remove <campaignId> <key>`                                                                                                                        | Remove a variant from a draft                                 |
 | `campaigns test <campaignId> (--to <address> … \| --list <listId> [--yes]) [--variant <key>]`                                                                         | Send a `[Test]` copy now                                      |
 | `campaigns send <campaignId>`                                                                                                                                         | Queue the campaign for sending now                            |
 | `campaigns schedule <campaignId> --at <date-time>`                                                                                                                    | Send the campaign at a future time                            |
 | `campaigns cancel <campaignId>`                                                                                                                                       | Withdraw a scheduled or queued send                           |
 | `campaigns resume <campaignId>`                                                                                                                                       | Continue a paused campaign                                    |
-| `campaigns get <campaignId>`                                                                                                                                          | Show a campaign with its body and progress                    |
+| `campaigns get <campaignId>`                                                                                                                                          | Show a campaign with its body, variant rules and progress     |
 | `campaigns list [--limit <n>] [--cursor <cursor>]`                                                                                                                    | List campaigns in the order they were created, without bodies |
 | `campaigns delete <campaignId>`                                                                                                                                       | Delete a draft                                                |
 
@@ -364,7 +365,7 @@ Each command below is run as `pnpm emailer <command>`. `[…]` marks an optional
 - **`lists import`:** `{ contacts: [{ email, contactId, member }] }`, one entry per imported address, in file order.
 - **`contacts set-attributes`:** `{ contacts: [{ email, outcome, contactId? }] }` in file order. `outcome` is `updated`, with the `contactId`, or `not-found` when no contact holds the address.
 - **A campaign:** `{ id, listId, subject, createdAt, filter?, submission, text, html?, variants? }`; `campaigns list` leaves out `text`, `html` and `variants`.
-  - Each variant is `{ key, subject, text, html?, when }` or `{ key, subject, text, html?, percent }`.
+  - `variants` holds each variant's rule, in the order they are tried: `{ key, when }` or `{ key, percent }`. `campaigns variants get` prints one variant with its content: `{ key, subject, text, html?, when }` or `{ key, subject, text, html?, percent }`.
   - `submission.state` is `draft`, `scheduled` (with `sendAt`), `queued`, `sending`, `paused` (with a `reason`) or `completed`.
   - From `sending` on, it carries `progress` (`accepted`, `rejected`, `uncertain`, `skipped`) and `feedback` (`bounced`, `complained`).
 - **`campaigns test`:** `{ recipients: [{ email, outcome, … }] }`. The `outcome` is one of:
@@ -382,24 +383,24 @@ Each command below is run as `pnpm emailer <command>`. `[…]` marks an optional
   - **401** `Unauthorized` for a missing or wrong API token;
   - **404** `ContactNotFound`, `ListNotFound`, `CampaignNotFound`, `VariantNotFound` or `ApiKeyNotFound`;
   - **409** for a conflict: `EmailAlreadyUsed`, `AddressOptedOut`, `ContactChanged`, `DraftChanged`, `CampaignStateConflict`, `SendAtNotInFuture` or `TestAudienceTooLarge`;
-  - **422** `TooManyAttributes` when a merge would leave a contact with more than 20 attributes;
+  - **422** `TooManyAttributes` when a merge would leave a contact with more than 20 attributes, `TooManyVariants` when a campaign already has 50 variants, or `SplitOverfull` when the percents would add up to more than 100;
   - **503** when sending is halted (`SendingPaused`) or a dependency is unavailable: `StorageUnavailable`, `EmailServiceUnavailable`, `QueueUnavailable`, `SchedulerUnavailable` or `AlarmsUnavailable`, each naming the `operation` and the `failure`.
 
 ### Limits
 
-| What                                      | Limit                                                                                                                            |
-| ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| Subject                                   | 200 characters                                                                                                                   |
-| Contact and list names                    | 200 characters                                                                                                                   |
-| Text body                                 | 64 KB (UTF-8), including a body rendered from Markdown                                                                           |
-| HTML body                                 | 256 KB (UTF-8), including a body rendered from Markdown                                                                          |
-| Contact attributes                        | 20 entries; keys up to 64 characters, values up to 512                                                                           |
-| Variants                                  | 4 per campaign; keys 1–32 letters, digits, `_` or `-`, not `default`; `--when` 1–4 entries; percents 1–100, at most 100 together |
-| `lists import`, `contacts set-attributes` | any file size, sent 20 contacts per call; one address may not appear twice in a file                                             |
-| `campaigns test`                          | 20 recipients                                                                                                                    |
-| Listings                                  | `--limit` 1–100, default 25                                                                                                      |
-| Sign-up consent                           | `wording` 1,000 characters, `source` 200, `ip` 45                                                                                |
-| Key confirm page                          | an absolute `https:` URL, 2,000 characters                                                                                       |
+| What                                      | Limit                                                                                                                                                   |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Subject                                   | 200 characters                                                                                                                                          |
+| Contact and list names                    | 200 characters                                                                                                                                          |
+| Text body                                 | 64 KB (UTF-8), including a body rendered from Markdown                                                                                                  |
+| HTML body                                 | 256 KB (UTF-8), including a body rendered from Markdown                                                                                                 |
+| Contact attributes                        | 20 entries; keys up to 64 characters, values up to 512                                                                                                  |
+| Variants                                  | 50 per campaign; keys 1–32 letters, digits, `_` or `-`, not `default`; `--when` 1–4 entries, at most 5 KB as JSON; percents 1–100, at most 100 together |
+| `lists import`, `contacts set-attributes` | any file size, sent 20 contacts per call; one address may not appear twice in a file                                                                    |
+| `campaigns test`                          | 20 recipients                                                                                                                                           |
+| Listings                                  | `--limit` 1–100, default 25                                                                                                                             |
+| Sign-up consent                           | `wording` 1,000 characters, `source` 200, `ip` 45                                                                                                       |
+| Key confirm page                          | an absolute `https:` URL, 2,000 characters                                                                                                              |
 
 ### Behavior
 
@@ -418,7 +419,8 @@ Each command below is run as `pnpm emailer <command>`. `[…]` marks an optional
 - `campaigns send` exits zero when the campaign is **queued**. Poll `campaigns get` for `progress`, `feedback` and a `paused` reason.
 - `campaigns schedule` exits zero when the campaign is `scheduled`. `--at` is an ISO date (`YYYY-MM-DD`) or date-time; no zone means UTC. Past instants are **409**. The scheduler fires with 60-second precision. `campaigns send` on a scheduled campaign sends now.
 - `campaigns cancel` withdraws a pending send. A `scheduled` campaign, or a `queued` first send that never started, returns to `draft`. A `queued` resume returns to `paused` with reason `manual`. A campaign that is `sending` or `completed`, or whose send another command replaced in the meantime, answers **409** `CampaignStateConflict`. Cancel does not stop messages already handed to SES, or recall mail.
-- `campaigns variants set` adds a variant, or replaces the one with the same key where it stands; `remove` drops one. Both edit drafts only, and a draft edited by someone else at the same moment is re-read and edited again.
+- `campaigns variants set` adds a variant, or replaces the one with the same key where it stands; `remove` drops one, and repeating it changes nothing. Each sends one variant, so every copy can use the full body limits. Both edit drafts only, and a variant edit racing another one on the same draft is re-read and applied again.
+- `campaigns delete` removes a draft's variants one at a time, then the draft. With many large variants it can take half a minute; a delete that times out is safe to repeat.
 - `campaigns update` and `campaigns delete` apply to drafts only; any other state is **409** `CampaignStateConflict`. Cancel a scheduled campaign to edit it. Content flags replace the whole body: `--text` without `--html` drops an earlier HTML body. `--markdown` excludes `--text`/`--html`. `--clear-filter` sends to the whole list again.
 - `campaigns preview`: anyone holding the link sees that campaign until it expires, so share it like a password. It always renders the campaign as it is now, with a placeholder instead of the recipient's unsubscribe link. A single link cannot be revoked; destroying the stage revokes all of them.
 - `campaigns test` sends right away to the `--to` addresses, or to every member of a `--list`; the campaign's filter does not apply. For `--list` it shows the member count and asks on stderr; pass `--yes` when no one can answer (a script or pipe). The subject gets a `[Test] ` prefix. `--variant <key>` sends that variant's copy instead of the campaign's own; an unknown key is **404** `VariantNotFound`. Unsubscribed, suppressed and bouncing addresses are skipped, and each address gets one attempt. It uses the account's daily quota and send pacing, and answers **503** `SendingPaused` while a reputation halt or the daily budget stops sending. **The unsubscribe link in a test message is real**: clicking it opts that address out of the campaign's list, whichever list the test went to. Addresses that left the campaign's list are skipped for the same reason. A test bounce or complaint suppresses the address but never counts against the campaign.

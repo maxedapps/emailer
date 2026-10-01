@@ -42,6 +42,12 @@ export const bodyKey = (campaignId: string) => ({
   sk: str("BODY"),
 });
 
+/** The rules of a campaign's alternate copies, in order. */
+export const routesKey = (campaignId: string) => ({
+  pk: str(`CAMPAIGN#${campaignId}`),
+  sk: str("ROUTES"),
+});
+
 /** An alternate copy's body, beside the campaign's own `BODY`. */
 export const variantBodyKey = (campaignId: string, variantKey: string) => ({
   pk: str(`CAMPAIGN#${campaignId}`),

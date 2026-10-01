@@ -220,54 +220,74 @@ describe("UpdateCampaignPayload", () => {
   );
 });
 
-describe("Variants", () => {
+describe("VariantPayload", () => {
   // Default decoding, as the HTTP API decodes: excess properties are dropped there, not refused.
-  const decode = Schema.decodeUnknownResult(Schemas.Variants);
+  const decode = Schema.decodeUnknownResult(Schemas.VariantPayload);
 
   const content = { subject: "Hello", text: "Body" };
 
-  it("admits targeted and split variants side by side", () => {
-    const variants = [
-      { key: "beginner", when: { level: "beginner" }, ...content },
-      { key: "b_2", percent: 50, ...content },
-    ];
+  /** Four entries at their length bounds: the longest rule of ASCII the entry bounds allow. */
+  const longestRule = (character: string) =>
+    Object.fromEntries(
+      ["a", "b", "c", "d"].map((prefix) => [
+        prefix.repeat(Schemas.maxAttributeKeyLength),
+        character.repeat(512),
+      ]),
+    );
 
-    expect(decode(variants)).toStrictEqual(Result.succeed(variants));
+  it.each([
+    ["a targeted variant", { when: { level: "beginner" }, ...content }],
+    ["a split variant", { percent: 50, ...content }],
+    ["the longest rule of quotes, which JSON escapes", { when: longestRule('"'), ...content }],
+  ])("admits %s", (_case, variant) => {
+    expect(decode(variant)).toStrictEqual(Result.succeed(variant));
   });
 
   it.each([
-    ["both selectors", [{ key: "b", when: { level: "x" }, percent: 10, ...content }]],
-    ["neither selector", [{ key: "b", ...content }]],
-    ["an empty targeting", [{ key: "b", when: {}, ...content }]],
-    ["the default copy's key", [{ key: "default", percent: 10, ...content }]],
-    ["a key SES would refuse as a tag value", [{ key: "b.2", percent: 10, ...content }]],
+    ["both selectors", { when: { level: "x" }, percent: 10, ...content }],
+    ["neither selector", content],
+    ["an empty targeting", { when: {}, ...content }],
+    ["a percent over 100", { percent: 101, ...content }],
+    // A control character escapes to six bytes, so this rule passes every entry bound but not
+    // the bound that keeps fifty rules within one item.
+    ["a rule past its byte bound", { when: longestRule("\u0001"), ...content }],
+  ])("refuses %s", (_case, variant) => {
+    expect(Result.isFailure(decode(variant))).toBe(true);
+  });
+});
+
+describe("VariantRoutes", () => {
+  const decode = Schema.decodeUnknownResult(Schemas.VariantRoutes);
+
+  const routes = (count: number) =>
+    Array.from({ length: count }, (_, index) => ({ key: `v${index}`, when: { n: `${index}` } }));
+
+  it("admits no routes, and as many as a campaign may hold", () => {
+    expect(Result.isSuccess(decode([]))).toBe(true);
+    expect(Result.isSuccess(decode(routes(Schemas.maxVariants)))).toBe(true);
+  });
+
+  it.each([
+    ["one more than a campaign may hold", routes(Schemas.maxVariants + 1)],
+    ["a route naming both selectors", [{ key: "b", when: { level: "x" }, percent: 10 }]],
+    ["the default copy's key", [{ key: "default", percent: 10 }]],
+    ["a key SES would refuse as a tag value", [{ key: "b.2", percent: 10 }]],
     [
       "a key named twice",
       [
-        { key: "b", percent: 10, ...content },
-        { key: "b", when: { level: "x" }, ...content },
+        { key: "b", percent: 10 },
+        { key: "b", when: { level: "x" } },
       ],
     ],
     [
       "percents adding up to more than 100",
       [
-        { key: "b", percent: 60, ...content },
-        { key: "c", percent: 41, ...content },
+        { key: "b", percent: 60 },
+        { key: "c", percent: 41 },
       ],
     ],
-    ["no variants", []],
-  ])("refuses %s", (_case, variants) => {
-    expect(Result.isFailure(decode(variants))).toBe(true);
-  });
-
-  it("refuses a route naming both selectors, as the stored routing decodes", () => {
-    expect(
-      Result.isFailure(
-        Schema.decodeUnknownResult(Schemas.VariantRoutes)([
-          { key: "b", when: { level: "x" }, percent: 10 },
-        ]),
-      ),
-    ).toBe(true);
+  ])("refuses %s", (_case, value) => {
+    expect(Result.isFailure(decode(value))).toBe(true);
   });
 });
 
@@ -388,6 +408,8 @@ describe("public error statuses", () => {
     [Errors.TestAudienceTooLarge, 409],
     [Errors.VariantNotFound, 404],
     [Errors.DraftChanged, 409],
+    [Errors.TooManyVariants, 422],
+    [Errors.SplitOverfull, 422],
     [Errors.TooManyAttributes, 422],
     [Errors.SendingPaused, 503],
     [Errors.StorageUnavailable, 503],

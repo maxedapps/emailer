@@ -241,13 +241,9 @@ const variantKeyArgument = Argument.String("key").pipe(
   Argument.withSchema(Schemas.VariantKey),
 );
 
-const decodeVariant = Schema.decodeUnknownEffect(Schemas.Variant);
+const decodeVariant = Schema.decodeUnknownEffect(Schemas.VariantPayload);
 
-/**
- * Adds a variant, or replaces the one under the same key in place, so the order its `when` rule is
- * tried in stays. The draft's variants are read and written back as a whole, as the contract edits
- * them.
- */
+/** Adds a variant to a draft, or replaces the one under the same key where it stands. */
 const variantsSet = Command.make(
   "set",
   {
@@ -285,26 +281,19 @@ const variantsSet = Command.make(
       : { percent: Option.getOrUndefined(input.percent) };
 
     const variant = yield* decodeVariant({
-      key: input.key,
       subject: input.subject,
       ...(yield* bodyOf(content.value, Effect.succeed(input.subject))),
       ...rule,
     }).pipe(Effect.mapError((failure) => refuse(`The variant is refused: ${failure.message}`)));
 
+    const params = { id: input.id, key: input.key };
+
+    // The client takes one request shape per rule, so the variant is narrowed to its rule first.
     yield* report(
       yield* withClient((client) =>
-        Effect.gen(function* () {
-          const campaign = yield* client.campaigns.get({ params: { id: input.id } });
-          const variants = campaign.variants ?? [];
-          const index = variants.findIndex((existing) => existing.key === input.key);
-
-          return yield* client.campaigns.update({
-            params: { id: input.id },
-            payload: {
-              variants: index === -1 ? [...variants, variant] : variants.with(index, variant),
-            },
-          });
-        }),
+        variant.when === undefined
+          ? client.campaigns.setVariant({ params, payload: variant })
+          : client.campaigns.setVariant({ params, payload: variant }),
       ),
     );
   }),
@@ -324,26 +313,25 @@ const variantsSet = Command.make(
   ]),
 );
 
+const variantsGet = Command.make(
+  "get",
+  { id: idArgument("id"), key: variantKeyArgument },
+  Effect.fn(function* (input) {
+    yield* report(
+      yield* withClient((client) =>
+        client.campaigns.getVariant({ params: { id: input.id, key: input.key } }),
+      ),
+    );
+  }),
+).pipe(Command.withDescription("Show one variant of a campaign with its rule and content"));
+
 const variantsRemove = Command.make(
   "remove",
   { id: idArgument("id"), key: variantKeyArgument },
   Effect.fn(function* (input) {
     yield* report(
       yield* withClient((client) =>
-        Effect.gen(function* () {
-          const campaign = yield* client.campaigns.get({ params: { id: input.id } });
-          const variants = campaign.variants ?? [];
-          const kept = variants.filter((variant) => variant.key !== input.key);
-
-          if (kept.length === variants.length) {
-            return campaign;
-          }
-
-          return yield* client.campaigns.update({
-            params: { id: input.id },
-            payload: { variants: kept.length === 0 ? null : kept },
-          });
-        }),
+        client.campaigns.removeVariant({ params: { id: input.id, key: input.key } }),
       ),
     );
   }),
@@ -353,7 +341,7 @@ const campaignsVariants = Command.make("variants").pipe(
   Command.withDescription(
     "Alternate copies of a draft: the first --when variant a member matches, else a --percent share, else the campaign's own copy",
   ),
-  Command.withSubcommands([variantsSet, variantsRemove]),
+  Command.withSubcommands([variantsSet, variantsGet, variantsRemove]),
 );
 
 const campaignsDelete = Command.make(
