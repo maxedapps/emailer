@@ -1,3 +1,4 @@
+import * as Schemas from "@emailer/api/Schemas";
 import { Clock, Duration, Effect, Layer, Option } from "effect";
 import { HttpRouter, HttpServerResponse } from "effect/unstable/http";
 
@@ -5,7 +6,7 @@ import { functionServicesLayer, lambdaBasics } from "../Lambda.ts";
 import { respondingToFailures } from "../Reporting.ts";
 import { compose, escapeHtml, senderSettings } from "../sending/Message.ts";
 import { CampaignReader } from "../storage/Campaigns.ts";
-import { copiesOf } from "./Copies.ts";
+import { describeDefault, describeRule, variantContent } from "./Copies.ts";
 import {
   maxPreviewTokenLength,
   PreviewFunction,
@@ -14,9 +15,13 @@ import {
   verifyPreviewToken,
 } from "./Previews.ts";
 
+import type { MessageContent } from "../sending/Message.ts";
+
 const invocationTimeout = Duration.seconds(10);
 
-const route = "/previews/:token";
+const overviewRoute = "/previews/:token";
+
+const copyRoute = "/previews/:token/:key";
 
 /** Stands in for the per-recipient unsubscribe link, which only a real send can mint. */
 export const placeholderUnsubscribeUrl =
@@ -53,6 +58,7 @@ dt{color:#57606a}
 dd{margin:0;overflow-wrap:anywhere}
 h2{margin:0 0 8px;font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:#57606a}
 iframe{display:block;width:100%;height:80vh;border:1px solid #d0d7de;background:#fff}
+nav ul{margin:0;padding-left:20px}
 pre{margin:0;padding:16px;white-space:pre-wrap;overflow-wrap:anywhere;background:#fff;border:1px solid #d0d7de}
 </style>
 </head>
@@ -88,7 +94,10 @@ const htmlPart = (html: string | undefined) =>
     ? "<p>This campaign has no HTML part; recipients see the plain text.</p>"
     : `<iframe title="HTML part" sandbox="allow-popups allow-popups-to-escape-sandbox" srcdoc="${escapeHtml(withLinksInNewTabs(html))}"></iframe>`;
 
-const tokenOf = Effect.map(HttpRouter.params, (params) => params["token"] ?? "");
+const pathOf = Effect.map(HttpRouter.params, (params) => ({
+  token: params["token"] ?? "",
+  key: params["key"] ?? "",
+}));
 
 type PreviewSender = Effect.Success<typeof senderSettings>;
 
@@ -99,19 +108,47 @@ const displayedFrom = (settings: PreviewSender): string =>
     onSome: (name) => `${name} <${settings.sender}>`,
   });
 
+/** The campaign a link names, if the link is valid; a forged or expired one costs no read. */
+const linkedCampaign = (token: string) =>
+  Effect.gen(function* () {
+    const signingKey = yield* previewSigningKey;
+    const now = yield* Clock.currentTimeMillis;
+
+    return verifyPreviewToken(signingKey, token, Math.floor(now / 1000));
+  });
+
+/** One copy composed exactly as a send composes it, placeholder unsubscribe link aside. */
+const copySection = (
+  settings: PreviewSender,
+  key: string,
+  rule: string,
+  content: MessageContent,
+): string => {
+  const message = compose(content, placeholderUnsubscribeUrl, settings.postalAddress);
+
+  return `<header><dl>
+<dt>Copy</dt><dd>${escapeHtml(key)}, for ${escapeHtml(rule)}</dd>
+<dt>From</dt><dd>${escapeHtml(displayedFrom(settings))}</dd>
+<dt>Subject</dt><dd>${escapeHtml(message.subject)}</dd>
+</dl></header>
+<section><h2>HTML</h2>${htmlPart(message.html)}</section>
+<section><h2>Plain text</h2><pre>${escapeHtml(message.text)}</pre></section>`;
+};
+
+const copyPath = (token: string, key: string) => `/previews/${token}/${encodeURIComponent(key)}`;
+
 /**
- * Verifies before it reads: a forged or expired token costs no storage read. The campaign is read
- * afresh on every request, so a link shows the draft as it is now, every copy composed exactly as
- * a send composes it, placeholder unsubscribe link aside.
+ * The campaign's own copy, and every variant listed with its rule, each linking to its own page:
+ * a page carries one copy, however many there are. The campaign is read afresh on every request,
+ * so a link shows the draft as it is now.
  */
-const showPreview = (settings: PreviewSender) =>
+const showOverview = (settings: PreviewSender) =>
   HttpRouter.add(
     "GET",
-    route,
+    overviewRoute,
     Effect.gen(function* () {
-      const signingKey = yield* previewSigningKey;
-      const now = yield* Clock.currentTimeMillis;
-      const campaignId = verifyPreviewToken(signingKey, yield* tokenOf, Math.floor(now / 1000));
+      const { token } = yield* pathOf;
+      const campaignId = yield* linkedCampaign(token);
 
       if (Option.isNone(campaignId)) {
         return notFound;
@@ -119,23 +156,64 @@ const showPreview = (settings: PreviewSender) =>
 
       const reader = yield* CampaignReader;
       const campaign = yield* reader.getCampaign(campaignId.value);
+      const routes = campaign.variants ?? [];
 
-      const copies = copiesOf(campaign).map(({ key, content, rule }) => {
-        const message = compose(content, placeholderUnsubscribeUrl, settings.postalAddress);
+      const variants =
+        routes.length === 0
+          ? ""
+          : `<nav><section><h2>Variants</h2><ul>
+${routes
+  .map(
+    (route) =>
+      `<li><a href="${escapeHtml(copyPath(token, route.key))}">${escapeHtml(route.key)}</a>, for ${escapeHtml(describeRule(route))}</li>`,
+  )
+  .join("\n")}
+</ul></section></nav>`;
 
-        return `<header><dl>
-<dt>Copy</dt><dd>${escapeHtml(key)}, for ${escapeHtml(rule)}</dd>
-<dt>From</dt><dd>${escapeHtml(displayedFrom(settings))}</dd>
-<dt>Subject</dt><dd>${escapeHtml(message.subject)}</dd>
-</dl></header>
-<section><h2>HTML</h2>${htmlPart(message.html)}</section>
-<section><h2>Plain text</h2><pre>${escapeHtml(message.text)}</pre></section>`;
+      const own = copySection(settings, Schemas.defaultCopy, describeDefault(routes), {
+        subject: campaign.subject,
+        text: campaign.text,
+        html: campaign.html,
       });
 
-      return respond(200, document(`Preview: ${campaign.subject}`, copies.join("\n")));
+      return respond(200, document(`Preview: ${campaign.subject}`, `${variants}\n${own}`));
     }).pipe(
       // A campaign deleted since the link was signed.
       Effect.catchTag("CampaignNotFound", () => Effect.succeed(notFound)),
+    ),
+  );
+
+/** One variant's copy, with a link back to the overview. */
+const showCopy = (settings: PreviewSender) =>
+  HttpRouter.add(
+    "GET",
+    copyRoute,
+    Effect.gen(function* () {
+      const { token, key } = yield* pathOf;
+      const campaignId = yield* linkedCampaign(token);
+
+      if (Option.isNone(campaignId)) {
+        return notFound;
+      }
+
+      const reader = yield* CampaignReader;
+      const variant = yield* reader.getVariant(campaignId.value, key);
+      const back = `<nav><section><a href="${escapeHtml(`/previews/${token}`)}">All copies</a></section></nav>`;
+
+      const copy = copySection(
+        settings,
+        variant.key,
+        describeRule(variant),
+        variantContent(variant),
+      );
+
+      return respond(200, document(`Preview: ${variant.subject}`, `${back}\n${copy}`));
+    }).pipe(
+      // A campaign deleted, or a variant removed, since the link was followed.
+      Effect.catchTags({
+        CampaignNotFound: () => Effect.succeed(notFound),
+        VariantNotFound: () => Effect.succeed(notFound),
+      }),
     ),
   );
 
@@ -146,7 +224,7 @@ const routerConfig = Layer.succeed(HttpRouter.RouterConfig)({
 
 /** Built once per instance, like the other public page. */
 export const makePreviewHandler = (settings: PreviewSender) =>
-  HttpRouter.toHttpEffect(showPreview(settings)).pipe(
+  HttpRouter.toHttpEffect(Layer.mergeAll(showOverview(settings), showCopy(settings))).pipe(
     Effect.map(respondingToFailures),
     Effect.provide(routerConfig),
   );

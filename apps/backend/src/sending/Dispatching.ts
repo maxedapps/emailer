@@ -1,5 +1,5 @@
 import * as Schemas from "@emailer/api/Schemas";
-import { Clock, Data, Duration, Effect, ErrorReporter, Predicate, Schedule } from "effect";
+import { Cache, Clock, Data, Duration, Effect, ErrorReporter, Predicate, Schedule } from "effect";
 
 import { unsubscribeLink } from "../consent/Unsubscribe.ts";
 import { newIdentifier, nowIso } from "../Identifiers.ts";
@@ -104,10 +104,29 @@ export const runSlice = Effect.fn("Dispatching.runSlice")(
       return;
     }
 
-    // Every copy is read once per slice; each recipient's is chosen from these.
-    const copies = yield* campaigns.getCopies(message.campaignId);
+    // The rules are read once per slice, and a copy the first time a member of the slice gets it:
+    // a copy nobody here gets is never read. Copies only change in a draft, so they hold all run.
+    const { routes } = yield* campaigns.getRoutes(message.campaignId);
 
-    const ownContent: MessageContent = { subject, text: copies.body.text, html: copies.body.html };
+    const copies = yield* Cache.make({
+      capacity: Schemas.maxVariants + 1,
+      lookup: (key: Schemas.CopyKey) =>
+        key === Schemas.defaultCopy
+          ? Effect.map(campaigns.getBody(message.campaignId), (body): MessageContent => ({
+              subject,
+              text: body.text,
+              html: body.html,
+            }))
+          : Effect.map(
+              campaigns.getVariantContent(message.campaignId, key),
+              (body): MessageContent => ({
+                subject: body.subject,
+                text: body.text,
+                html: body.html,
+              }),
+            ),
+    });
+
     // ExclusiveStartKey of the last member this slice finished (skip, settle, or
     // already-claimed). A budget overrun before sending N checkpoints here so
     // the next page starts after N-1.
@@ -145,6 +164,13 @@ export const runSlice = Effect.fn("Dispatching.runSlice")(
         continue;
       }
 
+      // Chosen from the attributes this slice read and recorded by the claim, so a redelivered page
+      // or a later attribute change cannot send this member a second or different copy. Read before
+      // the deadline check, so a slow read can only defer a member it has not claimed.
+      const variant =
+        (yield* chooseVariant(message.campaignId, member, routes))?.key ?? Schemas.defaultCopy;
+
+      const content = yield* Cache.get(copies, variant);
       const delay = yield* guards.slot(guard.limit);
       const remaining = yield* remainingUntil(deadline);
 
@@ -163,16 +189,6 @@ export const runSlice = Effect.fn("Dispatching.runSlice")(
       const unsubscribeUrl = yield* unsubscribeLink({ mailbox: member.email, listId }).pipe(
         Effect.orDie,
       );
-
-      // Chosen from the attributes this slice read and recorded by the claim, so a redelivered page
-      // or a later attribute change cannot send this member a second or different copy.
-      const chosen = yield* chooseVariant(message.campaignId, member, copies.variants);
-      const variant = chosen?.key ?? Schemas.defaultCopy;
-
-      const content: MessageContent =
-        chosen === undefined
-          ? ownContent
-          : { subject: chosen.subject, text: chosen.text, html: chosen.html };
 
       const sendId = yield* newIdentifier;
 

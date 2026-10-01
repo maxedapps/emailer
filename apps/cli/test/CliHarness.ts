@@ -252,6 +252,23 @@ export const fakeService = (seed: Seed = {}) => {
         receive("campaigns.remove", { params: request.params }).pipe(
           Effect.andThen(next(removeFailures)),
         ),
+      getVariant: (request) =>
+        receive("campaigns.getVariant", { params: request.params }).pipe(
+          Effect.as({
+            key: request.params.key,
+            percent: 50,
+            subject: "Release notes",
+            text: "The split copy.",
+          }),
+        ),
+      setVariant: (request) =>
+        receive("campaigns.setVariant", { params: request.params, payload: request.payload }).pipe(
+          Effect.andThen(campaign(request.params.id)),
+        ),
+      removeVariant: (request) =>
+        receive("campaigns.removeVariant", { params: request.params }).pipe(
+          Effect.andThen(campaign(request.params.id)),
+        ),
       preview: (request) =>
         receive("campaigns.preview", { params: request.params }).pipe(
           Effect.as({

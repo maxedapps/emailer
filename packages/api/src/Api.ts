@@ -187,12 +187,39 @@ class CampaignsGroup extends HttpApiGroup.make("campaigns")
         Errors.CampaignNotFound,
         Errors.ListNotFound,
         Errors.CampaignStateConflict,
-        Errors.DraftChanged,
       ],
     }),
     HttpApiEndpoint.delete("remove", "/:id", {
       params: { id: Schemas.EntityId },
       success: HttpApiSchema.NoContent,
+      error: [
+        ...storage,
+        Errors.CampaignNotFound,
+        Errors.CampaignStateConflict,
+        Errors.DraftChanged,
+      ],
+    }),
+    HttpApiEndpoint.get("getVariant", "/:id/variants/:key", {
+      params: { id: Schemas.EntityId, key: Schemas.VariantKey },
+      success: Schemas.Variant,
+      error: [...storage, Errors.CampaignNotFound, Errors.VariantNotFound],
+    }),
+    HttpApiEndpoint.put("setVariant", "/:id/variants/:key", {
+      params: { id: Schemas.EntityId, key: Schemas.VariantKey },
+      payload: Schemas.VariantPayload,
+      success: Schemas.Campaign,
+      error: [
+        ...storage,
+        Errors.CampaignNotFound,
+        Errors.CampaignStateConflict,
+        Errors.DraftChanged,
+        Errors.TooManyVariants,
+        Errors.SplitOverfull,
+      ],
+    }),
+    HttpApiEndpoint.delete("removeVariant", "/:id/variants/:key", {
+      params: { id: Schemas.EntityId, key: Schemas.VariantKey },
+      success: Schemas.Campaign,
       error: [
         ...storage,
         Errors.CampaignNotFound,

@@ -549,6 +549,24 @@ const campaignRows = <A>(
       .pipe(Stream.mapEffect(read), Stream.runCollect);
   });
 
+/** The sort key of every item left under a campaign's partition. */
+export const campaignItems = (campaignId: string) =>
+  Effect.gen(function* () {
+    const { tableName } = yield* Deployment;
+
+    const items = yield* dynamodb.query
+      .items({
+        TableName: tableName,
+        KeyConditionExpression: "pk = :pk",
+        ExpressionAttributeValues: { ":pk": str(`CAMPAIGN#${campaignId}`) },
+        ProjectionExpression: "sk",
+        ConsistentRead: true,
+      })
+      .pipe(Stream.runCollect);
+
+    return items.map((item) => item["sk"]?.S);
+  });
+
 export const feedbackRows = (campaignId: string) =>
   campaignRows(campaignId, "FEEDBACK#", (item) => readFeedbackRow("feedbackRows", item));
 

@@ -37,7 +37,14 @@ const campaign: Schemas.Campaign = {
   html: "<p>Hello there</p>",
   createdAt: "2026-09-11T10:00:00.000Z",
   submission: { state: "draft" },
-  variants: [{ key: "half", percent: 50, subject: "Half notes", text: "Split copy" }],
+  variants: [{ key: "half", percent: 50 }],
+};
+
+const half: Schemas.Variant = {
+  key: "half",
+  percent: 50,
+  subject: "Half notes",
+  text: "Split copy",
 };
 
 const healthy: SendAllowance = { limit: 3 };
@@ -81,6 +88,7 @@ const fixture = (scenario: Scenario = {}) => {
   const failures = [...(scenario.failures ?? [])];
   const statuses = new Map(scenario.statuses ?? []);
   const optOuts = new Set((scenario.optOuts ?? []).map(([email, list]) => `${email} ${list}`));
+  const reads: Array<string> = [];
 
   const layer = Layer.mergeAll(
     configuration,
@@ -109,8 +117,28 @@ const fixture = (scenario: Scenario = {}) => {
     }),
     Layer.succeed(CampaignStore)({
       ...unusedCampaigns,
-      getCampaign: (id) =>
-        id === campaignId ? Effect.succeed(campaign) : Effect.fail(new Errors.CampaignNotFound()),
+      getSummary: (id) =>
+        Effect.suspend(() => {
+          reads.push("summary");
+
+          return id === campaignId
+            ? Effect.succeed(campaign)
+            : Effect.fail(new Errors.CampaignNotFound());
+        }),
+      getBody: () =>
+        Effect.sync(() => {
+          reads.push("body");
+
+          return { text: campaign.text, html: "<p>Hello there</p>" };
+        }),
+      getVariant: (_id, key) =>
+        Effect.suspend(() => {
+          reads.push(`variant ${key}`);
+
+          return key === half.key
+            ? Effect.succeed(half)
+            : Effect.fail(new Errors.VariantNotFound({ variant: key }));
+        }),
     }),
     Layer.succeed(Mailer)({
       send: (recipient, mail) =>
@@ -135,7 +163,7 @@ const fixture = (scenario: Scenario = {}) => {
     }),
   );
 
-  return { layer, sent, sentAt, slots, pageRequests };
+  return { layer, sent, sentAt, slots, pageRequests, reads };
 };
 
 const run = (fix: ReturnType<typeof fixture>, payload: Schemas.TestSendPayload) =>
@@ -187,7 +215,7 @@ describe("sendTest", () => {
       }),
   );
 
-  it.effect("sends the variant the payload names, and refuses a key the campaign lacks", () =>
+  it.effect("sends the copy the payload names, reading only it, and refuses an unknown key", () =>
     Effect.gen(function* () {
       const fix = fixture();
 
@@ -196,10 +224,12 @@ describe("sendTest", () => {
       expect(fix.sent[0]?.mail).toMatchObject({
         content: { subject: "[Test] Half notes", text: "Split copy", html: undefined },
       });
+      expect(fix.reads).toStrictEqual(["summary", "variant half"]);
 
       yield* run(fix, { to: ["a@example.com"], variant: "default" });
 
       expect(fix.sent[1]?.mail).toMatchObject({ content: { subject: "[Test] Release notes" } });
+      expect(fix.reads.slice(2)).toStrictEqual(["summary", "body"]);
 
       const missing = fixture();
 

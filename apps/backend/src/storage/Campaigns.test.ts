@@ -158,24 +158,28 @@ const body = (html?: string, stored: dynamodb.AttributeMap = {}) => ({
   ...stored,
 });
 
-/** A body as a draft write stores it: at a revision, with the variants' rules if there are any. */
-const bodyAt = (
-  revision: number,
-  variants?: ReadonlyArray<Schemas.VariantRoute>,
-  html?: string,
-) => {
-  const stored = { revision: { N: String(revision) } };
+const routesKey = { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "ROUTES" } };
 
-  return body(
-    html,
-    variants === undefined ? stored : { ...stored, variants: { S: JSON.stringify(variants) } },
-  );
-};
+/** The read of a campaign no variant was ever set on. */
+const noRoutes = Effect.succeed({});
+
+/** The variants' rules as a variant write stores them, at a revision. */
+const routesAt = (revision: number, routes: ReadonlyArray<Schemas.VariantRoute>) => ({
+  ...routesKey,
+  v: { N: "1" },
+  routes: { S: JSON.stringify(routes) },
+  revision: { N: String(revision) },
+});
+
+const routesRead = (revision: number, routes: ReadonlyArray<Schemas.VariantRoute>) =>
+  Effect.succeed({ Item: routesAt(revision, routes) });
 
 const variantKey = (key: string) => ({
   pk: { S: `CAMPAIGN#${campaignId}` },
   sk: { S: `BODY#${key}` },
 });
+
+const metaKey = { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } };
 
 const variantBody = (key: string, subject: string, text: string) => ({
   ...variantKey(key),
@@ -220,13 +224,14 @@ describe("campaign records", () => {
 
       const writtenBody = table.putItemRequests[0]?.Item ?? {};
 
-      expect(writtenBody["revision"]).toStrictEqual({ N: "1" });
+      expect(writtenBody).not.toHaveProperty("revision");
       expect(writtenBody["text"]).toStrictEqual({ S: multiByteText });
       expect(writtenBody["html"]).toStrictEqual({ S: multiByteHtml });
       expect(table.putItemRequests[1]?.Item).not.toHaveProperty("html");
 
       const readBack = withStorage({
         getItem: [
+          noRoutes,
           Effect.succeed({ Item: writtenBody }),
           Effect.succeed({ Item: table.putItemRequests[1]?.Item ?? {} }),
         ],
@@ -295,12 +300,16 @@ describe("campaign records", () => {
       const { storage } = withStorage({
         // Every `getCampaign` reads BODY then META, so the replies interleave.
         getItem: [
+          noRoutes,
           Effect.succeed({ Item: body() }),
           Effect.succeed({ Item: meta({ state: "draft" }) }),
+          noRoutes,
           Effect.succeed({ Item: body() }),
           Effect.succeed({ Item: meta({ state: "scheduled", queuedAt }) }),
+          noRoutes,
           Effect.succeed({ Item: body() }),
           Effect.succeed({ Item: meta({ state: "queued", queuedAt }) }),
+          noRoutes,
           Effect.succeed({ Item: body() }),
           Effect.succeed({
             Item: meta({
@@ -310,6 +319,7 @@ describe("campaign records", () => {
               ...progress,
             }),
           }),
+          noRoutes,
           Effect.succeed({ Item: body() }),
           Effect.succeed({
             Item: meta({
@@ -320,6 +330,7 @@ describe("campaign records", () => {
               ...progress,
             }),
           }),
+          noRoutes,
           Effect.succeed({ Item: body() }),
           Effect.succeed({
             Item: meta({
@@ -374,6 +385,7 @@ describe("campaign records", () => {
     Effect.gen(function* () {
       const { storage } = withStorage({
         getItem: [
+          noRoutes,
           Effect.succeed({ Item: body() }),
           Effect.succeed({
             Item: meta({ state: "sending", startedAt }),
@@ -383,14 +395,15 @@ describe("campaign records", () => {
 
       const defect = yield* defectOf(storage.getCampaign(campaignId));
 
-      expect(defect).toStrictEqual(new CorruptItem({ operation: "getCampaign" }));
+      expect(defect).toStrictEqual(new CorruptItem({ operation: "getSummary" }));
     }),
   );
 
-  it.effect("reads BODY then META and merges them into one campaign", () =>
+  it.effect("reads ROUTES, BODY, then META and merges them into one campaign", () =>
     Effect.gen(function* () {
       const { table, storage } = withStorage({
         getItem: [
+          noRoutes,
           Effect.succeed({ Item: body() }),
           Effect.succeed({ Item: meta({ state: "draft" }) }),
         ],
@@ -399,6 +412,7 @@ describe("campaign records", () => {
       const campaign = yield* storage.getCampaign(campaignId);
 
       expect(table.getItemRequests.map((request) => request.Key)).toStrictEqual([
+        routesKey,
         { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "BODY" } },
         { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } },
       ]);
@@ -417,6 +431,7 @@ describe("campaign records", () => {
     Effect.gen(function* () {
       const { storage } = withStorage({
         getItem: [
+          noRoutes,
           Effect.succeed({ Item: body() }),
           Effect.succeed({ Item: meta({ state: "draft", filter: { plan: "pro" } }) }),
         ],
@@ -437,7 +452,7 @@ describe("campaign records", () => {
   it.effect("treats a META without a BODY as corrupt", () =>
     Effect.gen(function* () {
       const { storage } = withStorage({
-        getItem: [Effect.succeed({}), Effect.succeed({ Item: meta({ state: "draft" }) })],
+        getItem: [noRoutes, Effect.succeed({}), Effect.succeed({ Item: meta({ state: "draft" }) })],
       });
 
       const defect = yield* defectOf(storage.getCampaign(campaignId));
@@ -447,8 +462,8 @@ describe("campaign records", () => {
   );
 });
 
-describe("getCopies", () => {
-  it.effect("reads the own body, then each variant its rules name, and keeps their order", () =>
+describe("getCampaign with variants", () => {
+  it.effect("carries the variants' rules in order, and none of their content", () =>
     Effect.gen(function* () {
       const routes = [
         { key: "berlin", when: { city: "Berlin" } },
@@ -457,44 +472,28 @@ describe("getCopies", () => {
 
       const { table, storage } = withStorage({
         getItem: [
-          Effect.succeed({ Item: bodyAt(3, routes) }),
-          Effect.succeed({ Item: variantBody("berlin", "Hallo", "Berlin copy") }),
-          Effect.succeed({ Item: variantBody("half", "Half", "Split copy") }),
+          routesRead(3, routes),
+          Effect.succeed({ Item: body() }),
+          Effect.succeed({ Item: meta({ state: "draft" }) }),
         ],
       });
 
-      expect(yield* storage.getCopies(campaignId)).toStrictEqual({
-        body: { text: "Body" },
-        variants: [
-          { key: "berlin", when: { city: "Berlin" }, subject: "Hallo", text: "Berlin copy" },
-          { key: "half", percent: 50, subject: "Half", text: "Split copy" },
-        ],
-        revision: 3,
-      });
-      expect(table.getItemRequests.map((request) => request.Key)).toStrictEqual([
-        { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "BODY" } },
-        variantKey("berlin"),
-        variantKey("half"),
-      ]);
+      expect((yield* storage.getCampaign(campaignId)).variants).toStrictEqual(routes);
+      expect(table.getItemRequests).toHaveLength(3);
     }),
   );
 
-  it.effect("reads the rules again when an edit removed a variant between the reads", () =>
+  it.effect("leaves variants out once the last one was removed", () =>
     Effect.gen(function* () {
       const { storage } = withStorage({
         getItem: [
-          Effect.succeed({ Item: bodyAt(1, [{ key: "half", percent: 50 }]) }),
-          Effect.succeed({}),
-          Effect.succeed({ Item: bodyAt(2) }),
-          Effect.succeed({ Item: bodyAt(2) }),
+          routesRead(4, []),
+          Effect.succeed({ Item: body() }),
+          Effect.succeed({ Item: meta({ state: "draft" }) }),
         ],
       });
 
-      expect(yield* storage.getCopies(campaignId)).toStrictEqual({
-        body: { text: "Body" },
-        variants: [],
-        revision: 2,
-      });
+      expect(yield* storage.getCampaign(campaignId)).not.toHaveProperty("variants");
     }),
   );
 
@@ -507,34 +506,94 @@ describe("getCopies", () => {
       );
     }),
   );
+});
 
-  it.effect("treats a variant missing under unchanged rules as corrupt", () =>
+describe("getVariant", () => {
+  const half = { key: "half", percent: 50 };
+
+  it.effect("reads the rules, then the one variant's body, and answers it with its rule", () =>
     Effect.gen(function* () {
-      const half = bodyAt(1, [{ key: "half", percent: 50 }]);
-
-      const { storage } = withStorage({
+      const { table, storage } = withStorage({
         getItem: [
-          Effect.succeed({ Item: half }),
-          Effect.succeed({}),
-          Effect.succeed({ Item: half }),
+          routesRead(3, [{ key: "berlin", when: { city: "Berlin" } }, half]),
+          Effect.succeed({ Item: variantBody("half", "Half", "Split copy") }),
         ],
       });
 
-      expect(yield* defectOf(storage.getCopies(campaignId))).toStrictEqual(
-        new CorruptItem({ operation: "getCopies" }),
+      expect(yield* storage.getVariant(campaignId, "half")).toStrictEqual({
+        ...half,
+        subject: "Half",
+        text: "Split copy",
+      });
+      expect(table.getItemRequests.map((request) => request.Key)).toStrictEqual([
+        routesKey,
+        variantKey("half"),
+      ]);
+    }),
+  );
+
+  it.effect.each([
+    [
+      "VariantNotFound for a key the rules don't name",
+      Effect.succeed({ Item: meta({ state: "draft" }) }),
+      new Errors.VariantNotFound({ variant: "half" }),
+    ],
+    [
+      "CampaignNotFound when there is no campaign",
+      Effect.succeed({}),
+      new Errors.CampaignNotFound(),
+    ],
+  ] as const)("answers %s, reading META only then", ([, metaRead, expected]) =>
+    Effect.gen(function* () {
+      const { table, storage } = withStorage({ getItem: [noRoutes, metaRead] });
+
+      expect(yield* Effect.flip(storage.getVariant(campaignId, "half"))).toStrictEqual(expected);
+      expect(table.getItemRequests.map((request) => request.Key)).toStrictEqual([
+        routesKey,
+        metaKey,
+      ]);
+    }),
+  );
+
+  it.effect("reads again when a removal landed between the rules and the body", () =>
+    Effect.gen(function* () {
+      const { storage } = withStorage({
+        getItem: [
+          routesRead(1, [half]),
+          Effect.succeed({}),
+          routesRead(2, []),
+          routesRead(2, []),
+          Effect.succeed({ Item: meta({ state: "draft" }) }),
+        ],
+      });
+
+      expect(yield* Effect.flip(storage.getVariant(campaignId, "half"))).toStrictEqual(
+        new Errors.VariantNotFound({ variant: "half" }),
       );
     }),
   );
 
-  it.effect("reads a body from before variants and revisions as the own copy alone", () =>
+  it.effect("treats a body missing under unchanged rules as corrupt", () =>
     Effect.gen(function* () {
-      const { storage } = withStorage({ getItem: [Effect.succeed({ Item: body() })] });
-
-      expect(yield* storage.getCopies(campaignId)).toStrictEqual({
-        body: { text: "Body" },
-        variants: [],
-        revision: undefined,
+      const { storage } = withStorage({
+        getItem: [routesRead(1, [half]), Effect.succeed({}), routesRead(1, [half])],
       });
+
+      expect(yield* defectOf(storage.getVariant(campaignId, "half"))).toStrictEqual(
+        new CorruptItem({ operation: "getVariant" }),
+      );
+    }),
+  );
+});
+
+describe("getVariantContent", () => {
+  it.effect("treats a body missing during a run as corrupt, since no edit can remove it", () =>
+    Effect.gen(function* () {
+      const { storage } = withStorage({ getItem: [Effect.succeed({})] });
+
+      expect(yield* defectOf(storage.getVariantContent(campaignId, "half"))).toStrictEqual(
+        new CorruptItem({ operation: "getVariantContent" }),
+      );
     }),
   );
 });
@@ -628,33 +687,10 @@ describe("createCampaign", () => {
 
       expect(table.putItemRequests).toHaveLength(2);
       expect(table.putItemRequests[0]?.ConditionExpression).toBe("attribute_not_exists(pk)");
-      expect(table.putItemRequests[0]?.Item).toStrictEqual(bodyAt(1));
+      expect(table.putItemRequests[0]?.Item).toStrictEqual(body());
       expect(table.putItemRequests[1]?.ConditionExpression).toBe("attribute_not_exists(pk)");
       expect(table.putItemRequests[1]?.Item?.["sk"]).toStrictEqual({ S: "META" });
       expect(table.putItemRequests[1]?.Item).not.toHaveProperty("text");
-    }),
-  );
-
-  it.effect("writes each variant's body, then the own body with their rules, then META", () =>
-    Effect.gen(function* () {
-      const { table, storage } = withStorage({});
-
-      yield* storage.createCampaign({
-        id: campaignId,
-        listId,
-        subject: "Release",
-        text: "Body",
-        createdAt,
-        submission: { state: "draft" },
-        variants: [{ key: "half", percent: 50, subject: "Half", text: "Split copy" }],
-      });
-
-      expect(table.putItemRequests.map((request) => request.Item)).toMatchObject([
-        variantBody("half", "Half", "Split copy"),
-        bodyAt(1, [{ key: "half", percent: 50 }]),
-        { sk: { S: "META" } },
-      ]);
-      expect(table.putItemRequests[2]?.Item).not.toHaveProperty("variants");
     }),
   );
 
@@ -681,149 +717,280 @@ describe("createCampaign", () => {
   );
 });
 
-const draft: Schemas.Campaign = {
-  id: campaignId,
-  listId,
-  subject: "Release",
-  text: "Body",
-  createdAt,
-  submission: { state: "draft" },
+const draftCheck = {
+  ConditionCheck: {
+    Table: tableLogicalId,
+    Key: metaKey,
+    ConditionExpression: "#state = :draft",
+    ExpressionAttributeNames: { "#state": "state" },
+    ExpressionAttributeValues: { ":draft": { S: "draft" } },
+    ReturnValuesOnConditionCheckFailure: "ALL_OLD",
+  },
 };
 
+const bodyKey = { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "BODY" } };
+
+const halfContent = { subject: "Half", text: "Split copy" };
+
 describe("updateDraft", () => {
-  const metaKey = { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } };
-
-  const half: Schemas.Variant = { key: "half", percent: 50, subject: "Half", text: "Split copy" };
-
-  const berlin: Schemas.Variant = {
-    key: "berlin",
-    when: { city: "Berlin" },
-    subject: "Hallo",
-    text: "Berlin copy",
-  };
-
-  /** The reads an edit starts with: META, then the own body at a revision, then its variants. */
-  const draftAt = (
-    revision: number | undefined,
-    variants: ReadonlyArray<Schemas.Variant> = [],
-  ): NonNullable<ScriptedReplies["getItem"]> => [
-    Effect.succeed({
-      Item:
-        revision === undefined
-          ? body()
-          : bodyAt(
-              revision,
-              variants.length === 0
-                ? undefined
-                : variants.map((variant) =>
-                    variant.when === undefined
-                      ? { key: variant.key, percent: variant.percent }
-                      : { key: variant.key, when: variant.when },
-                  ),
-            ),
-    }),
-    ...variants.map((variant) =>
-      Effect.succeed({ Item: variantBody(variant.key, variant.subject, variant.text) }),
-    ),
-    Effect.succeed({ Item: meta({ state: "draft" }) }),
-  ];
-
   it.effect(
-    "rewrites the editable META fields and the own body, at the next revision only, in one draft-only transaction",
+    "updates exactly the fields given, in one draft-only transaction, without reading first",
     () =>
       Effect.gen(function* () {
-        const { table, storage } = withStorage({ getItem: draftAt(2) });
+        const { table, storage } = withStorage({});
 
-        const next = yield* storage.updateDraft(campaignId, (current) => ({
-          ...current,
+        yield* storage.updateDraft(campaignId, {
+          subject: "New",
           html: "<p>Body</p>",
           filter: { plan: "pro" },
-        }));
+        });
 
-        expect(next).toStrictEqual({ ...draft, html: "<p>Body</p>", filter: { plan: "pro" } });
-        expect(table.transactionRequests).toHaveLength(1);
+        expect(table.getItemRequests).toHaveLength(0);
         expect(table.transactionRequests[0]?.TransactItems).toStrictEqual([
           {
             Update: {
-              Table: tableLogicalId,
-              Key: metaKey,
-              ConditionExpression: "#state = :draft",
-              ExpressionAttributeNames: { "#state": "state", "#filter": "filter" },
-              ReturnValuesOnConditionCheckFailure: "ALL_OLD",
-              UpdateExpression: "SET subject = :subject, listId = :listId, #filter = :filter",
+              ...draftCheck.ConditionCheck,
+              UpdateExpression: "SET #subject = :subject, #filter = :filter",
+              ExpressionAttributeNames: {
+                "#state": "state",
+                "#subject": "subject",
+                "#filter": "filter",
+              },
               ExpressionAttributeValues: {
-                ":subject": { S: "Release" },
-                ":listId": { S: listId },
                 ":draft": { S: "draft" },
+                ":subject": { S: "New" },
                 ":filter": { M: { plan: { S: "pro" } } },
               },
             },
           },
           {
-            Put: {
+            Update: {
               Table: tableLogicalId,
-              Item: bodyAt(3, undefined, "<p>Body</p>"),
-              ConditionExpression: "revision = :revision",
-              ExpressionAttributeValues: { ":revision": { N: "2" } },
+              Key: bodyKey,
+              UpdateExpression: "SET #html = :html",
+              ExpressionAttributeNames: { "#html": "html" },
+              ExpressionAttributeValues: { ":html": { S: "<p>Body</p>" } },
             },
           },
         ]);
       }),
   );
 
-  it.effect("removes the filter and writes a body without html when the draft has neither", () =>
+  it.effect("removes the fields given as null", () =>
     Effect.gen(function* () {
-      const { table, storage } = withStorage({ getItem: draftAt(1) });
+      const { table, storage } = withStorage({});
 
-      yield* storage.updateDraft(campaignId, (current) => current);
+      yield* storage.updateDraft(campaignId, { text: "New", html: null, filter: null });
 
-      const [update, put] = table.transactionRequests[0]?.TransactItems ?? [];
+      const [update, bodyUpdate] = table.transactionRequests[0]?.TransactItems ?? [];
 
-      expect(update?.Update?.UpdateExpression).toBe(
-        "SET subject = :subject, listId = :listId REMOVE #filter",
-      );
-      expect(update?.Update?.ExpressionAttributeValues).not.toHaveProperty(":filter");
-      expect(put?.Put?.Item).toStrictEqual(bodyAt(2));
+      expect(update?.Update?.UpdateExpression).toBe("REMOVE #filter");
+      expect(update?.Update?.ExpressionAttributeValues).toStrictEqual({ ":draft": { S: "draft" } });
+      expect(bodyUpdate?.Update).toMatchObject({
+        UpdateExpression: "SET #text = :text REMOVE #html",
+        ExpressionAttributeNames: { "#text": "text", "#html": "html" },
+        ExpressionAttributeValues: { ":text": { S: "New" } },
+      });
     }),
   );
 
-  it.effect("writes a body from before revisions only while it still has none", () =>
+  it.effect("only checks the draft when the change gives no field of META, and no body item", () =>
     Effect.gen(function* () {
-      const { table, storage } = withStorage({ getItem: draftAt(undefined) });
+      const { table, storage } = withStorage({});
 
-      yield* storage.updateDraft(campaignId, (current) => current);
+      yield* storage.updateDraft(campaignId, {});
 
-      const put = table.transactionRequests[0]?.TransactItems[1]?.Put;
+      expect(table.transactionRequests[0]?.TransactItems).toStrictEqual([draftCheck]);
+    }),
+  );
+});
 
-      expect(put?.Item).toStrictEqual(bodyAt(1));
-      expect(put?.ConditionExpression).toBe("attribute_not_exists(revision)");
+describe("setVariant", () => {
+  const half = { key: "half", percent: 50 };
+
+  const berlin = { key: "berlin", when: { city: "Berlin" } };
+
+  it.effect(
+    "appends a variant: its rules at the first revision, only if none were ever set, and its body",
+    () =>
+      Effect.gen(function* () {
+        const { table, storage } = withStorage({ getItem: [noRoutes] });
+
+        yield* storage.setVariant(campaignId, "half", { percent: 50, ...halfContent });
+
+        expect(table.transactionRequests[0]?.TransactItems).toStrictEqual([
+          draftCheck,
+          {
+            Put: {
+              Table: tableLogicalId,
+              Item: routesAt(1, [half]),
+              ConditionExpression: "attribute_not_exists(revision)",
+            },
+          },
+          { Put: { Table: tableLogicalId, Item: variantBody("half", "Half", "Split copy") } },
+        ]);
+      }),
+  );
+
+  it.effect("replaces the variant with its key where it stands, at the next revision", () =>
+    Effect.gen(function* () {
+      const { table, storage } = withStorage({ getItem: [routesRead(4, [berlin, half])] });
+
+      yield* storage.setVariant(campaignId, "berlin", { percent: 10, ...halfContent });
+
+      expect(table.transactionRequests[0]?.TransactItems[1]).toStrictEqual({
+        Put: {
+          Table: tableLogicalId,
+          Item: routesAt(5, [{ key: "berlin", percent: 10 }, half]),
+          ConditionExpression: "revision = :revision",
+          ExpressionAttributeValues: { ":revision": { N: "4" } },
+        },
+      });
     }),
   );
 
-  it.effect("puts every variant it keeps and deletes the body of each it drops", () =>
+  const full = Array.from({ length: Schemas.maxVariants }, (_, index) => ({
+    key: `v${index}`,
+    when: { n: `${index}` },
+  }));
+
+  it.effect("takes as many variants as a campaign may hold, and refuses one more", () =>
     Effect.gen(function* () {
-      const { table, storage } = withStorage({ getItem: draftAt(4, [half, berlin]) });
+      const { table, storage } = withStorage({
+        getItem: [routesRead(1, full.slice(1)), routesRead(2, full)],
+      });
 
-      const replacement = { ...berlin, text: "Neue Berlin copy" };
+      yield* storage.setVariant(campaignId, "v0", { when: { n: "0" }, ...halfContent });
 
-      yield* storage.updateDraft(campaignId, (current) => ({
-        ...current,
-        variants: [replacement],
-      }));
+      expect(
+        yield* Effect.flip(storage.setVariant(campaignId, "extra", { percent: 1, ...halfContent })),
+      ).toStrictEqual(new Errors.TooManyVariants({ limit: Schemas.maxVariants }));
+      expect(table.transactionRequests).toHaveLength(1);
+    }),
+  );
 
-      expect(table.transactionRequests[0]?.TransactItems.slice(1)).toStrictEqual([
+  it.effect("replaces a variant of a full campaign", () =>
+    Effect.gen(function* () {
+      const { table, storage } = withStorage({ getItem: [routesRead(2, full)] });
+
+      yield* storage.setVariant(campaignId, "v7", { percent: 5, ...halfContent });
+
+      expect(table.transactionRequests).toHaveLength(1);
+    }),
+  );
+
+  it.effect("refuses percents that would add up to more than 100, writing nothing", () =>
+    Effect.gen(function* () {
+      const { table, storage } = withStorage({ getItem: [routesRead(1, [half])] });
+
+      expect(
+        yield* Effect.flip(storage.setVariant(campaignId, "c", { percent: 51, ...halfContent })),
+      ).toStrictEqual(new Errors.SplitOverfull({ percent: 101 }));
+      expect(table.transactionRequests).toHaveLength(0);
+    }),
+  );
+
+  it.effect(
+    "retries from fresh rules when another edit changed them first, keeping its change",
+    () =>
+      Effect.gen(function* () {
+        const { table, storage } = withStorage({
+          getItem: [noRoutes, routesRead(1, [berlin])],
+          transactWriteItems: [cancelled("None", "ConditionalCheckFailed", "None")],
+        });
+
+        yield* storage.setVariant(campaignId, "half", { percent: 50, ...halfContent });
+
+        expect(table.transactionRequests).toHaveLength(2);
+        expect(table.transactionRequests[1]?.TransactItems[1]?.Put?.Item).toStrictEqual(
+          routesAt(2, [berlin, half]),
+        );
+      }),
+  );
+
+  it.effect("answers DraftChanged when the rules keep changing on every retry", () =>
+    Effect.gen(function* () {
+      const race = cancelled("None", "ConditionalCheckFailed", "None");
+
+      const { storage } = withStorage({
+        getItem: [routesRead(1, []), routesRead(2, []), routesRead(3, [])],
+        transactWriteItems: [race, race, race],
+      });
+
+      expect(
+        yield* Effect.flip(storage.setVariant(campaignId, "half", { percent: 50, ...halfContent })),
+      ).toStrictEqual(new Errors.DraftChanged());
+    }),
+  );
+});
+
+describe("removeVariant", () => {
+  it.effect(
+    "keeps the rules item when the last variant goes, so its revision never starts over",
+    () =>
+      Effect.gen(function* () {
+        const { table, storage } = withStorage({
+          getItem: [routesRead(3, [{ key: "half", percent: 50 }])],
+        });
+
+        yield* storage.removeVariant(campaignId, "half");
+
+        expect(table.transactionRequests[0]?.TransactItems).toStrictEqual([
+          draftCheck,
+          {
+            Put: {
+              Table: tableLogicalId,
+              Item: routesAt(4, []),
+              ConditionExpression: "revision = :revision",
+              ExpressionAttributeValues: { ":revision": { N: "3" } },
+            },
+          },
+          { Delete: { Table: tableLogicalId, Key: variantKey("half") } },
+        ]);
+      }),
+  );
+
+  it.effect("writes nothing for a key the rules don't name", () =>
+    Effect.gen(function* () {
+      const { table, storage } = withStorage({
+        getItem: [routesRead(3, [{ key: "half", percent: 50 }])],
+      });
+
+      yield* storage.removeVariant(campaignId, "other");
+
+      expect(table.transactionRequests).toHaveLength(0);
+    }),
+  );
+});
+
+describe("deleteDraft", () => {
+  it.effect("deletes META only while a draft, its body, its rules as read and every variant", () =>
+    Effect.gen(function* () {
+      const { table, storage } = withStorage({
+        getItem: [routesRead(2, [{ key: "half", percent: 50 }])],
+      });
+
+      yield* storage.deleteDraft(campaignId);
+
+      expect(table.transactionRequests).toHaveLength(1);
+      expect(table.transactionRequests[0]?.TransactItems).toStrictEqual([
         {
-          Put: {
+          Delete: {
             Table: tableLogicalId,
-            Item: bodyAt(5, [{ key: "berlin", when: { city: "Berlin" } }]),
-            ConditionExpression: "revision = :revision",
-            ExpressionAttributeValues: { ":revision": { N: "4" } },
+            Key: metaKey,
+            ConditionExpression: "#state = :draft",
+            ExpressionAttributeNames: { "#state": "state" },
+            ExpressionAttributeValues: { ":draft": { S: "draft" } },
+            ReturnValuesOnConditionCheckFailure: "ALL_OLD",
           },
         },
+        { Delete: { Table: tableLogicalId, Key: bodyKey } },
         {
-          Put: {
+          Delete: {
             Table: tableLogicalId,
-            Item: variantBody("berlin", "Hallo", "Neue Berlin copy"),
+            Key: routesKey,
+            ConditionExpression: "revision = :revision",
+            ExpressionAttributeValues: { ":revision": { N: "2" } },
           },
         },
         { Delete: { Table: tableLogicalId, Key: variantKey("half") } },
@@ -831,134 +998,50 @@ describe("updateDraft", () => {
     }),
   );
 
-  it.effect(
-    "retries from a fresh read when another edit changed the copies first, so no body is left behind",
-    () =>
-      Effect.gen(function* () {
-        // Both edits read no variants; the other one added `half` and committed first.
-        const { table, storage } = withStorage({
-          getItem: [...draftAt(1), ...draftAt(2, [half])],
-          transactWriteItems: [cancelled("None", "ConditionalCheckFailed", "None")],
-        });
-
-        yield* storage.updateDraft(campaignId, (current) => ({ ...current, variants: [berlin] }));
-
-        expect(table.transactionRequests).toHaveLength(2);
-        expect(table.transactionRequests[1]?.TransactItems.slice(1)).toStrictEqual([
-          {
-            Put: {
-              Table: tableLogicalId,
-              Item: bodyAt(3, [{ key: "berlin", when: { city: "Berlin" } }]),
-              ConditionExpression: "revision = :revision",
-              ExpressionAttributeValues: { ":revision": { N: "2" } },
-            },
-          },
-          { Put: { Table: tableLogicalId, Item: variantBody("berlin", "Hallo", "Berlin copy") } },
-          { Delete: { Table: tableLogicalId, Key: variantKey("half") } },
-        ]);
-      }),
-  );
-
-  it.effect(
-    "keeps a subject another edit wrote after the revision was read: the write fails and retries",
-    () =>
-      Effect.gen(function* () {
-        const renamed = {
-          ...meta({ state: "draft" }),
-          subject: { S: "New subject" },
-        };
-
-        // The body is read at revision 1; the other edit then commits, so META reads its subject.
-        const { table, storage } = withStorage({
-          getItem: [
-            Effect.succeed({ Item: bodyAt(1) }),
-            Effect.succeed({ Item: renamed }),
-            Effect.succeed({ Item: bodyAt(2) }),
-            Effect.succeed({ Item: renamed }),
-          ],
-          transactWriteItems: [cancelled("None", "ConditionalCheckFailed")],
-        });
-
-        const next = yield* storage.updateDraft(campaignId, (current) => ({
-          ...current,
-          text: "New text",
-        }));
-
-        expect(next.subject).toBe("New subject");
-        expect(
-          table.transactionRequests[1]?.TransactItems[0]?.Update?.ExpressionAttributeValues,
-        ).toMatchObject({ ":subject": { S: "New subject" } });
-        expect(
-          table.transactionRequests[1]?.TransactItems[1]?.Put?.ExpressionAttributeValues,
-        ).toStrictEqual({ ":revision": { N: "2" } });
-      }),
-  );
-
-  it.effect("answers DraftChanged when the copies keep changing on every retry", () =>
+  it.effect("deletes a campaign with every variant it may hold in one transaction", () =>
     Effect.gen(function* () {
-      const race = cancelled("None", "ConditionalCheckFailed");
+      const full = Array.from({ length: Schemas.maxVariants }, (_, index) => ({
+        key: `v${index}`,
+        percent: 1,
+      }));
 
-      const { storage } = withStorage({
-        getItem: [...draftAt(1), ...draftAt(2), ...draftAt(3)],
-        transactWriteItems: [race, race, race],
-      });
+      const { table, storage } = withStorage({ getItem: [routesRead(9, full)] });
 
-      expect(
-        yield* Effect.flip(storage.updateDraft(campaignId, (current) => current)),
-      ).toStrictEqual(new Errors.DraftChanged());
+      yield* storage.deleteDraft(campaignId);
+
+      // DynamoDB takes up to 100 actions in one transaction.
+      expect(table.transactionRequests).toHaveLength(1);
+      expect(table.transactionRequests[0]?.TransactItems).toHaveLength(Schemas.maxVariants + 3);
     }),
   );
-});
 
-describe("deleteDraft", () => {
-  it.effect(
-    "deletes META, only while a draft, with the own body as read and every variant it names",
-    () =>
-      Effect.gen(function* () {
-        const { table, storage } = withStorage({
-          getItem: [Effect.succeed({ Item: bodyAt(2, [{ key: "half", percent: 50 }]) })],
-        });
+  it.effect("deletes the rules only if none were ever set, when it read none", () =>
+    Effect.gen(function* () {
+      const { table, storage } = withStorage({ getItem: [noRoutes] });
 
-        yield* storage.deleteDraft(campaignId);
-        expect(table.transactionRequests).toHaveLength(1);
-        expect(table.transactionRequests[0]?.TransactItems).toStrictEqual([
-          {
-            Delete: {
-              Table: tableLogicalId,
-              Key: { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } },
-              ConditionExpression: "#state = :draft",
-              ExpressionAttributeNames: { "#state": "state" },
-              ExpressionAttributeValues: { ":draft": { S: "draft" } },
-              ReturnValuesOnConditionCheckFailure: "ALL_OLD",
-            },
-          },
-          {
-            Delete: {
-              Table: tableLogicalId,
-              Key: { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "BODY" } },
-              ConditionExpression: "revision = :revision",
-              ExpressionAttributeValues: { ":revision": { N: "2" } },
-            },
-          },
-          { Delete: { Table: tableLogicalId, Key: variantKey("half") } },
-        ]);
-      }),
+      yield* storage.deleteDraft(campaignId);
+
+      expect(table.transactionRequests[0]?.TransactItems[2]).toStrictEqual({
+        Delete: {
+          Table: tableLogicalId,
+          Key: routesKey,
+          ConditionExpression: "attribute_not_exists(revision)",
+        },
+      });
+    }),
   );
 
   it.effect("re-reads and deletes the variant an edit added after the first read", () =>
     Effect.gen(function* () {
       const { table, storage } = withStorage({
-        getItem: [
-          Effect.succeed({ Item: bodyAt(1) }),
-          Effect.succeed({ Item: bodyAt(2, [{ key: "half", percent: 50 }]) }),
-        ],
-        transactWriteItems: [cancelled("None", "ConditionalCheckFailed")],
+        getItem: [noRoutes, routesRead(1, [{ key: "half", percent: 50 }])],
+        transactWriteItems: [cancelled("None", "None", "ConditionalCheckFailed")],
       });
 
       yield* storage.deleteDraft(campaignId);
 
       expect(table.transactionRequests).toHaveLength(2);
-      expect(table.transactionRequests[1]?.TransactItems[2]).toStrictEqual({
+      expect(table.transactionRequests[1]?.TransactItems[3]).toStrictEqual({
         Delete: { Table: tableLogicalId, Key: variantKey("half") },
       });
     }),
@@ -1577,15 +1660,12 @@ type Refusal =
   | CampaignChanged
   | RunSuperseded
   | SettlementNotApplied
-  | Errors.DraftChanged;
+  | Errors.DraftChanged
+  | Errors.TooManyVariants
+  | Errors.SplitOverfull;
 
 describe("condition failures", () => {
   const sending = meta({ state: "sending", queuedAt, startedAt });
-
-  const draftRead = [
-    Effect.succeed({ Item: body() }),
-    Effect.succeed({ Item: meta({ state: "draft" }) }),
-  ];
 
   it.effect.each<
     readonly [
@@ -1597,48 +1677,52 @@ describe("condition failures", () => {
   >([
     [
       "updateDraft answers CampaignNotFound when the campaign is gone",
-      { getItem: draftRead, transactWriteItems: [cancelled("ConditionalCheckFailed", "None")] },
-      (storage) => storage.updateDraft(campaignId, (current) => current),
+      { transactWriteItems: [cancelled("ConditionalCheckFailed", "None")] },
+      (storage) => storage.updateDraft(campaignId, { text: "New" }),
       Result.fail(new Errors.CampaignNotFound()),
     ],
     [
       "updateDraft answers the state a campaign that left draft is in",
       {
-        getItem: draftRead,
         transactWriteItems: [cancelled({ Code: "ConditionalCheckFailed", Item: sending }, "None")],
       },
-      (storage) => storage.updateDraft(campaignId, (current) => current),
+      (storage) => storage.updateDraft(campaignId, { subject: "New" }),
       Result.fail(new Errors.CampaignStateConflict({ state: "sending" })),
     ],
     [
-      "updateDraft refuses a campaign it reads outside draft without writing",
-      { getItem: [Effect.succeed({ Item: body() }), Effect.succeed({ Item: sending })] },
-      (storage) => storage.updateDraft(campaignId, (current) => current),
+      "setVariant answers the state a campaign that left draft is in",
+      {
+        transactWriteItems: [
+          cancelled({ Code: "ConditionalCheckFailed", Item: sending }, "None", "None"),
+        ],
+      },
+      (storage) => storage.setVariant(campaignId, "half", { percent: 50, ...halfContent }),
       Result.fail(new Errors.CampaignStateConflict({ state: "sending" })),
+    ],
+    [
+      "removeVariant answers CampaignNotFound when the campaign is gone",
+      {
+        getItem: [routesRead(1, [{ key: "half", percent: 50 }])],
+        transactWriteItems: [cancelled("ConditionalCheckFailed", "None", "None")],
+      },
+      (storage) => storage.removeVariant(campaignId, "half"),
+      Result.fail(new Errors.CampaignNotFound()),
     ],
     [
       "deleteDraft answers CampaignNotFound when the campaign is gone",
-      {
-        getItem: [Effect.succeed({ Item: body() })],
-        transactWriteItems: [cancelled("ConditionalCheckFailed", "None")],
-      },
+      { transactWriteItems: [cancelled("ConditionalCheckFailed", "None", "None")] },
       (storage) => storage.deleteDraft(campaignId),
       Result.fail(new Errors.CampaignNotFound()),
     ],
     [
       "deleteDraft answers the state a campaign that left draft is in",
       {
-        getItem: [Effect.succeed({ Item: body() })],
-        transactWriteItems: [cancelled({ Code: "ConditionalCheckFailed", Item: sending }, "None")],
+        transactWriteItems: [
+          cancelled({ Code: "ConditionalCheckFailed", Item: sending }, "None", "None"),
+        ],
       },
       (storage) => storage.deleteDraft(campaignId),
       Result.fail(new Errors.CampaignStateConflict({ state: "sending" })),
-    ],
-    [
-      "deleteDraft answers CampaignNotFound when another delete removed it first",
-      {},
-      (storage) => storage.deleteDraft(campaignId),
-      Result.fail(new Errors.CampaignNotFound()),
     ],
     [
       "newRun answers CampaignChanged without a campaign when it is gone",

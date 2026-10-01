@@ -44,10 +44,16 @@ const tokenFor = (id: string, offset = 3600, key = signingKey) =>
     mintPreviewToken(Redacted.make(key), id, expiresAt),
   );
 
-/** The page built inside the test's scope, as the deployed function builds it, asked for `token`. */
-const pageFor = Effect.fnUntraced(function* (
+const notRead = (what: string) => () => Effect.die(new Error(`the page reads no ${what}`));
+
+/**
+ * The page at `path` built inside the test's scope, as the deployed function builds it, reading
+ * `stored` and its variants' content.
+ */
+const fetchPage = Effect.fnUntraced(function* (
   stored: Schemas.Campaign | undefined,
-  token: string,
+  variants: ReadonlyArray<Schemas.Variant>,
+  path: string,
   sender: typeof settings = settings,
 ) {
   const reads: Array<string> = [];
@@ -60,25 +66,53 @@ const pageFor = Effect.fnUntraced(function* (
           Effect.gen(function* () {
             reads.push(id);
 
+            return stored ?? (yield* new Errors.CampaignNotFound());
+          }),
+        getVariant: (id, key) =>
+          Effect.gen(function* () {
+            reads.push(`${id} ${key}`);
+
             if (stored === undefined) {
               return yield* new Errors.CampaignNotFound();
             }
 
-            return stored;
+            const variant = variants.find((candidate) => candidate.key === key);
+
+            return variant ?? (yield* new Errors.VariantNotFound({ variant: key }));
           }),
-        getCopies: () => Effect.die(new Error("the page reads the whole campaign")),
-        loadCampaign: () => Effect.die(new Error("the page reads the whole campaign")),
+        getRoutes: notRead("rules alone"),
+        getSummary: notRead("summary alone"),
+        getBody: notRead("body alone"),
       }),
       Effect.provide(configuration),
     ),
   );
 
-  const response = yield* Effect.promise(() =>
-    handler(new Request(`${baseUrl}/previews/${token}`)),
-  );
+  const response = yield* Effect.promise(() => handler(new Request(`${baseUrl}${path}`)));
 
   return { response, body: yield* Effect.promise(() => response.text()), reads };
 });
+
+/** The overview page a link opens. */
+const pageFor = (stored: Schemas.Campaign | undefined, token: string, sender = settings) =>
+  fetchPage(stored, [], `/previews/${token}`, sender);
+
+const berlin: Schemas.Variant = {
+  key: "berlin",
+  when: { city: "Berlin" },
+  subject: "Hallo Berlin",
+  text: "Berlin",
+};
+
+const half: Schemas.Variant = { key: "half", percent: 50, subject: "Half & half", text: "Split" };
+
+const withVariants: Schemas.Campaign = {
+  ...campaign,
+  variants: [
+    { key: "berlin", when: { city: "Berlin" } },
+    { key: "half", percent: 50 },
+  ],
+};
 
 // Live throughout: the web handler runs on its own runtime and reads the real clock, so tokens are
 // minted against real time. On the test clock every token would arrive already expired.
@@ -145,30 +179,68 @@ describe("GET /previews/:token", () => {
     }),
   );
 
-  it.live("shows every copy, the campaign's own first, each with its key and rule", () =>
+  it.live("lists every variant with its rule and a link to its page, beside the own copy", () =>
     Effect.gen(function* () {
-      const { body } = yield* pageFor(
-        {
-          ...campaign,
-          variants: [
-            { key: "berlin", when: { city: "Berlin" }, subject: "Hallo Berlin", text: "Berlin" },
-            { key: "half", percent: 50, subject: "Half & half", text: "Split" },
-          ],
-        },
-        yield* tokenFor(campaignId),
+      const token = yield* tokenFor(campaignId);
+      const { body, reads } = yield* fetchPage(withVariants, [berlin, half], `/previews/${token}`);
+
+      const listedBerlin = body.indexOf(
+        `<li><a href="/previews/${token}/berlin">berlin</a>, for contacts with city = Berlin</li>`,
       );
 
-      const own = body.indexOf("<dd>default, for everyone no variant takes</dd>");
-      const berlin = body.indexOf("<dd>berlin, for contacts with city = Berlin</dd>");
-      const half = body.indexOf("<dd>half, for 50% of everyone no targeted variant takes</dd>");
+      const listedHalf = body.indexOf(
+        `<li><a href="/previews/${token}/half">half</a>, for 50% of everyone no targeted variant takes</li>`,
+      );
 
-      expect(own).toBeGreaterThan(-1);
-      expect(berlin).toBeGreaterThan(own);
-      expect(half).toBeGreaterThan(berlin);
+      expect(listedBerlin).toBeGreaterThan(-1);
+      expect(listedHalf).toBeGreaterThan(listedBerlin);
+      expect(body).toContain("<dd>default, for everyone no variant takes</dd>");
+      expect(body).not.toContain("Hallo Berlin");
+      expect(reads).toStrictEqual([campaignId]);
+    }),
+  );
+
+  it.live("shows one variant's copy on its own page, reading only that variant", () =>
+    Effect.gen(function* () {
+      const token = yield* tokenFor(campaignId);
+
+      const { response, body, reads } = yield* fetchPage(
+        withVariants,
+        [berlin, half],
+        `/previews/${token}/half`,
+      );
+
+      expect(response.status).toBe(200);
+      expect(body).toContain(`<a href="/previews/${token}">All copies</a>`);
+      expect(body).toContain("<dd>half, for 50% of everyone no targeted variant takes</dd>");
       expect(body).toContain("<dd>Half &amp; half</dd>");
       expect(body).toContain(
         `<pre>Split${footerFor(placeholderUnsubscribeUrl, settings.postalAddress)}</pre>`,
       );
+      expect(body).not.toContain("Hello &lt;there&gt;");
+      expect(reads).toStrictEqual([`${campaignId} half`]);
+    }),
+  );
+
+  it.live.each([
+    ["a variant the campaign lacks", withVariants, "gone"],
+    ["a variant of a deleted campaign", undefined, "half"],
+  ] as const)("answers 404 for %s", ([_label, stored, key]) =>
+    Effect.gen(function* () {
+      const token = yield* tokenFor(campaignId);
+      const { response } = yield* fetchPage(stored, [half], `/previews/${token}/${key}`);
+
+      expect(response.status).toBe(404);
+    }),
+  );
+
+  it.live("answers 404 for a forged token on a variant's page without reading storage", () =>
+    Effect.gen(function* () {
+      const token = yield* tokenFor(campaignId, 3600, "another key");
+      const { response, reads } = yield* fetchPage(withVariants, [half], `/previews/${token}/half`);
+
+      expect(response.status).toBe(404);
+      expect(reads).toHaveLength(0);
     }),
   );
 

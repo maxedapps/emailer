@@ -418,14 +418,12 @@ describe("campaigns test", () => {
 });
 
 describe("campaigns variants", () => {
-  const half: Schemas.Variant = { key: "half", percent: 50, subject: "Half", text: "Split copy" };
-
   const set = (...flags: ReadonlyArray<string>) =>
     ["campaigns", "variants", "set", campaignId, ...flags] as const;
 
-  it.effect("appends a new variant and replaces one with the same key in place", () =>
+  it.effect("sets the one variant its key names, with its rule and content", () =>
     Effect.gen(function* () {
-      const service = fakeService({ campaigns: [{ ...draft, variants: [half] }] });
+      const service = fakeService({ campaigns: [draft] });
       const text = yield* tempFile("txt", "Berlin copy");
 
       yield* runCli(service, [
@@ -436,15 +434,31 @@ describe("campaigns variants", () => {
         ...set("half", "--subject", "Half again", "--text", text, "--percent", "30"),
       ]);
 
-      expect(service.payloadsOf("campaigns.update")).toStrictEqual([
+      expect(service.received).toStrictEqual([
         {
-          variants: [
-            half,
-            { key: "berlin", subject: "Hallo", text: "Berlin copy", when: { city: "Berlin" } },
-          ],
+          endpoint: "campaigns.setVariant",
+          params: { id: campaignId, key: "berlin" },
+          payload: { subject: "Hallo", text: "Berlin copy", when: { city: "Berlin" } },
         },
-        { variants: [{ key: "half", subject: "Half again", text: "Berlin copy", percent: 30 }] },
+        {
+          endpoint: "campaigns.setVariant",
+          params: { id: campaignId, key: "half" },
+          payload: { subject: "Half again", text: "Berlin copy", percent: 30 },
+        },
       ]);
+    }),
+  );
+
+  it.effect("shows one variant", () =>
+    Effect.gen(function* () {
+      const service = fakeService({ campaigns: [draft] });
+
+      const run = yield* runCli(service, ["campaigns", "variants", "get", campaignId, "half"]);
+
+      expect(service.received).toStrictEqual([
+        { endpoint: "campaigns.getVariant", params: { id: campaignId, key: "half" } },
+      ]);
+      expect(run.stdout).toContain("The split copy.");
     }),
   );
 
@@ -478,17 +492,16 @@ describe("campaigns variants", () => {
     }),
   );
 
-  it.effect(
-    "removes a variant, sending null for the last one, and writes nothing for a key it lacks",
-    () =>
-      Effect.gen(function* () {
-        const service = fakeService({ campaigns: [{ ...draft, variants: [half] }] });
+  it.effect("removes the one variant its key names", () =>
+    Effect.gen(function* () {
+      const service = fakeService({ campaigns: [draft] });
 
-        yield* runCli(service, ["campaigns", "variants", "remove", campaignId, "berlin"]);
-        yield* runCli(service, ["campaigns", "variants", "remove", campaignId, "half"]);
+      yield* runCli(service, ["campaigns", "variants", "remove", campaignId, "half"]);
 
-        expect(service.payloadsOf("campaigns.update")).toStrictEqual([{ variants: null }]);
-      }),
+      expect(service.received).toStrictEqual([
+        { endpoint: "campaigns.removeVariant", params: { id: campaignId, key: "half" } },
+      ]);
+    }),
   );
 
   it.effect("sends a test of the variant --variant names", () =>

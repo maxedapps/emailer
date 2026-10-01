@@ -101,6 +101,10 @@ interface World {
   cursor: string | undefined;
   readonly html: string | undefined;
   readonly variants: ReadonlyArray<Schemas.Variant>;
+  /** Copies whose read takes this long: the clock moves on while they are read. */
+  readonly slowCopies: ReadonlyMap<string, Duration.Duration>;
+  /** Every copy read, by key, in order. */
+  readonly copyReads: Array<string>;
   readonly listMissing: boolean;
   readonly members: ReadonlyArray<Schemas.Contact>;
   readonly nextCursor: string | undefined;
@@ -132,6 +136,18 @@ interface World {
   readonly run: RunFeedback;
 }
 
+/** Records a copy read, letting the clock run on for as long as the read takes. */
+const readCopy = (world: World, key: string) =>
+  Effect.gen(function* () {
+    world.copyReads.push(key);
+
+    const took = world.slowCopies.get(key);
+
+    if (took !== undefined) {
+      yield* TestClock.adjust(took);
+    }
+  });
+
 const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> =>
   Layer.mergeAll(
     Layer.succeed(AudienceStore)({
@@ -161,11 +177,32 @@ const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> 
     }),
     Layer.succeed(CampaignStore)({
       ...unusedCampaigns,
-      getCopies: () =>
+      getRoutes: () =>
         Effect.succeed({
-          body: world.html === undefined ? { text } : { text, html: world.html },
-          variants: [...world.variants],
+          routes: world.variants.map(
+            ({ subject: _subject, text: _text, html: _html, ...route }) => route,
+          ),
           revision: 1,
+        }),
+      getBody: () =>
+        Effect.gen(function* () {
+          yield* readCopy(world, Schemas.defaultCopy);
+
+          return world.html === undefined ? { text } : { text, html: world.html };
+        }),
+      getVariantContent: (_id, key) =>
+        Effect.gen(function* () {
+          yield* readCopy(world, key);
+
+          const variant = world.variants.find((candidate) => candidate.key === key);
+
+          if (variant === undefined) {
+            return yield* Effect.die(new Error(`no variant ${key}`));
+          }
+
+          const { key: _key, when: _when, percent: _percent, ...content } = variant;
+
+          return content;
         }),
       beginRun: (_id, token) =>
         world.beginOutcome === "stale" || token !== world.runToken
@@ -369,6 +406,7 @@ interface Scenario {
   readonly filter?: Schemas.ContactAttributes;
   readonly html?: string | undefined;
   readonly variants?: ReadonlyArray<Schemas.Variant>;
+  readonly slowCopies?: ReadonlyArray<readonly [key: string, took: Duration.Duration]>;
   readonly beginOutcome?: "running" | "stale";
   readonly checkpointOutcome?: "updated" | "condition-failed";
   readonly listMissing?: boolean;
@@ -400,6 +438,8 @@ const fixture = (scenario: Scenario = {}): Fixture => {
     cursor: scenario.cursor,
     html: scenario.html,
     variants: scenario.variants ?? [],
+    slowCopies: new Map(scenario.slowCopies ?? []),
+    copyReads: [],
     listMissing: scenario.listMissing ?? false,
     members: scenario.members ?? [memberA],
     nextCursor: scenario.nextCursor,
@@ -657,6 +697,35 @@ describe("runSlice", () => {
               contents.get(variant ?? ""),
             );
           }
+        }),
+    );
+
+    it.effect("reads each copy once per slice, and only the copies its members get", () =>
+      Effect.gen(function* () {
+        const fix = fixture({ members: [memberB, memberC], variants: [berlin] });
+
+        successOf(yield* runSliceNow(fix));
+
+        expect(fix.mailer.sent).toHaveLength(2);
+        expect(fix.world.copyReads).toStrictEqual([Schemas.defaultCopy]);
+      }),
+    );
+
+    it.effect(
+      "reads a member's copy before its deadline check, so a slow read defers it unclaimed",
+      () =>
+        Effect.gen(function* () {
+          const fix = fixture({
+            members: [memberB, memberA],
+            variants: [berlin],
+            slowCopies: [[berlin.key, sliceTimeout]],
+          });
+
+          successOf(yield* runSliceNow(fix));
+
+          expect(fix.world.claims).toStrictEqual([memberB.id]);
+          expect(fix.world.checkpoints).toMatchObject([{ previous: undefined, next: memberB.id }]);
+          expect(fix.wake.messages).toStrictEqual([{ campaignId, runToken }]);
         }),
     );
 

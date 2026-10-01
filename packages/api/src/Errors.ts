@@ -192,13 +192,35 @@ export class VariantNotFound extends Schema.TaggedError<VariantNotFound>()(
 }
 
 /**
- * The draft's copies changed while the request was writing them — another edit or a delete landed
- * first — and they kept changing on each retry.
+ * The draft's variants changed while the request was writing them — another variant edit or a
+ * delete landed first — and they kept changing on each retry.
  */
 export class DraftChanged extends Schema.TaggedError<DraftChanged>()(
   "DraftChanged",
   {},
   { httpApiStatus: 409 },
+) {
+  override get [ErrorReporter.ignore]() {
+    return true;
+  }
+}
+
+/** Setting the variant would give the campaign more variants than a campaign may hold. */
+export class TooManyVariants extends Schema.TaggedError<TooManyVariants>()(
+  "TooManyVariants",
+  { limit: Schema.Int },
+  { httpApiStatus: 422 },
+) {
+  override get [ErrorReporter.ignore]() {
+    return true;
+  }
+}
+
+/** Setting the variant would make the percent variants take more than everyone. */
+export class SplitOverfull extends Schema.TaggedError<SplitOverfull>()(
+  "SplitOverfull",
+  { percent: Schema.Int },
+  { httpApiStatus: 422 },
 ) {
   override get [ErrorReporter.ignore]() {
     return true;

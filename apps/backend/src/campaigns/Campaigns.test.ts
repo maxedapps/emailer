@@ -109,7 +109,8 @@ interface Recorded {
   readonly created: Array<Schemas.Campaign>;
   readonly runs: Array<NewRun>;
   readonly cancels: Array<CancelSource>;
-  readonly drafts: Array<Schemas.Campaign>;
+  readonly drafts: Array<Schemas.UpdateCampaignPayload>;
+  readonly variantEdits: Array<ReadonlyArray<unknown>>;
   readonly deleted: Array<string>;
   readonly wakes: Array<{ readonly campaignId: string; readonly runToken: string }>;
   readonly schedules: Array<{
@@ -127,6 +128,7 @@ const fixture = (scenario: Scenario = {}) => {
     runs: [],
     cancels: [],
     drafts: [],
+    variantEdits: [],
     deleted: [],
     wakes: [],
     schedules: [],
@@ -178,19 +180,29 @@ const fixture = (scenario: Scenario = {}) => {
 
           return scenario.runRefusal === undefined ? Effect.void : Effect.fail(scenario.runRefusal);
         }),
-      // The store applies the edit to the draft it reads; its own suite covers the refusals.
-      updateDraft: (_id, edit) =>
+      // The store writes the change's fields; its own suite covers how, and the refusals.
+      updateDraft: (_id, change) =>
         Effect.suspend(() => {
           if (scenario.draftRefusal !== undefined) {
             return Effect.fail(scenario.draftRefusal);
           }
 
-          const next = edit(campaign === "missing" ? draftCampaign : campaign);
-
           recorded.calls.push("updateDraft");
-          recorded.drafts.push(next);
+          recorded.drafts.push(change);
 
-          return Effect.succeed(next);
+          return Effect.void;
+        }),
+      setVariant: (id, key, variant) =>
+        Effect.sync(() => {
+          recorded.calls.push("setVariant");
+          recorded.variantEdits.push([id, key, variant]);
+
+          return undefined;
+        }),
+      removeVariant: (id, key) =>
+        Effect.sync(() => {
+          recorded.calls.push("removeVariant");
+          recorded.variantEdits.push([id, key]);
         }),
       deleteDraft: (id) =>
         Effect.suspend(() => {
@@ -364,40 +376,14 @@ describe("send", () => {
 });
 
 describe("update", () => {
-  const filtered: Schemas.Campaign = {
-    ...draftCampaign,
-    html: "<p>Hello there</p>",
-    filter: { plan: "pro" },
-  };
-
-  it.effect("merges the change: absent fields stay, null removes the html and the filter", () =>
+  it.effect("writes the change as given, and answers the campaign as read after it", () =>
     Effect.gen(function* () {
-      const fix = fixture({ campaign: filtered });
+      const fix = fixture();
+      const change = { subject: "New subject", html: null, filter: null };
+      const attempt = yield* runWith(fix, Campaigns.update(campaignId, change));
 
-      const attempt = yield* runWith(
-        fix,
-        Campaigns.update(campaignId, { subject: "New subject", html: null, filter: null }),
-      );
-
-      const expected: Schemas.Campaign = { ...draftCampaign, subject: "New subject" };
-
-      expect(successOf(attempt)).toStrictEqual(expected);
-      expect(fix.recorded.drafts).toStrictEqual([expected]);
-    }),
-  );
-
-  it.effect("replaces the body and the filter it is given, keeping the rest", () =>
-    Effect.gen(function* () {
-      const fix = fixture({ campaign: filtered });
-
-      yield* runWith(
-        fix,
-        Campaigns.update(campaignId, { text: "New text", html: "<p>New</p>", filter: {} }),
-      );
-
-      expect(fix.recorded.drafts).toStrictEqual([
-        { ...filtered, text: "New text", html: "<p>New</p>", filter: {} },
-      ]);
+      expect(fix.recorded.drafts).toStrictEqual([change]);
+      expect(successOf(attempt)).toStrictEqual(draftCampaign);
     }),
   );
 
@@ -414,32 +400,7 @@ describe("update", () => {
 
       yield* runWith(present, Campaigns.update(campaignId, { listId: otherListId }));
 
-      expect(present.recorded.drafts).toStrictEqual([{ ...draftCampaign, listId: otherListId }]);
-    }),
-  );
-
-  it.effect("replaces the variants as a whole, and null removes them", () =>
-    Effect.gen(function* () {
-      const half: Schemas.Variant = { key: "half", percent: 50, subject: "Half", text: "Split" };
-
-      const berlin: Schemas.Variant = {
-        key: "berlin",
-        when: { city: "Berlin" },
-        subject: "Hallo",
-        text: "Berlin",
-      };
-
-      const fix = fixture({ campaign: { ...draftCampaign, variants: [half] } });
-
-      yield* runWith(fix, Campaigns.update(campaignId, { variants: [berlin] }));
-      yield* runWith(fix, Campaigns.update(campaignId, { subject: "Kept variants" }));
-      yield* runWith(fix, Campaigns.update(campaignId, { variants: null }));
-
-      expect(fix.recorded.drafts).toStrictEqual([
-        { ...draftCampaign, variants: [berlin] },
-        { ...draftCampaign, subject: "Kept variants", variants: [half] },
-        draftCampaign,
-      ]);
+      expect(present.recorded.drafts).toStrictEqual([{ listId: otherListId }]);
     }),
   );
 
@@ -451,6 +412,25 @@ describe("update", () => {
       const attempt = yield* runWith(fix, Campaigns.update(campaignId, { subject: "x" }));
 
       expect(failureOf(attempt)).toStrictEqual(refusal);
+    }),
+  );
+});
+
+describe("variants", () => {
+  it.effect("sets and removes one variant, answering the campaign after each", () =>
+    Effect.gen(function* () {
+      const fix = fixture();
+      const half = { percent: 50, subject: "Half", text: "Split" };
+
+      const set = yield* runWith(fix, Campaigns.setVariant(campaignId, "half", half));
+      const removed = yield* runWith(fix, Campaigns.removeVariant(campaignId, "half"));
+
+      expect(fix.recorded.variantEdits).toStrictEqual([
+        [campaignId, "half", half],
+        [campaignId, "half"],
+      ]);
+      expect(successOf(set)).toStrictEqual(draftCampaign);
+      expect(successOf(removed)).toStrictEqual(draftCampaign);
     }),
   );
 });
