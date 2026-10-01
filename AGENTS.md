@@ -4,7 +4,8 @@ We're using Alchemy (alchemy.run) and Effect (effect.website).
 # RULES
 
 - Linting, testing and other errors and warnings must be taken seriously and should be fixed properly
-- You should ALWAYS evaluate alternatives and go for the cleanest solution and implementation, NEVER for the quick fix or workaround
+- emailer is not used in production yet: ALWAYS evaluate alternatives and go for the cleanest solution and implementation, NEVER for the quick fix or workaround - think creatively, big refactors and rewrites are welcome
+- Fully embrace Alchemy and Effect and their features
 - ALWAYS consult the current official documentation (Alchemy, Effect, AWS) when working on code - do NOT make guesses or blind assumptions
 - Perform additional in-depth web research as needed to ensure you operate on proper up-to-date knowledge
 - Evaluate your work by running automated tests and by testing manually
