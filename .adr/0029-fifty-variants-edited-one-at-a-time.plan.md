@@ -1,6 +1,6 @@
 # Plan: Fifty variants, each copy edited and read on its own
 
-- Status: In progress
+- Status: Done
 - Decision: [ADR-0029](0029-fifty-variants-edited-one-at-a-time.md)
 
 ## Goal
@@ -69,6 +69,12 @@
 - README: limits (50, rule size), commands, contract, preview; ADR-0028 gets "Amended by ADR-0029".
 - `pnpm test:integration`; a manual walkthrough on `--stage test` with 50 variants plus the default at their full size limits (a script sets them): set and replace, GET of the campaign and one variant, the preview pages in a browser, draft delete; then a smaller campaign sent to simulator addresses. Destroy and check the account.
 - Already proven (plan review): a transaction deleting 15 items of 380 KB (5.7 MB) succeeds, so deleted items don't count toward the 4 MB cap.
+
+## How the build departed from the plan
+
+- **Draft delete (T2):** planned as one transaction over every copy. On `--stage test` it was throttled at full size (`TableWriteKeyRangeThroughputExceeded`, about 33,000 write units on one partition key). It now drops one variant per transaction, then the draft (ADR-0029 decision 3). A 49-variant full-size draft took 33 s.
+- **Storage tests** use the existing scripted table, not an in-memory one.
+- **Code review:** C1, a default test send racing a draft delete, now answers `CampaignNotFound` instead of a defect. C2: the full-size live case sets its variants one at a time. Parallel sets on one draft can meet DynamoDB's `TransactionConflict`, which answers 503 like any other transient storage failure.
 
 ## Open questions
 
