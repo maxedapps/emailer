@@ -7,7 +7,7 @@ import {
 } from "@emailer/api/Errors";
 import type { SendingPaused } from "@emailer/api/Errors";
 import * as AWS from "alchemy/AWS";
-import { Config, Context, Duration, Effect, Exit, Layer, Option } from "effect";
+import { Config, Context, Duration, Effect, Exit, Layer, Option, Schema } from "effect";
 import { RateLimiter } from "effect/persistence";
 
 import { unavailable } from "../Errors.ts";
@@ -96,7 +96,10 @@ export const makeSlot = (limiter: RateLimiter.RateLimiter) => (limit: number) =>
 export const recentAllowance = <E>(current: Effect.Effect<SendAllowance, E>) =>
   Effect.cachedWithTTL(current, (exit) => (Exit.isSuccess(exit) ? "30 seconds" : Duration.zero));
 
-const dailySendCeiling = Config.option(Config.Int("EMAILER_DAILY_SEND_CEILING"));
+/** Optional; a value that is not a positive integer fails the function's construction. */
+export const dailySendCeiling = Config.option(
+  Config.schema(Schema.Int.check(Schema.isGreaterThan(0)), "EMAILER_DAILY_SEND_CEILING"),
+);
 
 /**
  * Account-wide admission. Every sender — each dispatch slice and each test send — asks for the

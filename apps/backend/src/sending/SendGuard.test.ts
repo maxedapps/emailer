@@ -1,10 +1,10 @@
 import type * as cloudwatch from "@distilled.cloud/aws/cloudwatch";
 import type * as sesv2 from "@distilled.cloud/aws/sesv2";
 import { describe, expect, it } from "@effect/vitest";
-import { Duration, Effect } from "effect";
+import { ConfigProvider, Duration, Effect, Option, Result } from "effect";
 import { RateLimiter } from "effect/persistence";
 
-import { makeSlot, recentAllowance, sendGuard } from "./SendGuard.ts";
+import { dailySendCeiling, makeSlot, recentAllowance, sendGuard } from "./SendGuard.ts";
 
 import type { SendAllowance } from "./SendGuard.ts";
 
@@ -232,6 +232,26 @@ describe("recentAllowance", () => {
       expect(yield* recent).toStrictEqual({ limit: 11 });
       expect(yield* recent).toStrictEqual({ limit: 11 });
       expect(reads).toBe(2);
+    }),
+  );
+});
+
+describe("dailySendCeiling", () => {
+  const read = (env: Readonly<Record<string, string>>) =>
+    Effect.result(dailySendCeiling.parse(ConfigProvider.fromEnvRecord(env)));
+
+  it.effect("is absent when unset and reads a positive integer", () =>
+    Effect.gen(function* () {
+      expect(yield* read({})).toStrictEqual(Result.succeed(Option.none()));
+      expect(yield* read({ EMAILER_DAILY_SEND_CEILING: "500" })).toStrictEqual(
+        Result.succeed(Option.some(500)),
+      );
+    }),
+  );
+
+  it.effect.each(["0", "-3", "1.5", "many"])("refuses %s rather than dropping the cap", (value) =>
+    Effect.gen(function* () {
+      expect(Result.isFailure(yield* read({ EMAILER_DAILY_SEND_CEILING: value }))).toBe(true);
     }),
   );
 });
