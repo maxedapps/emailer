@@ -46,11 +46,23 @@ const throttleBackoff = Schedule.exponential("1 second").pipe(
   Schedule.while(({ input }) => Predicate.isTagged(input, "SendThrottled")),
 );
 
-const reservationFor = (delay: Duration.Duration) =>
-  Duration.sum(delay, Duration.sum(submissionTimeout, Duration.times(operationTimeout, 2)));
+/**
+ * A retry that would run past the deadline. It ends the retries and settles like the throttle it
+ * answers, so the row is final before the invocation is.
+ */
+class RetryOutOfTime extends Data.TaggedError("RetryOutOfTime") {}
 
-const remainingUntil = (deadline: number) =>
-  Effect.map(Clock.currentTimeMillis, (now) => Duration.millis(deadline - now));
+/**
+ * Whether an attempt that waits `delay` for its slot, then submits, settles and pauses the run,
+ * still finishes before `deadline`.
+ */
+const fitsBefore = (deadline: number, delay: Duration.Duration) =>
+  Effect.map(Clock.currentTimeMillis, (now) =>
+    Duration.isLessThanOrEqualTo(
+      Duration.sum(delay, Duration.sum(submissionTimeout, Duration.times(operationTimeout, 2))),
+      Duration.millis(deadline - now),
+    ),
+  );
 
 /**
  * One page of a campaign run. A write that finds the run is no longer the campaign's ends the slice
@@ -172,9 +184,8 @@ export const runSlice = Effect.fn("Dispatching.runSlice")(
 
       const content = yield* Cache.get(copies, variant);
       const delay = yield* guards.slot(guard.limit);
-      const remaining = yield* remainingUntil(deadline);
 
-      if (Duration.isGreaterThan(reservationFor(delay), remaining)) {
+      if (!(yield* fitsBefore(deadline, delay))) {
         if (lastProcessed === undefined) {
           return yield* new SliceOverrun();
         }
@@ -218,6 +229,7 @@ export const runSlice = Effect.fn("Dispatching.runSlice")(
         runToken: message.runToken,
         limit: guard.limit,
         firstDelay: delay,
+        deadline,
       });
 
       if (submitted === "stop") {
@@ -256,6 +268,7 @@ const submitClaimed = Effect.fn("Dispatching.submitClaimed")(function* (input: {
   readonly runToken: string;
   readonly limit: number;
   readonly firstDelay: Duration.Duration;
+  readonly deadline: number;
 }) {
   const mailer = yield* Mailer;
   const campaigns = yield* CampaignStore;
@@ -267,18 +280,29 @@ const submitClaimed = Effect.fn("Dispatching.submitClaimed")(function* (input: {
   const mail = Mail.Campaign({ content, unsubscribeUrl, campaignId, sendId, variant });
 
   // One attempt waits for its pacing slot and sends. The first attempt's slot is the one already
-  // checked against the time budget; a retry reserves its own once it has backed off.
+  // checked against the time budget; a retry reserves its own once it has backed off, and checks it
+  // the same way.
   const sendOnce = Effect.gen(function* () {
     const { attempt } = yield* Schedule.CurrentMetadata;
 
-    yield* Effect.sleep(attempt === 0 ? input.firstDelay : yield* guards.slot(input.limit));
+    if (attempt === 0) {
+      yield* Effect.sleep(input.firstDelay);
+    } else {
+      const delay = yield* guards.slot(input.limit);
+
+      if (!(yield* fitsBefore(input.deadline, delay))) {
+        return yield* new RetryOutOfTime();
+      }
+
+      yield* Effect.sleep(delay);
+    }
 
     return yield* mailer.send(recipient, mail);
   });
 
   const settlement = yield* Effect.retry(sendOnce, throttleBackoff).pipe(
     Effect.map(accepted),
-    Effect.catchTags(failureOutcomes),
+    Effect.catchTags({ ...failureOutcomes, RetryOutOfTime: failureOutcomes.SendThrottled }),
   );
 
   const finishedAt = yield* nowIso;

@@ -57,7 +57,9 @@ export default class DispatcherFunction extends AWS.Lambda.Function<DispatcherFu
           const message = yield* decodeDispatchMessage(record.body);
           const now = yield* Clock.currentTimeMillis;
 
-          // The reservation covers one attempt; the margin covers a rate-limited retry tail.
+          // Each attempt, retries included, reserves its submission, settlement and pause before
+          // the deadline; the margin covers the claim before an attempt, and the checkpoint and
+          // wake-up a slice that runs out of time still writes.
           yield* runSlice(
             message,
             now + Duration.toMillis(invocationTimeout) - Duration.toMillis(sliceMargin),

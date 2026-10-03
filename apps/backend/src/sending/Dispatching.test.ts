@@ -983,6 +983,35 @@ describe("runSlice", () => {
     }),
   );
 
+  it.effect(
+    "settles a throttled submission as rate-limited when its retry's slot would pass the deadline",
+    () =>
+      Effect.gen(function* () {
+        // The retry's slot opens 400 s on, past the 5-minute deadline: it is not taken.
+        const fix = fixture({
+          answers: [new SendThrottled(), "never-sent"],
+          delays: [Duration.zero, Duration.seconds(400)],
+        });
+
+        const started = yield* Clock.currentTimeMillis;
+        const fiber = yield* Effect.forkChild(runSliceNow(fix));
+
+        yield* TestClock.adjust("1 second");
+
+        successOf(yield* Fiber.join(fiber));
+
+        expect(fix.mailer.sent).toHaveLength(1);
+        expect(fix.guard.slots).toHaveLength(2);
+        expect(fix.world.rows.get(memberA.id)).toMatchObject({
+          state: "rejected",
+          rejectionCode: "rate-limited",
+        });
+        expect(fix.world.paused).toStrictEqual([{ reason: "rate-limited", cursor: memberA.id }]);
+        // Settled after the 1 s backoff alone, long before the slot and the deadline.
+        expect((yield* Clock.currentTimeMillis) - started).toBe(1000);
+      }),
+  );
+
   it.effect("settles an uncertain submission without resending it and moves on", () =>
     Effect.gen(function* () {
       const fix = fixture({
