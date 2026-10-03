@@ -9,6 +9,7 @@ We're using Alchemy (alchemy.run) and Effect (effect.website).
 - Fully embrace Alchemy and Effect and their features
 - ALWAYS consult the current official documentation (Alchemy, Effect, AWS) when working on code - do NOT make guesses or blind assumptions
 - Perform additional in-depth web research as needed to ensure you operate on proper up-to-date knowledge
+- Never drop an item of an approved plan on your own judgment - implement it or ask the operator first
 - Evaluate your work by running automated tests and by testing manually
 - If you work with worktrees, you own that tree, and you must handle merging back as well as worktree cleanup!
 - Document key decisions and findings as ADRs (Architecture Decision Records) in an `.adr` folder (which is to be committed)
