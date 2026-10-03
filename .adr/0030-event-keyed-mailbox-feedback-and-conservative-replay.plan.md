@@ -245,9 +245,28 @@ Plus the stage's curl transcript, with the account and URLs redacted.
 
 None. F6 was decided by the user.
 
+## As built
+
+- **T5:** the decision table keeps `suppress` and gains `counter` (`FeedbackCounter | undefined`). It does not get a `mailbox` enum. `Classified.transientAt`, the canonical bounce time, is set only for a transient bounce, and the handler adds the window entry when that field is present. Only bounces carry the timestamp, so an enum would also have needed a separately optional field.
+- **T7:** strict mode failed 92 tests:
+  - 84 relied on the implicit success for calls they make by design;
+  - 8 were intentional retries after a scripted failure.
+
+  None hid an extra write. The scripts come from a measured per-test call log, in call order. These pins shrank:
+  - `newRun`'s re-queue;
+  - `cancelCampaign`'s queued cancel;
+  - `checkpoint`'s later-page value map.
+
+  These were kept: `updateContact`'s `rewritten(...)` and `recordFeedback`'s `historyPut(...)` one-liners. Each already states only its delta through a helper, and shrinking it would only weaken it.
+- **T8:** `dailySendCeiling` is exported, so its test reads it without the AWS bindings.
+
 ## Review
 
 Plan review (Codex, round 1):
 
 - **R1 (fix):** the ADR promised that the redrive rule prevents re-suppression. AWS documents eventually consistent queue counts, 24-hour EventBridge retries and SQS redelivery, so the wording now says the rule drains known pending work only. ADR-0003 line 35 is also qualified.
 - **R2 (fix):** no planned check reached the deployed transient branch. The stage walk injects one untagged transient envelope twice, and the local duplicate test replays after the clock has moved.
+
+Code review (Codex, round 2): no bug, security or simplification findings. It accepted the three departures above.
+
+- **R3 (fix, nit):** the replay wording said that old feedback "suppresses again". A transient bounce restores only the window, and an ignored complaint does neither, so the README and the CLI help now say "can restore the suppression or the transient-bounce window".

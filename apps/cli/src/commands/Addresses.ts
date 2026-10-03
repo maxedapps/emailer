@@ -40,7 +40,7 @@ const addressesUnsuppress = Command.make(
   }),
 ).pipe(
   Command.withDescription(
-    "Clear local and account suppression for an address. Redrive failed feedback first: an older bounce or complaint processed later suppresses it again",
+    "Clear local and account suppression for an address. Redrive failed feedback first: older feedback processed later can restore the suppression or the transient-bounce window",
   ),
 );
 
