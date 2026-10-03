@@ -377,6 +377,7 @@ describe("sendTest", () => {
 
   it.effect.each([
     ["a reputation halt", "reputation"],
+    ["a paused SES account", "sending-paused"],
     ["a spent daily budget", "daily-quota"],
   ] as const)("refuses to send during %s", ([_label, reason]) =>
     Effect.gen(function* () {

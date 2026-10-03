@@ -120,6 +120,29 @@ describe("sendGuard", () => {
     ).toStrictEqual({ limit: 11, refusal: "reputation" });
   });
 
+  it("refuses as sending-paused when SES reports sending disabled, below a reputation halt", () => {
+    const withSending = (quota: sesv2.SendQuota, enabled: boolean) => {
+      const response = account(quota);
+
+      response.SendingEnabled = enabled;
+
+      return response;
+    };
+
+    expect(sendGuard(withSending(healthy, false), silent, undefined)).toStrictEqual({
+      limit: 11,
+      refusal: "sending-paused",
+    });
+    expect(sendGuard(withSending(healthy, false), described(["ALARM"]), undefined)).toStrictEqual({
+      limit: 11,
+      refusal: "reputation",
+    });
+    expect(
+      sendGuard(withSending({ ...healthy, SentLast24Hours: 200 }, false), silent, undefined),
+    ).toStrictEqual({ limit: 11, refusal: "sending-paused" });
+    expect(sendGuard(withSending(healthy, true), silent, undefined)).toStrictEqual({ limit: 11 });
+  });
+
   it("is not halted when every alarm is OK or INSUFFICIENT_DATA", () => {
     expect(
       sendGuard(account(healthy), described(["OK", "OK", "INSUFFICIENT_DATA", "OK"]), undefined),

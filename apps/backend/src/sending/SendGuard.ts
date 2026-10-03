@@ -16,7 +16,10 @@ import { rateLimitStoreLayer } from "../storage/RateLimit.ts";
 
 export interface SendAllowance {
   readonly limit: number;
-  /** Why nothing may be sent now. A reputation halt outranks a spent daily budget. */
+  /**
+   * Why nothing may be sent now. A reputation halt outranks a paused account, which outranks a
+   * spent daily budget.
+   */
   readonly refusal?: SendingPaused["reason"];
 }
 
@@ -46,6 +49,11 @@ export const sendGuard = (
 
   if (alarmed || enforcement) {
     return { limit, refusal: "reputation" };
+  }
+
+  // Paused by hand or by SES: a send would only be refused, and its claimed recipient lost with it.
+  if (account.SendingEnabled === false) {
+    return { limit, refusal: "sending-paused" };
   }
 
   if (max24HourSend !== undefined && sentLast24Hours >= Math.min(quotaLimit, ceiling ?? Infinity)) {

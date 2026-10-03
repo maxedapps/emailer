@@ -238,10 +238,13 @@ export class TooManyAttributes extends Schema.TaggedError<TooManyAttributes>()(
   }
 }
 
-/** The account-wide guard refuses every send right now: a reputation halt or a spent daily budget. */
+/**
+ * The account-wide guard refuses every send right now: a reputation halt, an SES account whose
+ * sending is paused, or a spent daily budget.
+ */
 export class SendingPaused extends Schema.TaggedError<SendingPaused>()(
   "SendingPaused",
-  { reason: PauseReason.pick(["reputation", "daily-quota"]) },
+  { reason: PauseReason.pick(["reputation", "sending-paused", "daily-quota"]) },
   { httpApiStatus: 503 },
 ) {
   override get [ErrorReporter.ignore]() {

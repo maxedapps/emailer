@@ -1042,6 +1042,11 @@ describe("runSlice", () => {
       reason: "reputation",
     },
     {
+      cause: "a paused SES account",
+      scenario: { guard: { limit: 8, refusal: "sending-paused" } },
+      reason: "sending-paused",
+    },
+    {
       cause: "200 accepted with 10 bounced",
       scenario: { run: { accepted: 200, bounced: 10, complained: 0 } },
       reason: "feedback",
