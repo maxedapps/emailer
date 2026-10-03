@@ -413,7 +413,7 @@ Each command below is run as `pnpm emailer <command>`. `[…]` marks an optional
 - A `.csv` file is read as CSV. The header's `email` and `name` columns match in any case, and every other column becomes an attribute named by its header, so delete export columns you don't want first. Empty cells are left out. A missing `email` column or a column named twice is rejected, and a row that fails the checks is named by its line.
 - `--filter` keeps members whose attributes equal every `key=value` (AND). Omit it for the whole list. Members that don't match are left out entirely and are not counted in `skipped`.
 - An opt-out covers one list: a campaign's unsubscribe link opts the address out of that campaign's list and no other. It holds the address, not the contact, so deleting the contact and creating another at the same address does not make it mailable on that list. While an address has an opt-out from any list, moving its contact onto a different address answers **409** `AddressOptedOut`. Imports and the CLI never lift an opt-out; only the address's own confirmed sign-up to that list does.
-- `addresses unsuppress` clears local suppression and the SES **account** suppression list (one list per account and Region, shared with every other sender there). SES stores suppression entries case-sensitively, so pass the address in the case SES stored it: as the contact holds it (`contacts by-email` shows it) or as `aws sesv2 list-suppressed-destinations` lists it. `addresses status` echoes the address you pass, so another case shows no account entry rather than an error. It never clears an opt-out.
+- `addresses unsuppress` clears local suppression, the transient-bounce window and the SES **account** suppression list (one list per account and Region, shared with every other sender there). Redrive failed feedback first (see [Operate](#operate)): an older bounce or complaint processed after the clear suppresses the address again. SES stores suppression entries case-sensitively, so pass the address in the case SES stored it: as the contact holds it (`contacts by-email` shows it) or as `aws sesv2 list-suppressed-destinations` lists it. `addresses status` echoes the address you pass, so another case shows no account entry rather than an error. It never clears an opt-out.
 - Deleting a contact removes it from every list; deleting a list removes every membership in it. Neither deletes the other side. A delete that times out on a large list is safe to repeat.
 - Listings page in created order. A page's `nextCursor` is absent when there is nothing more; a full last page may still carry one that leads to an empty page.
 - `campaigns send` exits zero when the campaign is **queued**. Poll `campaigns get` for `progress`, `feedback` and a `paused` reason.
@@ -529,7 +529,16 @@ aws sqs start-message-move-task \
   --destination-arn <FeedbackEvents ARN>
 ```
 
-A redriven event that already landed changes nothing.
+A redriven event never counts twice on a campaign. It does apply to the address again: if the address was cleared with `addresses unsuppress` since, a redriven bounce or complaint suppresses it again, and a transient bounce re-enters the window ([ADR-0030](.adr/0030-event-keyed-mailbox-feedback-and-conservative-replay.md)).
+
+**Redrive before you clear a suppression.** Before `addresses unsuppress`, redrive `FeedbackFailures` until it is empty and let `FeedbackEvents` drain; both counts below must be 0 on each queue:
+
+```sh
+aws sqs get-queue-attributes --queue-url <queue URL> \
+  --attribute-names ApproximateNumberOfMessages ApproximateNumberOfMessagesNotVisible
+```
+
+This clears the feedback known to be pending, not all of it: the counts are eventually consistent, EventBridge retries a failed delivery for up to 24 hours, and SQS can deliver a message twice. Feedback that still arrives after the clear suppresses the address again; clear it again.
 
 **Redrive a campaign stuck `sending`:**
 

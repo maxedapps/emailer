@@ -38,7 +38,11 @@ const addressesUnsuppress = Command.make(
       ),
     );
   }),
-).pipe(Command.withDescription("Clear local and account suppression for an address"));
+).pipe(
+  Command.withDescription(
+    "Clear local and account suppression for an address. Redrive failed feedback first: an older bounce or complaint processed later suppresses it again",
+  ),
+);
 
 export const addresses = Command.make("addresses").pipe(
   Command.withDescription("Inspect and clear address suppression"),
