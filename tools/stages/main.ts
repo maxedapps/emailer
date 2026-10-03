@@ -4,8 +4,8 @@
  */
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Console, Data, DateTime, Duration, Effect, Option, Stream } from "effect";
-import { Argument, Command } from "effect/unstable/cli";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { Argument, Command } from "effect/cli";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import * as TestStage from "./TestStage.ts";
 
