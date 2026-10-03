@@ -2,7 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Errors from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
 import { Clock, ConfigProvider, Effect, Layer, Option, Redacted } from "effect";
-import { HttpEffect } from "effect/unstable/http";
+import { HttpEffect } from "effect/http";
 
 import { footerFor } from "../sending/Message.ts";
 import { CampaignReader } from "../storage/Campaigns.ts";

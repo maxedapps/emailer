@@ -19,10 +19,9 @@ import {
   Redacted,
   Schema,
 } from "effect";
-// oxlint-disable-next-line effecttsgo/node-builtin-import
 import { createHash } from "node:crypto";
-import { FetchHttpClient, HttpEffect } from "effect/unstable/http";
-import { HttpApi } from "effect/unstable/httpapi";
+import { FetchHttpClient, HttpEffect } from "effect/http";
+import { HttpApi } from "effect/http-api";
 
 import { makeApiHandler } from "./Api.ts";
 import { AccountSuppression } from "../audience/Addresses.ts";

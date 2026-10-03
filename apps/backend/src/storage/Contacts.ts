@@ -121,7 +121,7 @@ export const reservationItem = (email: string, contactId: string) =>
 /** A reservation read back by batch, keyed by the mailbox its key names. */
 const readHeldReservation = itemReader(
   Schema.Struct({
-    pk: Schema.String.check(Schema.isStartsWith("EMAIL#")),
+    pk: Schema.String.check(Schema.isStartingWith("EMAIL#")),
     contactId: Schemas.EntityId,
   }),
 );

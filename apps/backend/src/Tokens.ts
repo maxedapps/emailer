@@ -1,6 +1,6 @@
-import { Crypto, Effect, Encoding, Option, Redacted, Schema } from "effect";
+import { Crypto, Effect, Option, Redacted, Schema } from "effect";
+import { Base64Url, Hex } from "effect/encoding";
 // Effect exposes no HMAC or constant-time comparison, so these are the platform primitives it would wrap.
-// oxlint-disable-next-line effecttsgo/node-builtin-import
 import { createHmac, timingSafeEqual } from "node:crypto";
 
 /**
@@ -103,7 +103,7 @@ export const issueSecret = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const bytes = yield* Effect.orDie(crypto.randomBytes(secretBytes));
 
-  return Redacted.make(Encoding.encodeBase64Url(bytes));
+  return Redacted.make(Base64Url.encode(bytes));
 });
 
 /** What is stored in a secret's place: its SHA-256, as hex. */
@@ -116,5 +116,5 @@ export const hashSecret = Effect.fn("Tokens.hashSecret")(function* (
     crypto.digest("SHA-256", encoder.encode(Redacted.value(secret))),
   );
 
-  return Encoding.encodeHex(digest);
+  return Hex.encode(digest);
 });

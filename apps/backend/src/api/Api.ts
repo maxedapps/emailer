@@ -3,8 +3,8 @@ import { EmailerApi } from "@emailer/api/Api";
 import * as Schemas from "@emailer/api/Schemas";
 import * as AWS from "alchemy/AWS";
 import { Duration, Effect, Layer, Redacted } from "effect";
-import { HttpRouter, HttpServer, HttpServerResponse } from "effect/unstable/http";
-import { HttpApiBuilder } from "effect/unstable/httpapi";
+import { HttpRouter, HttpServer, HttpServerResponse } from "effect/http";
+import { HttpApiBuilder } from "effect/http-api";
 
 import * as Addresses from "../audience/Addresses.ts";
 import * as Contacts from "../audience/Contacts.ts";

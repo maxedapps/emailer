@@ -1,6 +1,6 @@
 import { Effect, Layer, type Redacted } from "effect";
-import { type HttpClient, HttpClientRequest } from "effect/unstable/http";
-import { HttpApiClient, HttpApiMiddleware } from "effect/unstable/httpapi";
+import { type HttpClient, HttpClientRequest } from "effect/http";
+import { HttpApiClient, HttpApiMiddleware } from "effect/http-api";
 
 import { AdminAuthorization, EmailerApi, SubscriptionAuthorization } from "./Api.ts";
 

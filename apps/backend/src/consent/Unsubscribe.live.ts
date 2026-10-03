@@ -3,7 +3,7 @@ import * as Errors from "@emailer/api/Errors";
 import { Effect, Redacted, Result } from "effect";
 import { describe, expect } from "vitest";
 
-import { HttpClient, HttpClientRequest } from "effect/unstable/http";
+import { HttpClient, HttpClientRequest } from "effect/http";
 
 import { newIdentifier } from "../Identifiers.ts";
 import { mintToken } from "./Unsubscribe.ts";

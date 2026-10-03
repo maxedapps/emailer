@@ -1,7 +1,7 @@
 import { Data, Effect, ErrorReporter } from "effect";
-import { HttpServerError } from "effect/unstable/http";
+import { HttpServerError } from "effect/http";
 
-import type { HttpServerResponse } from "effect/unstable/http";
+import type { HttpServerResponse } from "effect/http";
 
 /**
  * How every function reports a failure: one structured line with the error's tag and the attributes

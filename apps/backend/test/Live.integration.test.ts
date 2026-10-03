@@ -4,7 +4,6 @@
  * the one file, and each suite is a module it registers; select one with `-t`.
  */
 // A synchronous guard that must run before any test is collected.
-// oxlint-disable-next-line effecttsgo/node-builtin-import
 import { existsSync } from "node:fs";
 
 import * as AWS from "alchemy/AWS";
@@ -12,7 +11,6 @@ import * as Test from "alchemy/Test/Vitest";
 import { Effect } from "effect";
 
 import Stack from "../../../alchemy.run.ts";
-import { awsProviders } from "../../../stacks/providers.ts";
 import { apiSuite } from "../src/api/Api.live.ts";
 import { cancellationSuite } from "../src/campaigns/CampaignCancellation.live.ts";
 import { draftingSuite } from "../src/campaigns/Drafting.live.ts";
@@ -42,7 +40,7 @@ process.stderr.write(`Live suite stage: ${stage}\n`);
 const stageTimeout = 30 * 60_000;
 
 const { test, beforeAll, afterAll, deploy, destroy } = Test.make({
-  providers: awsProviders,
+  providers: AWS.providers(),
   state: AWS.state(),
   stage,
 });

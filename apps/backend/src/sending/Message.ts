@@ -1,5 +1,6 @@
 import * as Schemas from "@emailer/api/Schemas";
-import { Config, Data, Duration, Effect, Encoding, Option, Schema } from "effect";
+import { Config, Data, Duration, Effect, Option, Schema } from "effect";
+import { Base64 } from "effect/encoding";
 
 import { confirmationLifetime } from "../storage/Subscriptions.ts";
 
@@ -89,7 +90,7 @@ export const fromHeader = (sender: string, name: Option.Option<string>): string 
     onSome: (name) =>
       printableAscii.test(name)
         ? `"${name}" <${sender}>`
-        : `=?UTF-8?B?${Encoding.encodeBase64(name)}?= <${sender}>`,
+        : `=?UTF-8?B?${Base64.encode(name)}?= <${sender}>`,
   });
 
 export const footerFor = (unsubscribeUrl: string, postal: string): string =>

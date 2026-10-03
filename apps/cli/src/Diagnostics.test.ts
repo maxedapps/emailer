@@ -2,7 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Errors from "@emailer/api/Errors";
 import { Cause, Config, ConfigProvider, Data, Effect, Exit, Runtime, Schema } from "effect";
 import { TestConsole } from "effect/testing";
-import { HttpClientError, HttpClientRequest } from "effect/unstable/http";
+import { HttpClientError, HttpClientRequest } from "effect/http";
 
 import { reporting } from "./Diagnostics.ts";
 

@@ -1,6 +1,6 @@
 import * as Schemas from "@emailer/api/Schemas";
 import { Clock, Duration, Effect, Layer, Option } from "effect";
-import { HttpRouter, HttpServerResponse } from "effect/unstable/http";
+import { HttpRouter, HttpServerResponse } from "effect/http";
 
 import { functionServicesLayer, lambdaBasics } from "../Lambda.ts";
 import { respondingToFailures } from "../Reporting.ts";

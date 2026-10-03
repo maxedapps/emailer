@@ -1,7 +1,7 @@
 import * as AWS from "alchemy/AWS";
 import { fromCredentials } from "alchemy/AWS/Credentials";
 import { Data, Effect, Layer, Result } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
+import { FetchHttpClient } from "effect/http";
 import { describe, expect, it } from "@effect/vitest";
 import { StorageUnavailable } from "@emailer/api/Errors";
 

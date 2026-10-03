@@ -2,7 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 import { StorageUnavailable } from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
 import { ConfigProvider, Effect, Layer, Redacted } from "effect";
-import { HttpEffect } from "effect/unstable/http";
+import { HttpEffect } from "effect/http";
 
 import { UnsubscribeStore } from "../storage/Unsubscribe.ts";
 import { maxTokenLength, mintToken } from "./Unsubscribe.ts";

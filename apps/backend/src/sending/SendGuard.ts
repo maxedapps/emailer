@@ -8,7 +8,7 @@ import {
 import type { SendingPaused } from "@emailer/api/Errors";
 import * as AWS from "alchemy/AWS";
 import { Config, Context, Duration, Effect, Exit, Layer, Option } from "effect";
-import { RateLimiter } from "effect/unstable/persistence";
+import { RateLimiter } from "effect/persistence";
 
 import { unavailable } from "../Errors.ts";
 import { reputationAlarms } from "./Reputation.ts";

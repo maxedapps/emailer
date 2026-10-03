@@ -1,4 +1,4 @@
-import { Command } from "effect/unstable/cli";
+import { Command } from "effect/cli";
 
 import { addresses } from "./commands/Addresses.ts";
 import { campaigns } from "./commands/Campaigns.ts";

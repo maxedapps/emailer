@@ -1,7 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import { maxEmailLength } from "@emailer/api/Schemas";
 import { ConfigProvider, Effect, Option, Result } from "effect";
-// oxlint-disable-next-line effecttsgo/node-builtin-import
 import { createHmac } from "node:crypto";
 
 import {

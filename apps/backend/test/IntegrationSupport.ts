@@ -32,7 +32,7 @@ import {
   Scope,
   Stream,
 } from "effect";
-import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http";
+import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 
 import { newIdentifier, nowIso } from "../src/Identifiers.ts";
 import { campaignKey, itemReader, str, tableLogicalId } from "../src/storage/Items.ts";

@@ -1,6 +1,6 @@
 import { Duration, Effect, Layer, Result } from "effect";
 import { TestClock } from "effect/testing";
-import { RateLimiter } from "effect/unstable/persistence";
+import { RateLimiter } from "effect/persistence";
 import { describe, expect, it } from "@effect/vitest";
 
 import { num, str } from "./Items.ts";

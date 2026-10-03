@@ -30,7 +30,8 @@ import {
   senderLogicalId,
   sendingIdentityStack,
 } from "../apps/backend/src/identity/SendingIdentity.ts";
-import { awsProviders } from "./providers.ts";
+
+const awsProviders = AWS.providers();
 
 const withCloudflare = Layer.merge(awsProviders, Cloudflare.providers());
 

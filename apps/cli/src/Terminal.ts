@@ -1,7 +1,7 @@
 import { NodeTerminal } from "@effect/platform-node";
 import { Effect, Layer, Stdio, Stream, Terminal } from "effect";
-import { CliError, Prompt } from "effect/unstable/cli";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { CliError, Prompt } from "effect/cli";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 /**
  * Node's terminal — keypresses from stdin, raw mode — with every write and measurement moved to

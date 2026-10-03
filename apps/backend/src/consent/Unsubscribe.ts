@@ -1,7 +1,8 @@
 import * as Schemas from "@emailer/api/Schemas";
 import { Random } from "alchemy";
 import * as AWS from "alchemy/AWS";
-import { Config, Effect, Encoding, Option, Redacted, Result, Schema } from "effect";
+import { Config, Effect, Option, Redacted, Result, Schema } from "effect";
+import { Base64Url } from "effect/encoding";
 
 import * as Tokens from "../Tokens.ts";
 
@@ -40,7 +41,7 @@ const decodeMailbox = Schema.decodeUnknownOption(Schemas.NormalizedEmailAddress)
 
 const isListId = Schema.is(Schemas.EntityId);
 
-const encodePayload = (mailbox: string): string => Encoding.encodeBase64Url(mailbox);
+const encodePayload = (mailbox: string): string => Base64Url.encode(mailbox);
 
 /**
  * A link names the mailbox it was issued to, not the contact that happened to hold it, and the list
@@ -55,7 +56,7 @@ export const mintToken = (
   Tokens.sign(signingKey, [encodePayload(Schemas.mailboxKey(target.mailbox)), target.listId]);
 
 const mailboxOf = (payload: string): Option.Option<string> =>
-  Result.getSuccess(Encoding.decodeBase64UrlString(payload)).pipe(
+  Result.getSuccess(Base64Url.decodeString(payload)).pipe(
     // base64url decoding is lenient: several encodings, including ones with unused trailing bits
     // set, decode to the same bytes. Requiring the round trip means exactly one token names any
     // mailbox.

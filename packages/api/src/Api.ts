@@ -7,7 +7,7 @@ import {
   HttpApiMiddleware,
   HttpApiSchema,
   HttpApiSecurity,
-} from "effect/unstable/httpapi";
+} from "effect/http-api";
 
 import * as Errors from "./Errors.ts";
 import * as Schemas from "./Schemas.ts";

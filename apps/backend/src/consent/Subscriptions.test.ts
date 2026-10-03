@@ -5,7 +5,6 @@ import * as Errors from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
 import { DateTime, Duration, Effect, Layer, Schema } from "effect";
 import { TestClock } from "effect/testing";
-// oxlint-disable-next-line effecttsgo/node-builtin-import
 import { createHash } from "node:crypto";
 
 import { confirm, subscribe } from "./Subscriptions.ts";

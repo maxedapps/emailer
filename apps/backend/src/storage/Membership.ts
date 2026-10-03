@@ -44,7 +44,7 @@ const Member = Schema.Struct({
 const readMember = itemReader(Member);
 
 const decodeMemberCursor = Schema.decodeUnknownEffect(
-  keyCodec(Schema.Struct({ sk: Schema.String.check(Schema.isStartsWith("MEMBER#")) })),
+  keyCodec(Schema.Struct({ sk: Schema.String.check(Schema.isStartingWith("MEMBER#")) })),
 );
 
 export const memberKey = (listId: string, contactId: string) => ({

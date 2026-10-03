@@ -1,7 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import { ContactNotFound, StorageUnavailable } from "@emailer/api/Errors";
 import { Cause, Data, Effect, ErrorReporter, Exit, Inspectable, Layer, Logger } from "effect";
-import { HttpEffect, HttpRouter, HttpServerResponse } from "effect/unstable/http";
+import { HttpEffect, HttpRouter, HttpServerResponse } from "effect/http";
 
 import { CorruptItem } from "./Errors.ts";
 import {

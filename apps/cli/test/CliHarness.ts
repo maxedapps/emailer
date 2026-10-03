@@ -18,10 +18,10 @@ import {
   Terminal,
 } from "effect";
 import { TestConsole } from "effect/testing";
-import { Command } from "effect/unstable/cli";
-import { FetchHttpClient, HttpRouter, HttpServer } from "effect/unstable/http";
-import { HttpApiBuilder } from "effect/unstable/httpapi";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { Command } from "effect/cli";
+import { FetchHttpClient, HttpRouter, HttpServer } from "effect/http";
+import { HttpApiBuilder } from "effect/http-api";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { fileURLToPath } from "node:url";
 
 import { reporting } from "../src/Diagnostics.ts";

@@ -3,8 +3,8 @@ import { describe, expect, it } from "@effect/vitest";
 import { Integration, SubscriptionAuthorization } from "@emailer/api/Api";
 import { ApiKeyNotFound, StorageUnavailable } from "@emailer/api/Errors";
 import { ConfigProvider, Effect, Inspectable, Layer, Redacted, Result, Schema } from "effect";
-import { HttpRouter, HttpServer } from "effect/unstable/http";
-import { HttpApi, HttpApiBuilder, HttpApiEndpoint, HttpApiGroup } from "effect/unstable/httpapi";
+import { HttpRouter, HttpServer } from "effect/http";
+import { HttpApi, HttpApiBuilder, HttpApiEndpoint, HttpApiGroup } from "effect/http-api";
 
 import { apiToken, MalformedApiToken, subscriptionAuthorization } from "./Auth.ts";
 import { ApiKeyStore } from "../storage/ApiKeys.ts";

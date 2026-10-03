@@ -1,6 +1,6 @@
 import * as Schemas from "@emailer/api/Schemas";
 import { DateTime, Effect, Option, Schema } from "effect";
-import { Argument, CliError, Command, Flag } from "effect/unstable/cli";
+import { Argument, CliError, Command, Flag } from "effect/cli";
 
 import { report, withClient } from "../Client.ts";
 import { entityPageFlags, idArgument, pageQuery } from "../Flags.ts";

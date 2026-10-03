@@ -1,7 +1,6 @@
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Option, Redacted } from "effect";
-// oxlint-disable-next-line effecttsgo/node-builtin-import
 import { createHmac } from "node:crypto";
 
 import * as Tokens from "./Tokens.ts";

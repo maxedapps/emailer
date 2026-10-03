@@ -71,7 +71,7 @@ const feedbackEvents = AWS.SQS.Queue(
  * `alchemy.run.ts` yields this and the function's constructor does not.
  *
  * `events(...).toQueue(...)` would write the queue's policy against its own ARN output and the
- * rule's, while the rule targets the queue: cycles Alchemy beta.79 cannot create on a fresh stage,
+ * rule's, while the rule targets the queue: cycles Alchemy beta.80 cannot create on a fresh stage,
  * since neither a queue nor a rule can be created ahead of its inputs. Both are named instead, so
  * the policy states both ARNs up front and the queue is created before the rule.
  */

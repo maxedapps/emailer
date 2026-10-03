@@ -41,7 +41,7 @@ Self-hosted marketing email over Amazon SES. Deploy it to your own AWS account, 
 - Node.js **24.19.0** (see `.node-version`) and pnpm **12.3.4**
 - An AWS account with **SES production access** in the Region you will deploy to (sandbox can only mail verified addresses and the SES mailbox simulator)
 - A domain you control
-- [Alchemy](https://alchemy.run) **2.0.0-beta.79**, pinned in this repo with Effect **4.0.0-rc.117**
+- [Alchemy](https://alchemy.run) **2.0.0-beta.80**, pinned in this repo with Effect **4.0.0**
 
 ```sh
 pnpm install --frozen-lockfile
@@ -174,7 +174,7 @@ pnpm exec alchemy deploy --config alchemy.run.ts --stage prod --env-file .env.pr
 
 Do not pass `--detailed`: it prints bound secrets, including `EMAILER_API_TOKEN` and the signing keys. Treat a secret you have printed as exposed and replace it.
 
-After a code change, Alchemy can plan a function as `noop` and keep the old bundle: in beta.79 the plan compares a function's settings, not its code. Redeploy with `--force`, then confirm each function's `CodeSha256` changed:
+After a code change, Alchemy can plan a function as `noop` and keep the old bundle: in beta.80 the plan compares a function's settings, not its code. Redeploy with `--force`, then confirm each function's `CodeSha256` changed:
 
 ```sh
 aws lambda get-function-configuration --function-name emailer-<stage>-<api|dispatcher|feedback|unsubscribe|preview> --query CodeSha256

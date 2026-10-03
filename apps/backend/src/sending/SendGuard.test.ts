@@ -2,7 +2,7 @@ import type * as cloudwatch from "@distilled.cloud/aws/cloudwatch";
 import type * as sesv2 from "@distilled.cloud/aws/sesv2";
 import { describe, expect, it } from "@effect/vitest";
 import { Duration, Effect } from "effect";
-import { RateLimiter } from "effect/unstable/persistence";
+import { RateLimiter } from "effect/persistence";
 
 import { makeSlot, recentAllowance, sendGuard } from "./SendGuard.ts";
 

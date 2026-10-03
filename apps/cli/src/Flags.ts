@@ -1,6 +1,6 @@
 import * as Schemas from "@emailer/api/Schemas";
 import { Option } from "effect";
-import { Argument, Flag } from "effect/unstable/cli";
+import { Argument, Flag } from "effect/cli";
 
 export const idArgument = (name: string) =>
   Argument.String(name).pipe(Argument.withSchema(Schemas.EntityId));

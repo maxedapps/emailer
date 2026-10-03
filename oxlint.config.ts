@@ -26,6 +26,9 @@ export default defineConfig({
     { name: "anti-slop-effect", specifier: "./tools/oxlint/anti-slop/effect/index.ts" },
   ],
   rules: {
+    // Effect 4.0 marks its HTTP, HTTP API, CLI, persistence and process modules unstable; the API,
+    // the CLI and dispatch pacing are built on them by design.
+    "effecttsgo/unstable-api-usage": "off",
     // `@effect/vitest`'s testers are test blocks too.
     "vitest/no-standalone-expect": [
       "error",

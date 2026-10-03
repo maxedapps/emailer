@@ -1,7 +1,7 @@
 import type * as dynamodb from "@distilled.cloud/aws/dynamodb";
 import * as AWS from "alchemy/AWS";
 import { Clock, Data, Duration, Effect, Layer, Schema } from "effect";
-import { RateLimiter } from "effect/unstable/persistence";
+import { RateLimiter } from "effect/persistence";
 
 import { itemReader, num, recordVersion, str } from "./Items.ts";
 import { updatePrimitives } from "./Primitives.ts";

@@ -2,7 +2,7 @@ import { makeEmailerClient } from "@emailer/api/Client";
 import type { EmailerClient } from "@emailer/api/Client";
 import * as Schemas from "@emailer/api/Schemas";
 import { Array as Arr, Config, Console, Duration, Effect, Inspectable, Schedule } from "effect";
-import { FetchHttpClient, HttpClient, HttpClientError } from "effect/unstable/http";
+import { FetchHttpClient, HttpClient, HttpClientError } from "effect/http";
 
 /**
  * The CLI is the only thing that enforces a deadline on a request, so it is the only thing that

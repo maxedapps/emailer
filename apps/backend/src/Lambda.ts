@@ -2,7 +2,7 @@ import * as Retry from "@distilled.cloud/aws/Retry";
 import { Stack } from "alchemy";
 import * as AWS from "alchemy/AWS";
 import { Duration, Effect, Layer, Schedule } from "effect";
-import { HttpClient, HttpClientRequest } from "effect/unstable/http";
+import { HttpClient, HttpClientRequest } from "effect/http";
 
 import { reportingLayer } from "./Reporting.ts";
 

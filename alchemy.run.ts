@@ -16,16 +16,15 @@ import { alertsTopic, reputationAlarms } from "./apps/backend/src/sending/Reputa
 import { dataTable } from "./apps/backend/src/storage/Table.ts";
 import { UnsubscribeFunction } from "./apps/backend/src/consent/Unsubscribe.ts";
 import UnsubscribePage from "./apps/backend/src/consent/UnsubscribePage.ts";
-import { awsProviders } from "./stacks/providers.ts";
 
 export default Stack(
   "Emailer",
   {
-    providers: awsProviders,
+    providers: AWS.providers(),
     state: AWS.state(),
   },
   Effect.gen(function* () {
-    // Resolve the AWS environment before any function's init does. Alchemy beta.79 pins every
+    // Resolve the AWS environment before any function's init does. Alchemy beta.80 pins every
     // config read made during a function's init into that function's env, and the Scheduler
     // binding the API holds is otherwise the first to resolve it under the test harness, which
     // pins the deployer's credentials: https://github.com/alchemy-run/alchemy/issues/1842

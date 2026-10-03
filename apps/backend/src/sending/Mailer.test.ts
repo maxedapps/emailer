@@ -4,7 +4,7 @@ import * as AWS from "alchemy/AWS";
 import { fromCredentials } from "alchemy/AWS/Credentials";
 import { Effect, Fiber, Layer, Logger, Redacted, Schema } from "effect";
 import { TestClock } from "effect/testing";
-import { FetchHttpClient } from "effect/unstable/http";
+import { FetchHttpClient } from "effect/http";
 
 import { mintToken } from "../consent/Unsubscribe.ts";
 import {
