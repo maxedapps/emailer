@@ -4,7 +4,8 @@ We're using Alchemy (alchemy.run) and Effect (effect.website).
 # RULES
 
 - Linting, testing and other errors and warnings must be taken seriously and should be fixed properly
-- emailer is not used in production yet: ALWAYS evaluate alternatives and go for the cleanest solution and implementation, NEVER for the quick fix or workaround - think creatively, big refactors and rewrites are welcome
+- Low running cost is a hard constraint and outranks the next rule ([ADR-0032](.adr/0032-low-running-cost-is-a-hard-constraint.md)): DynamoDB stays (no relational database); state every change's steady-state cost effect (DynamoDB read/write units, GSI writes and storage, Lambda invocations and duration, SQS requests incl. idle long polling, CloudWatch Logs volume) and withdraw any change that costs more, even by cents
+- emailer is not used in production yet: within the cost constraint, ALWAYS evaluate alternatives and go for the cleanest solution and implementation, NEVER for the quick fix or workaround - think creatively, big refactors and rewrites are welcome
 - Fully embrace Alchemy and Effect and their features
 - ALWAYS consult the current official documentation (Alchemy, Effect, AWS) when working on code - do NOT make guesses or blind assumptions
 - Perform additional in-depth web research as needed to ensure you operate on proper up-to-date knowledge
