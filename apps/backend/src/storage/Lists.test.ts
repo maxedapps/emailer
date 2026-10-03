@@ -4,7 +4,14 @@ import { describe, expect, it } from "@effect/vitest";
 
 import { str } from "./Items.ts";
 import { listOperations } from "./Lists.ts";
-import { conditionFailed, createdAt, listId, scriptedTable, primitivesFor } from "./Testing.ts";
+import {
+  conditionFailed,
+  createdAt,
+  listId,
+  primitivesFor,
+  scriptedTable,
+  succeeded,
+} from "./Testing.ts";
 
 import type { Table } from "./Testing.ts";
 
@@ -41,7 +48,7 @@ describe("createList", () => {
     "writes the list with the listing attributes, without which it is invisible to the index",
     () =>
       Effect.gen(function* () {
-        const { table, operations } = withTable({});
+        const { table, operations } = withTable({ putItem: [succeeded] });
 
         yield* operations.createList({ id: listId, name: "Subscribers", createdAt });
 

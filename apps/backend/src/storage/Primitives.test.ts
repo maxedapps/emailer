@@ -7,7 +7,14 @@ import * as dynamodb from "@distilled.cloud/aws/dynamodb";
 
 import { str, tableLogicalId } from "./Items.ts";
 import { allPrimitives, UnexpectedCondition } from "./Primitives.ts";
-import { cancelled, defectOf, scriptedTable, tokensFor, serverError } from "./Testing.ts";
+import {
+  cancelled,
+  defectOf,
+  scriptedTable,
+  serverError,
+  succeeded,
+  tokensFor,
+} from "./Testing.ts";
 
 import type { StoredItem } from "./Primitives.ts";
 import type { ScriptedReplies } from "./Testing.ts";
@@ -59,7 +66,7 @@ describe("readItems", () => {
 
   it.effect("carries the consistent read inside the per-table block, not at the top level", () =>
     Effect.gen(function* () {
-      const { table, primitives } = withTable({});
+      const { table, primitives } = withTable({ batchGetItem: [succeeded] });
 
       yield* primitives.readItems("listContacts", [contactKey(contactId)]);
 
@@ -179,7 +186,7 @@ describe("runQuery", () => {
 
   it.effect("reads the base table strongly consistently", () =>
     Effect.gen(function* () {
-      const { table, primitives } = withTable({});
+      const { table, primitives } = withTable({ query: [succeeded] });
 
       yield* primitives.runQuery("listMembers", "base-table", request);
 
@@ -189,7 +196,7 @@ describe("runQuery", () => {
 
   it.effect("never asks an index for a consistent read, which the service rejects at runtime", () =>
     Effect.gen(function* () {
-      const { table, primitives } = withTable({});
+      const { table, primitives } = withTable({ query: [succeeded] });
 
       yield* primitives.runQuery("listContacts", "index", request);
 
@@ -267,7 +274,7 @@ describe("readEntityPage", () => {
 
   it.effect("resumes from the index key and the table key the cursor names", () =>
     Effect.gen(function* () {
-      const { table, primitives } = withTable({});
+      const { table, primitives } = withTable({ query: [succeeded] });
 
       yield* primitives.readEntityPage(
         "listContacts",
@@ -403,7 +410,7 @@ describe("transact", () => {
 
   it.effect("sends one idempotency token per logical call, and no refusal", () =>
     Effect.gen(function* () {
-      const { table, primitives } = withTable({});
+      const { table, primitives } = withTable({ transactWriteItems: [succeeded, succeeded] });
 
       yield* primitives.transact("claimRecipient", actions);
       yield* primitives.transact("claimRecipient", actions);

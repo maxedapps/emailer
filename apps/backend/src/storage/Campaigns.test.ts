@@ -23,6 +23,7 @@ import {
   primitivesFor,
   scriptedTable,
   serverError,
+  succeeded,
   withOptional,
 } from "./Testing.ts";
 
@@ -210,7 +211,7 @@ afterEach(() => {
 describe("campaign records", () => {
   it.effect("stores html in the body item, never on META, and reads it back", () =>
     Effect.gen(function* () {
-      const { table, storage } = withStorage({});
+      const { table, storage } = withStorage({ putItem: [succeeded, succeeded] });
 
       yield* storage.createCampaign({
         id: campaignId,
@@ -255,7 +256,7 @@ describe("campaign records", () => {
     "always stores a new campaign as a draft with zero counters, whatever the caller passed",
     () =>
       Effect.gen(function* () {
-        const { table, storage } = withStorage({});
+        const { table, storage } = withStorage({ putItem: [succeeded, succeeded] });
 
         yield* storage.createCampaign({
           id: campaignId,
@@ -698,7 +699,7 @@ describe("getCampaignControl", () => {
 describe("createCampaign", () => {
   it.effect("writes the BODY item then the META item, each only where nothing is", () =>
     Effect.gen(function* () {
-      const { table, storage } = withStorage({});
+      const { table, storage } = withStorage({ putItem: [succeeded, succeeded] });
 
       yield* storage.createCampaign({
         id: campaignId,
@@ -722,7 +723,7 @@ describe("createCampaign", () => {
     "writes the listing attributes, without which the campaign is invisible to the index",
     () =>
       Effect.gen(function* () {
-        const { table, storage } = withStorage({});
+        const { table, storage } = withStorage({ putItem: [succeeded, succeeded] });
 
         yield* storage.createCampaign({
           id: campaignId,
@@ -761,7 +762,7 @@ describe("updateDraft", () => {
     "updates exactly the fields given, in one draft-only transaction, without reading first",
     () =>
       Effect.gen(function* () {
-        const { table, storage } = withStorage({});
+        const { table, storage } = withStorage({ transactWriteItems: [succeeded] });
 
         yield* storage.updateDraft(campaignId, {
           subject: "New",
@@ -802,7 +803,7 @@ describe("updateDraft", () => {
 
   it.effect("removes the fields given as null", () =>
     Effect.gen(function* () {
-      const { table, storage } = withStorage({});
+      const { table, storage } = withStorage({ transactWriteItems: [succeeded] });
 
       yield* storage.updateDraft(campaignId, { text: "New", html: null, filter: null });
 
@@ -820,7 +821,7 @@ describe("updateDraft", () => {
 
   it.effect("only checks the draft when the change gives no field of META, and no body item", () =>
     Effect.gen(function* () {
-      const { table, storage } = withStorage({});
+      const { table, storage } = withStorage({ transactWriteItems: [succeeded] });
 
       yield* storage.updateDraft(campaignId, {});
 
@@ -838,7 +839,10 @@ describe("setVariant", () => {
     "appends a variant: its rules at the first revision, only if none were ever set, and its body",
     () =>
       Effect.gen(function* () {
-        const { table, storage } = withStorage({ getItem: [noRoutes] });
+        const { table, storage } = withStorage({
+          getItem: [noRoutes],
+          transactWriteItems: [succeeded],
+        });
 
         yield* storage.setVariant(campaignId, "half", { percent: 50, ...halfContent });
 
@@ -858,7 +862,10 @@ describe("setVariant", () => {
 
   it.effect("replaces the variant with its key where it stands, at the next revision", () =>
     Effect.gen(function* () {
-      const { table, storage } = withStorage({ getItem: [routesRead(4, [berlin, half])] });
+      const { table, storage } = withStorage({
+        getItem: [routesRead(4, [berlin, half])],
+        transactWriteItems: [succeeded],
+      });
 
       yield* storage.setVariant(campaignId, "berlin", { percent: 10, ...halfContent });
 
@@ -882,6 +889,7 @@ describe("setVariant", () => {
     Effect.gen(function* () {
       const { table, storage } = withStorage({
         getItem: [routesRead(1, full.slice(1)), routesRead(2, full)],
+        transactWriteItems: [succeeded],
       });
 
       yield* storage.setVariant(campaignId, "v0", { when: { n: "0" }, ...halfContent });
@@ -895,7 +903,10 @@ describe("setVariant", () => {
 
   it.effect("replaces a variant of a full campaign", () =>
     Effect.gen(function* () {
-      const { table, storage } = withStorage({ getItem: [routesRead(2, full)] });
+      const { table, storage } = withStorage({
+        getItem: [routesRead(2, full)],
+        transactWriteItems: [succeeded],
+      });
 
       yield* storage.setVariant(campaignId, "v7", { percent: 5, ...halfContent });
 
@@ -920,7 +931,7 @@ describe("setVariant", () => {
       Effect.gen(function* () {
         const { table, storage } = withStorage({
           getItem: [noRoutes, routesRead(1, [berlin])],
-          transactWriteItems: [cancelled("None", "ConditionalCheckFailed", "None")],
+          transactWriteItems: [cancelled("None", "ConditionalCheckFailed", "None"), succeeded],
         });
 
         yield* storage.setVariant(campaignId, "half", { percent: 50, ...halfContent });
@@ -955,6 +966,7 @@ describe("removeVariant", () => {
       Effect.gen(function* () {
         const { table, storage } = withStorage({
           getItem: [routesRead(3, [{ key: "half", percent: 50 }])],
+          transactWriteItems: [succeeded],
         });
 
         yield* storage.removeVariant(campaignId, "half");
@@ -1005,7 +1017,11 @@ describe("deleteDraft", () => {
       Effect.gen(function* () {
         const half = { key: "half", percent: 50 };
         const berlin = { key: "berlin", when: { city: "Berlin" } };
-        const { table, storage } = withStorage({ getItem: [routesRead(2, [half, berlin])] });
+
+        const { table, storage } = withStorage({
+          getItem: [routesRead(2, [half, berlin])],
+          transactWriteItems: [succeeded, succeeded, succeeded],
+        });
 
         yield* storage.deleteDraft(campaignId);
 
@@ -1053,7 +1069,10 @@ describe("deleteDraft", () => {
 
   it.effect("deletes the rules only if none were ever set, when it read none", () =>
     Effect.gen(function* () {
-      const { table, storage } = withStorage({ getItem: [noRoutes] });
+      const { table, storage } = withStorage({
+        getItem: [noRoutes],
+        transactWriteItems: [succeeded],
+      });
 
       yield* storage.deleteDraft(campaignId);
 
@@ -1075,7 +1094,11 @@ describe("deleteDraft", () => {
     Effect.gen(function* () {
       const { table, storage } = withStorage({
         getItem: [noRoutes, routesRead(1, [{ key: "half", percent: 50 }])],
-        transactWriteItems: [cancelled("None", "None", "ConditionalCheckFailed")],
+        transactWriteItems: [
+          cancelled("None", "None", "ConditionalCheckFailed"),
+          succeeded,
+          succeeded,
+        ],
       });
 
       yield* storage.deleteDraft(campaignId);
@@ -1162,7 +1185,7 @@ describe("newRun", () => {
 
   it.effect("queues a tokenless draft under a new run token and the run baselines", () =>
     Effect.gen(function* () {
-      const { table, storage } = withStorage({});
+      const { table, storage } = withStorage({ transactWriteItems: [succeeded] });
 
       yield* storage.newRun(campaignId, observed("draft"), runToken, "queued", now);
       expect(table.transactionRequests).toHaveLength(1);
@@ -1190,31 +1213,28 @@ describe("newRun", () => {
     "re-queues a paused campaign under its observed token and clears the pause reason",
     () =>
       Effect.gen(function* () {
-        const { table, storage } = withStorage({});
+        const { table, storage } = withStorage({ transactWriteItems: [succeeded] });
 
         yield* storage.newRun(campaignId, observed("paused", runToken), nextToken, "queued", now);
-        expect(lifecycleUpdate(table)).toStrictEqual({
-          Table: tableLogicalId,
-          Key: { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } },
-          UpdateExpression:
-            "SET #state = :target, queuedAt = :queuedAt, runToken = :run, runAccepted = accepted, runBounced = bounced, runComplained = complained REMOVE pausedReason",
-          ConditionExpression: "#state = :expectedState AND runToken = :expected",
-          ExpressionAttributeNames: { "#state": "state" },
-          ReturnValuesOnConditionCheckFailure: "ALL_OLD",
-          ExpressionAttributeValues: {
-            ":target": { S: "queued" },
-            ":queuedAt": { S: now },
-            ":run": { S: nextToken },
-            ":expectedState": { S: "paused" },
-            ":expected": { S: runToken },
-          },
+
+        // The rest of the request is the first send's, pinned above.
+        const update = lifecycleUpdate(table);
+
+        expect(update?.UpdateExpression).toMatch(/ REMOVE pausedReason$/);
+        expect(update?.ConditionExpression).toBe(
+          "#state = :expectedState AND runToken = :expected",
+        );
+        expect(update?.ExpressionAttributeValues).toMatchObject({
+          ":run": { S: nextToken },
+          ":expectedState": { S: "paused" },
+          ":expected": { S: runToken },
         });
       }),
   );
 
   it.effect("reschedules by matching the observed scheduled token, not an IN-list of states", () =>
     Effect.gen(function* () {
-      const { table, storage } = withStorage({});
+      const { table, storage } = withStorage({ transactWriteItems: [succeeded] });
 
       yield* storage.newRun(
         campaignId,
@@ -1261,7 +1281,7 @@ describe("newRun", () => {
 describe("cancelCampaign", () => {
   it.effect("returns a scheduled generation to draft, retains the token and removes queuedAt", () =>
     Effect.gen(function* () {
-      const { table, storage } = withStorage({});
+      const { table, storage } = withStorage({ transactWriteItems: [succeeded] });
 
       yield* storage.cancelCampaign(campaignId, { state: "scheduled", runToken });
       expect(table.transactionRequests).toHaveLength(1);
@@ -1287,33 +1307,28 @@ describe("cancelCampaign", () => {
     "returns a never-started queued generation to draft and requires startedAt to be absent",
     () =>
       Effect.gen(function* () {
-        const { table, storage } = withStorage({});
+        const { table, storage } = withStorage({ transactWriteItems: [succeeded] });
 
         yield* storage.cancelCampaign(campaignId, {
           state: "queued",
           runToken,
           started: false,
         });
-        expect(lifecycleUpdate(table)).toStrictEqual({
-          Table: tableLogicalId,
-          Key: { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } },
-          UpdateExpression: "SET #state = :draft REMOVE queuedAt",
-          ConditionExpression:
-            "#state = :queued AND runToken = :expected AND attribute_not_exists(startedAt)",
-          ExpressionAttributeNames: { "#state": "state" },
-          ReturnValuesOnConditionCheckFailure: "ALL_OLD",
-          ExpressionAttributeValues: {
-            ":draft": { S: "draft" },
-            ":queued": { S: "queued" },
-            ":expected": { S: runToken },
-          },
-        });
+
+        // The update is the scheduled cancel's, pinned above; only the condition differs.
+        const update = lifecycleUpdate(table);
+
+        expect(update?.UpdateExpression).toBe("SET #state = :draft REMOVE queuedAt");
+        expect(update?.ConditionExpression).toBe(
+          "#state = :queued AND runToken = :expected AND attribute_not_exists(startedAt)",
+        );
+        expect(update?.ExpressionAttributeValues?.[":queued"]).toStrictEqual({ S: "queued" });
       }),
   );
 
   it.effect("pauses a queued resume as manual without resetting history fields", () =>
     Effect.gen(function* () {
-      const { table, storage } = withStorage({});
+      const { table, storage } = withStorage({ transactWriteItems: [succeeded] });
 
       yield* storage.cancelCampaign(campaignId, {
         state: "queued",
@@ -1414,7 +1429,7 @@ describe("beginRun", () => {
 describe("claimRecipient", () => {
   it.effect("checks the run then puts an unconfirmed send row", () =>
     Effect.gen(function* () {
-      const { table, storage } = withStorage({});
+      const { table, storage } = withStorage({ transactWriteItems: [succeeded] });
 
       expect(
         yield* storage.claimRecipient(
@@ -1461,7 +1476,7 @@ describe("claimRecipient", () => {
 describe("skipRecipient", () => {
   it.effect("puts a skipped row then increments the skipped counter", () =>
     Effect.gen(function* () {
-      const { table, storage } = withStorage({});
+      const { table, storage } = withStorage({ transactWriteItems: [succeeded] });
 
       expect(
         yield* storage.skipRecipient(
@@ -1509,7 +1524,7 @@ describe("skipRecipient", () => {
 describe("settleRecipient", () => {
   it.effect("writes acceptance on the send row and adds the accepted counter", () =>
     Effect.gen(function* () {
-      const { table, storage } = withStorage({});
+      const { table, storage } = withStorage({ transactWriteItems: [succeeded] });
 
       yield* storage.settleRecipient(
         campaignId,
@@ -1552,7 +1567,7 @@ describe("settleRecipient", () => {
 
   it.effect("writes a rejection code and adds the rejected counter", () =>
     Effect.gen(function* () {
-      const { table, storage } = withStorage({});
+      const { table, storage } = withStorage({ transactWriteItems: [succeeded] });
 
       yield* storage.settleRecipient(
         campaignId,
@@ -1580,7 +1595,7 @@ describe("settleRecipient", () => {
 
   it.effect("writes an uncertain settlement without a message id or rejection code", () =>
     Effect.gen(function* () {
-      const { table, storage } = withStorage({});
+      const { table, storage } = withStorage({ transactWriteItems: [succeeded] });
 
       yield* storage.settleRecipient(campaignId, sendId, contactId, { outcome: "uncertain" }, now);
 
@@ -1599,7 +1614,7 @@ describe("settleRecipient", () => {
 describe("checkpoint", () => {
   it.effect("advances from an absent cursor on the first page", () =>
     Effect.gen(function* () {
-      const { table, storage } = withStorage({});
+      const { table, storage } = withStorage({ updateItem: [succeeded] });
 
       yield* storage.checkpoint(campaignId, runToken, sliceId, undefined, contactId);
       expect(table.updateItemRequests[0]).toStrictEqual({
@@ -1620,17 +1635,14 @@ describe("checkpoint", () => {
 
   it.effect("advances from the previous cursor on a later page", () =>
     Effect.gen(function* () {
-      const { table, storage } = withStorage({});
+      const { table, storage } = withStorage({ updateItem: [succeeded] });
 
       yield* storage.checkpoint(campaignId, runToken, sliceId, contactId, nextContactId);
       expect(table.updateItemRequests[0]?.ConditionExpression).toBe(
         "#state = :sending AND runToken = :run AND (#cursor = :previous OR (#cursor = :next AND sliceId = :slice))",
       );
-      expect(table.updateItemRequests[0]?.ExpressionAttributeValues).toStrictEqual({
-        ":sending": { S: "sending" },
-        ":run": { S: runToken },
+      expect(table.updateItemRequests[0]?.ExpressionAttributeValues).toMatchObject({
         ":next": { S: nextContactId },
-        ":slice": { S: sliceId },
         ":previous": { S: contactId },
       });
     }),
@@ -1640,7 +1652,7 @@ describe("checkpoint", () => {
 describe("completeRun", () => {
   it.effect("marks the campaign completed and removes the cursor", () =>
     Effect.gen(function* () {
-      const { table, storage } = withStorage({});
+      const { table, storage } = withStorage({ updateItem: [succeeded] });
 
       yield* storage.completeRun(campaignId, runToken, now);
       expect(table.updateItemRequests[0]).toStrictEqual({
@@ -1662,7 +1674,7 @@ describe("completeRun", () => {
 describe("pauseRun", () => {
   it.effect("pauses the campaign at the resume cursor", () =>
     Effect.gen(function* () {
-      const { table, storage } = withStorage({});
+      const { table, storage } = withStorage({ updateItem: [succeeded] });
 
       yield* storage.pauseRun(campaignId, runToken, "daily-quota", contactId);
       expect(table.updateItemRequests[0]).toStrictEqual({
@@ -1683,7 +1695,7 @@ describe("pauseRun", () => {
 
   it.effect("removes the cursor when pausing at the start of the list", () =>
     Effect.gen(function* () {
-      const { table, storage } = withStorage({});
+      const { table, storage } = withStorage({ updateItem: [succeeded] });
 
       yield* storage.pauseRun(campaignId, runToken, "sending-paused", undefined);
       expect(table.updateItemRequests[0]?.UpdateExpression).toBe(
@@ -1732,6 +1744,7 @@ describe("condition failures", () => {
     [
       "setVariant answers the state a campaign that left draft is in",
       {
+        getItem: [succeeded],
         transactWriteItems: [
           cancelled({ Code: "ConditionalCheckFailed", Item: sending }, "None", "None"),
         ],
@@ -1750,13 +1763,17 @@ describe("condition failures", () => {
     ],
     [
       "deleteDraft answers CampaignNotFound when the campaign is gone",
-      { transactWriteItems: [cancelled("ConditionalCheckFailed", "None", "None")] },
+      {
+        getItem: [succeeded],
+        transactWriteItems: [cancelled("ConditionalCheckFailed", "None", "None")],
+      },
       (storage) => storage.deleteDraft(campaignId),
       Result.fail(new Errors.CampaignNotFound()),
     ],
     [
       "deleteDraft answers the state a campaign that left draft is in",
       {
+        getItem: [succeeded],
         transactWriteItems: [
           cancelled({ Code: "ConditionalCheckFailed", Item: sending }, "None", "None"),
         ],

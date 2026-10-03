@@ -6,7 +6,7 @@ import { Effect } from "effect";
 import { allPrimitives } from "./Primitives.ts";
 import { SubscriptionState, subscriptionOperations } from "./Subscriptions.ts";
 import { tableLogicalId } from "./Items.ts";
-import { cancelled, contactId, listId, scriptedTable, tokensFor } from "./Testing.ts";
+import { cancelled, contactId, listId, scriptedTable, succeeded, tokensFor } from "./Testing.ts";
 
 import type { SubscriptionConfirmation, SubscriptionRequest } from "./Subscriptions.ts";
 import type { Table, TransactionReply } from "./Testing.ts";
@@ -55,7 +55,7 @@ describe("requestSubscription", () => {
     "puts the pending sign-up with a TTL seven days on, unless one is under an hour old",
     () =>
       Effect.gen(function* () {
-        const table = scriptedTable({});
+        const table = scriptedTable({ putItem: [succeeded] });
 
         yield* operationsFor(table).requestSubscription(request);
 
@@ -275,7 +275,7 @@ describe("confirmSubscription", () => {
     "creates the contact, joins it, records the consent and consumes the link at once",
     () =>
       Effect.gen(function* () {
-        const table = holding([pendingItem, list]);
+        const table = holding([pendingItem, list], [succeeded]);
 
         expect(yield* confirming(table)).toBe(listId);
         expect(table.transactionRequests.map((sent) => sent.TransactItems)).toStrictEqual([
@@ -320,12 +320,10 @@ describe("confirmSubscription", () => {
 
   it.effect("joins the contact holding the address, and lifts only this list's opt-out", () =>
     Effect.gen(function* () {
-      const table = holding([
-        pendingItem,
-        list,
-        reservation,
-        addressItem({ optOuts: { SS: [listId, otherListId] } }),
-      ]);
+      const table = holding(
+        [pendingItem, list, reservation, addressItem({ optOuts: { SS: [listId, otherListId] } })],
+        [succeeded],
+      );
 
       yield* confirming(table);
 

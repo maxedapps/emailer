@@ -1,6 +1,7 @@
 /**
  * The shared storage test seam: a recording `TableOperations` double that serves scripted replies
- * by call order, plus the fixtures the item-owning modules' suites have in common. It lives beside
+ * by call order and refuses any call it was not scripted for, plus the fixtures the item-owning
+ * modules' suites have in common. It lives beside
  * those modules rather than inside one of their `*.test.ts` files, because importing a test file
  * from another test file would re-register its suites.
  */
@@ -51,21 +52,32 @@ export interface Table {
   readonly transactionRequests: Array<AWS.DynamoDB.TransactWriteItemsRequest>;
 }
 
+/** An empty answer, which every operation accepts: script one per call that should succeed. */
+export const succeeded = Effect.succeed({});
+
 /**
  * One operation of the double: it records each request and answers with the reply scripted for its
- * position in the call order, or the fallback once the script runs out.
+ * position in the call order. A call past the end of the script, or to an operation with none, dies:
+ * a write the test did not expect must not pass for a success.
  */
 const recorder =
   <Request, A, E>(
+    operation: string,
     requests: Array<Request>,
-    replies: ReadonlyArray<Effect.Effect<A, E>> | undefined,
-    fallback: A,
+    replies: ReadonlyArray<Effect.Effect<A, E>> = [],
   ) =>
   (request: Request): Effect.Effect<A, E> =>
     Effect.suspend(() => {
       requests.push(request);
 
-      return replies?.[requests.length - 1] ?? Effect.succeed(fallback);
+      return (
+        replies[requests.length - 1] ??
+        Effect.die(
+          new Error(
+            `Unexpected ${operation} call #${requests.length}: the test scripted ${replies.length}`,
+          ),
+        )
+      );
     });
 
 export const scriptedTable = (replies: ScriptedReplies): Table => {
@@ -77,12 +89,16 @@ export const scriptedTable = (replies: ScriptedReplies): Table => {
   const transactionRequests: Array<AWS.DynamoDB.TransactWriteItemsRequest> = [];
 
   const operations: TableOperations = {
-    getItem: recorder(getItemRequests, replies.getItem, {}),
-    batchGetItem: recorder(batchGetItemRequests, replies.batchGetItem, {}),
-    putItem: recorder(putItemRequests, replies.putItem, {}),
-    updateItem: recorder(updateItemRequests, replies.updateItem, {}),
-    query: recorder(queryRequests, replies.query, { Items: [] }),
-    transactWriteItems: recorder(transactionRequests, replies.transactWriteItems, {}),
+    getItem: recorder("getItem", getItemRequests, replies.getItem),
+    batchGetItem: recorder("batchGetItem", batchGetItemRequests, replies.batchGetItem),
+    putItem: recorder("putItem", putItemRequests, replies.putItem),
+    updateItem: recorder("updateItem", updateItemRequests, replies.updateItem),
+    query: recorder("query", queryRequests, replies.query),
+    transactWriteItems: recorder(
+      "transactWriteItems",
+      transactionRequests,
+      replies.transactWriteItems,
+    ),
   };
 
   return {

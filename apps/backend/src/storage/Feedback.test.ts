@@ -4,7 +4,14 @@ import { describe, expect, it } from "@effect/vitest";
 
 import { FeedbackAlreadyRecorded, feedbackWrites } from "./Feedback.ts";
 import { tableLogicalId } from "./Items.ts";
-import { campaignId, cancelled, createdAt, primitivesFor, scriptedTable } from "./Testing.ts";
+import {
+  campaignId,
+  cancelled,
+  createdAt,
+  primitivesFor,
+  scriptedTable,
+  succeeded,
+} from "./Testing.ts";
 
 import type { Table } from "./Testing.ts";
 
@@ -78,7 +85,7 @@ const counterUpdate = (counter: "bounced" | "complained") => ({
 describe("recordFeedback", () => {
   it.effect("puts the history row and adds the bounced counter on META", () =>
     Effect.gen(function* () {
-      const table = scriptedTable({});
+      const table = scriptedTable({ transactWriteItems: [succeeded] });
 
       yield* operationsFor(table).recordFeedback(bounceRow, "bounced");
 
@@ -95,7 +102,7 @@ describe("recordFeedback", () => {
 
   it.effect("adds the complained counter for a complaint", () =>
     Effect.gen(function* () {
-      const table = scriptedTable({});
+      const table = scriptedTable({ transactWriteItems: [succeeded] });
 
       yield* operationsFor(table).recordFeedback(complaintRow, "complained");
 
@@ -110,7 +117,7 @@ describe("recordFeedback", () => {
     "writes the history row alone without a counter and copies the outcome it was given",
     () =>
       Effect.gen(function* () {
-        const table = scriptedTable({});
+        const table = scriptedTable({ transactWriteItems: [succeeded] });
 
         yield* operationsFor(table).recordFeedback(
           {
@@ -133,7 +140,7 @@ describe("recordFeedback", () => {
 
   it.effect("omits every provider field that is undefined", () =>
     Effect.gen(function* () {
-      const table = scriptedTable({});
+      const table = scriptedTable({ transactWriteItems: [succeeded] });
 
       yield* operationsFor(table).recordFeedback(
         { ...bounceRow, bounceSubType: undefined },

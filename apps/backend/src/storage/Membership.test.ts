@@ -10,8 +10,9 @@ import {
   contactId,
   createdAt,
   listId,
-  scriptedTable,
   primitivesFor,
+  scriptedTable,
+  succeeded,
 } from "./Testing.ts";
 
 import type { Table } from "./Testing.ts";
@@ -56,7 +57,7 @@ describe("addMember", () => {
 
   it.effect("checks both parents and writes both membership directions", () =>
     Effect.gen(function* () {
-      const { table, run } = addMember({});
+      const { table, run } = addMember({ transactWriteItems: [succeeded] });
 
       yield* run;
 
@@ -127,7 +128,7 @@ describe("removeMember", () => {
 
   it.effect("removes both directions and checks the list in one transaction", () =>
     Effect.gen(function* () {
-      const { table, run } = removeMember({});
+      const { table, run } = removeMember({ transactWriteItems: [succeeded] });
 
       expect(yield* run).toBeUndefined();
 
@@ -187,7 +188,7 @@ describe("listMembers", () => {
 
   it.effect("answers NotFound for a list that is not there, which is not an empty list", () =>
     Effect.gen(function* () {
-      const table = scriptedTable({});
+      const table = scriptedTable({ getItem: [succeeded] });
 
       expect(
         yield* Effect.flip(operationsFor(table).listMembers(listId, 25, undefined)),
@@ -198,7 +199,10 @@ describe("listMembers", () => {
 
   it.effect("answers an empty page for a list with no members, with no nextCursor key at all", () =>
     Effect.gen(function* () {
-      const table = scriptedTable({ getItem: [Effect.succeed({ Item: listItem })] });
+      const table = scriptedTable({
+        getItem: [Effect.succeed({ Item: listItem })],
+        query: [succeeded],
+      });
 
       const page = yield* operationsFor(table).listMembers(listId, 25, undefined);
 
@@ -257,7 +261,10 @@ describe("listMembers", () => {
 
   it.effect("resumes from the member key the cursor names", () =>
     Effect.gen(function* () {
-      const table = scriptedTable({ getItem: [Effect.succeed({ Item: listItem })] });
+      const table = scriptedTable({
+        getItem: [Effect.succeed({ Item: listItem })],
+        query: [succeeded],
+      });
 
       yield* operationsFor(table).listMembers(listId, 25, contactId);
 
@@ -309,7 +316,7 @@ describe("deleteContact", () => {
 
   it.effect("answers NotFound for a contact that is not there without writing anything", () =>
     Effect.gen(function* () {
-      const table = scriptedTable({});
+      const table = scriptedTable({ getItem: [succeeded] });
 
       expect(yield* Effect.flip(operationsFor(table).deleteContact(contactId))).toStrictEqual(
         new Errors.ContactNotFound(),
@@ -325,6 +332,7 @@ describe("deleteContact", () => {
         const table = scriptedTable({
           ...found,
           query: [Effect.succeed({ Items: [reverseItem(listId)] })],
+          transactWriteItems: [succeeded, succeeded],
         });
 
         expect(yield* operationsFor(table).deleteContact(contactId)).toBeUndefined();
@@ -362,7 +370,12 @@ describe("deleteContact", () => {
     "conditions the final delete on the address it read, so no reservation is stranded",
     () =>
       Effect.gen(function* () {
-        const table = scriptedTable(found);
+        // No memberships to drain, then the final delete.
+        const table = scriptedTable({
+          ...found,
+          query: [succeeded],
+          transactWriteItems: [succeeded],
+        });
 
         yield* operationsFor(table).deleteContact(contactId);
 
@@ -375,8 +388,10 @@ describe("deleteContact", () => {
 
   it.effect("retries a lost final condition from a fresh read, which finds the contact gone", () =>
     Effect.gen(function* () {
+      // The fresh read after the lost condition finds the contact gone.
       const table = scriptedTable({
-        ...found,
+        getItem: [Effect.succeed({ Item: contactMeta }), succeeded],
+        query: [succeeded],
         transactWriteItems: [cancelled("ConditionalCheckFailed", "None")],
       });
 
@@ -394,6 +409,7 @@ describe("deleteContact", () => {
 
       const table = scriptedTable({
         getItem: [read, read, read],
+        query: [succeeded, succeeded, succeeded],
         transactWriteItems: [lost, lost, lost],
       });
 
@@ -416,6 +432,7 @@ describe("deleteContact", () => {
           }),
           Effect.succeed({ Items: [reverseItem(otherListId)] }),
         ],
+        transactWriteItems: [succeeded, succeeded, succeeded],
       });
 
       yield* operationsFor(table).deleteContact(contactId);
@@ -439,7 +456,7 @@ describe("deleteList", () => {
 
   it.effect("answers NotFound for a list that is not there without writing anything", () =>
     Effect.gen(function* () {
-      const table = scriptedTable({});
+      const table = scriptedTable({ getItem: [succeeded] });
 
       expect(yield* Effect.flip(operationsFor(table).deleteList(listId))).toStrictEqual(
         new Errors.ListNotFound(),
@@ -450,7 +467,11 @@ describe("deleteList", () => {
 
   it.effect("deletes an empty list in one transaction carrying only its META", () =>
     Effect.gen(function* () {
-      const table = scriptedTable(found);
+      const table = scriptedTable({
+        ...found,
+        query: [succeeded],
+        transactWriteItems: [succeeded],
+      });
 
       expect(yield* operationsFor(table).deleteList(listId)).toBeUndefined();
       expect(table.transactionRequests[0]?.TransactItems).toStrictEqual([
@@ -470,6 +491,7 @@ describe("deleteList", () => {
           }),
           Effect.succeed({ Items: memberItems(3) }),
         ],
+        transactWriteItems: [succeeded, succeeded, succeeded],
       });
 
       expect(yield* operationsFor(table).deleteList(listId)).toBeUndefined();
@@ -512,6 +534,7 @@ describe("deleteList", () => {
           }),
           Effect.succeed({ Items: [] }),
         ],
+        transactWriteItems: [succeeded, succeeded],
       });
 
       expect(yield* operationsFor(table).deleteList(listId)).toBeUndefined();
@@ -556,7 +579,10 @@ describe("importContacts", () => {
 
   it.effect("creates a contact, reserves its address and joins it, in one transaction", () =>
     Effect.gen(function* () {
-      const { table, run } = importInto({}, [candidate(contactId, "sam@example.com")]);
+      const { table, run } = importInto(
+        { batchGetItem: [succeeded], transactWriteItems: [succeeded] },
+        [candidate(contactId, "sam@example.com")],
+      );
 
       expect(yield* run).toStrictEqual({
         contacts: [{ email: "sam@example.com", contactId, member: true }],
@@ -593,6 +619,7 @@ describe("importContacts", () => {
               },
             }),
           ],
+          transactWriteItems: [succeeded],
         },
         [candidate(contactId, "sam@example.com")],
       );
@@ -630,7 +657,10 @@ describe("importContacts", () => {
         ),
       );
 
-      const { table, run } = importInto({}, candidates);
+      const { table, run } = importInto(
+        { batchGetItem: [succeeded], transactWriteItems: [succeeded] },
+        candidates,
+      );
 
       yield* run;
 
@@ -644,9 +674,10 @@ describe("importContacts", () => {
 
   it.effect("answers NotFound for a list that is not there, before writing anything", () =>
     Effect.gen(function* () {
-      const { table, run } = importInto({ getItem: [Effect.succeed({})] }, [
-        candidate(contactId, "sam@example.com"),
-      ]);
+      const { table, run } = importInto(
+        { getItem: [Effect.succeed({})], batchGetItem: [succeeded] },
+        [candidate(contactId, "sam@example.com")],
+      );
 
       expect(yield* Effect.flip(run)).toStrictEqual(new Errors.ListNotFound());
       expect(table.transactionRequests).toHaveLength(0);
@@ -662,8 +693,12 @@ describe("importContacts", () => {
             Effect.succeed({
               Responses: { [physicalName]: [reservationFor("sam@example.com", contactId)] },
             }),
+            succeeded,
           ],
-          transactWriteItems: [cancelled("ConditionalCheckFailed", "None", "None", "None")],
+          transactWriteItems: [
+            cancelled("ConditionalCheckFailed", "None", "None", "None"),
+            succeeded,
+          ],
         },
         [candidate(otherContactId, "sam@example.com")],
       );

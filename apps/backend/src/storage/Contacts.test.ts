@@ -14,6 +14,7 @@ import {
   defectOf,
   primitivesFor,
   scriptedTable,
+  succeeded,
 } from "./Testing.ts";
 
 import type { Table } from "./Testing.ts";
@@ -69,7 +70,7 @@ const create = (replies: ScriptedReplies) => {
 describe("createContact", () => {
   it.effect("writes the contact and its address reservation in one transaction", () =>
     Effect.gen(function* () {
-      const { table, run } = create({});
+      const { table, run } = create({ transactWriteItems: [succeeded] });
 
       expect(yield* run).toBeUndefined();
 
@@ -112,7 +113,7 @@ describe("createContact", () => {
 
   it.effect("keys the reservation on the fully lowercased address, local part included", () =>
     Effect.gen(function* () {
-      const table = scriptedTable({});
+      const table = scriptedTable({ transactWriteItems: [succeeded] });
 
       yield* operationsFor(table).createContact({
         id: contactId,
@@ -169,7 +170,7 @@ describe("getContact", () => {
 
   it.effect("answers NotFound for a missing record", () =>
     Effect.gen(function* () {
-      const storage = operationsFor(scriptedTable({}));
+      const storage = operationsFor(scriptedTable({ getItem: [succeeded] }));
 
       expect(yield* Effect.flip(storage.getContact(contactId))).toStrictEqual(
         new Errors.ContactNotFound(),
@@ -201,7 +202,7 @@ describe("getContactByEmail", () => {
 
   it.effect("answers NotFound when no reservation holds the address, without a second read", () =>
     Effect.gen(function* () {
-      const table = scriptedTable({});
+      const table = scriptedTable({ getItem: [succeeded] });
 
       expect(yield* Effect.flip(operationsFor(table).getContactByEmail(email))).toStrictEqual(
         new Errors.ContactNotFound(),
@@ -253,6 +254,9 @@ describe("getContactByEmail", () => {
 describe("updateContact", () => {
   const found: ScriptedReplies = { getItem: [Effect.succeed({ Item: contactItem })] };
 
+  /** The contact read, then its write accepted. */
+  const foundAndWritten: ScriptedReplies = { ...found, transactWriteItems: [succeeded] };
+
   const withAttributes = { ...contactItem, attributes: { M: { plan: { S: "pro" } } } };
 
   const update = (
@@ -271,7 +275,7 @@ describe("updateContact", () => {
 
   it.effect("reports a contact that is not there rather than writing anything", () =>
     Effect.gen(function* () {
-      const { table, run } = update({}, { name: "Maxi" });
+      const { table, run } = update({ getItem: [succeeded] }, { name: "Maxi" });
 
       expect(yield* Effect.flip(run)).toStrictEqual(new Errors.ContactNotFound());
       expect(table.transactionRequests).toStrictEqual([]);
@@ -282,7 +286,7 @@ describe("updateContact", () => {
     "writes the whole item back with the attributes created order is built from unchanged",
     () =>
       Effect.gen(function* () {
-        const { table, run } = update(found, { email: "new@example.com", name: "Maxi" });
+        const { table, run } = update(foundAndWritten, { email: "new@example.com", name: "Maxi" });
 
         yield* run;
 
@@ -299,7 +303,7 @@ describe("updateContact", () => {
       const both = { ...contactItem, attributes: { M: { plan: { S: "pro" }, tier: { S: "a" } } } };
 
       const { table, run } = update(
-        { getItem: [Effect.succeed({ Item: both })] },
+        { getItem: [Effect.succeed({ Item: both })], transactWriteItems: [succeeded] },
         { attributes: { city: "Berlin", tier: null } },
       );
 
@@ -319,7 +323,7 @@ describe("updateContact", () => {
   it.effect("clears every attribute on attributes: null", () =>
     Effect.gen(function* () {
       const { table, run } = update(
-        { getItem: [Effect.succeed({ Item: withAttributes })] },
+        { getItem: [Effect.succeed({ Item: withAttributes })], transactWriteItems: [succeeded] },
         { attributes: null },
       );
 
@@ -360,7 +364,7 @@ describe("updateContact", () => {
       const { table, run } = update(
         {
           getItem: [Effect.succeed({ Item: withAttributes }), Effect.succeed({ Item: afterOther })],
-          transactWriteItems: [cancelled("ConditionalCheckFailed")],
+          transactWriteItems: [cancelled("ConditionalCheckFailed"), succeeded],
         },
         { attributes: { city: "Berlin" } },
       );
@@ -384,7 +388,7 @@ describe("updateContact", () => {
         const { revision: _revision, ...legacy } = contactItem;
 
         const { table, run } = update(
-          { getItem: [Effect.succeed({ Item: legacy })] },
+          { getItem: [Effect.succeed({ Item: legacy })], transactWriteItems: [succeeded] },
           {
             name: "Maxi",
           },
@@ -403,7 +407,7 @@ describe("updateContact", () => {
   it.effect("clears a field on an explicit null and leaves an absent one alone", () =>
     Effect.gen(function* () {
       const { table, run } = update(
-        { getItem: [Effect.succeed({ Item: withAttributes })] },
+        { getItem: [Effect.succeed({ Item: withAttributes })], transactWriteItems: [succeeded] },
         { name: null },
       );
 
@@ -422,7 +426,7 @@ describe("updateContact", () => {
 
   it.effect("writes the contact alone when only the spelling of the address changes", () =>
     Effect.gen(function* () {
-      const { table, run } = update(found, { email: "SAM@example.com" });
+      const { table, run } = update(foundAndWritten, { email: "SAM@example.com" });
 
       expect(yield* run).toStrictEqual({
         id: contactId,
@@ -454,7 +458,7 @@ describe("updateContact", () => {
     "moves the reservation when the address changes, unless the address left is opted out",
     () =>
       Effect.gen(function* () {
-        const { table, run } = update(found, { email: "new@example.com" });
+        const { table, run } = update(foundAndWritten, { email: "new@example.com" });
 
         expect(yield* run).toStrictEqual({
           id: contactId,
@@ -510,7 +514,7 @@ describe("updateContact", () => {
       const { table, run } = update(
         {
           getItem: [Effect.succeed({ Item: contactItem }), Effect.succeed({ Item: contactItem })],
-          transactWriteItems: [cancelled("ConditionalCheckFailed")],
+          transactWriteItems: [cancelled("ConditionalCheckFailed"), succeeded],
         },
         { name: "Maxi" },
       );
@@ -627,6 +631,7 @@ describe("setAttributes", () => {
       Effect.gen(function* () {
         const { table, run } = merge({
           batchGetItem: [batch(reservationItem), batch(withAttributes)],
+          transactWriteItems: [succeeded],
         });
 
         expect(yield* run).toStrictEqual({
@@ -670,7 +675,7 @@ describe("setAttributes", () => {
           batch(reservationItem),
           batch(renamed),
         ],
-        transactWriteItems: [cancelled("ConditionalCheckFailed")],
+        transactWriteItems: [cancelled("ConditionalCheckFailed"), succeeded],
       });
 
       yield* run;

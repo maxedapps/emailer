@@ -3,7 +3,14 @@ import * as Errors from "@emailer/api/Errors";
 import { Effect } from "effect";
 
 import { apiKeyOperations } from "./ApiKeys.ts";
-import { cancelled, createdAt, listId, primitivesFor, scriptedTable } from "./Testing.ts";
+import {
+  cancelled,
+  createdAt,
+  listId,
+  primitivesFor,
+  scriptedTable,
+  succeeded,
+} from "./Testing.ts";
 
 import type { StoredApiKey } from "./ApiKeys.ts";
 
@@ -39,7 +46,7 @@ const item = {
 describe("apiKeyOperations", () => {
   it.effect("stores a key under the one keys partition, with its secret's hash only", () =>
     Effect.gen(function* () {
-      const table = scriptedTable({});
+      const table = scriptedTable({ putItem: [succeeded] });
 
       yield* apiKeyOperations(primitivesFor(table)).createKey(key);
 
@@ -51,7 +58,7 @@ describe("apiKeyOperations", () => {
 
   it.effect("reads a key strongly consistently, and answers ApiKeyNotFound for a missing one", () =>
     Effect.gen(function* () {
-      const table = scriptedTable({ getItem: [Effect.succeed({ Item: item })] });
+      const table = scriptedTable({ getItem: [Effect.succeed({ Item: item }), succeeded] });
       const operations = apiKeyOperations(primitivesFor(table));
 
       expect(yield* operations.getKey(keyId)).toStrictEqual(key);

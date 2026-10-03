@@ -17,6 +17,7 @@ import {
   primitivesFor,
   scriptedTable,
   serverError,
+  succeeded,
 } from "./Testing.ts";
 
 import type { Table } from "./Testing.ts";
@@ -95,7 +96,7 @@ describe("suppressAddress", () => {
     "records the first suppression on the mailbox's item, stamping version and mailbox",
     () =>
       Effect.gen(function* () {
-        const table = scriptedTable({});
+        const table = scriptedTable({ updateItem: [succeeded] });
 
         yield* operationsFor(table).suppressAddress(suppression);
 
@@ -127,7 +128,7 @@ describe("addTransientBounce", () => {
     "adds the event's bounce time and feedback id to the mailbox's window, stamping the item",
     () =>
       Effect.gen(function* () {
-        const table = scriptedTable({});
+        const table = scriptedTable({ updateItem: [succeeded] });
 
         yield* operationsFor(table).addTransientBounce({
           email: "User@Example.com",
@@ -153,7 +154,7 @@ describe("addTransientBounce", () => {
 describe("optOut", () => {
   it.effect("adds the list to the mailbox's opt-outs in one update and names no contact", () =>
     Effect.gen(function* () {
-      const table = scriptedTable({});
+      const table = scriptedTable({ updateItem: [succeeded] });
 
       yield* operationsFor(table).optOut(optOut);
 
@@ -202,7 +203,9 @@ describe("addressStatus", () => {
 
   it.effect("reports a mailbox nothing was ever recorded for as mailable", () =>
     Effect.gen(function* () {
-      expect(yield* operationsFor(scriptedTable({})).addressStatus(email, listId)).toBe("mailable");
+      expect(
+        yield* operationsFor(scriptedTable({ getItem: [succeeded] })).addressStatus(email, listId),
+      ).toBe("mailable");
     }),
   );
 
@@ -350,7 +353,9 @@ describe("addressRecord", () => {
 
   it.effect("reports a mailbox nothing was recorded for as mailable and empty", () =>
     Effect.gen(function* () {
-      expect(yield* operationsFor(scriptedTable({})).addressRecord(email)).toStrictEqual({
+      expect(
+        yield* operationsFor(scriptedTable({ query: [succeeded] })).addressRecord(email),
+      ).toStrictEqual({
         email,
         status: "mailable",
         optOuts: [],
@@ -368,7 +373,7 @@ describe("unsuppress", () => {
     "clears the suppression and the bounces of an existing item, and keeps the opt-out",
     () =>
       Effect.gen(function* () {
-        const table = scriptedTable({});
+        const table = scriptedTable({ updateItem: [succeeded] });
 
         yield* operationsFor(table).unsuppress(email);
 
