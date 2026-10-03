@@ -65,7 +65,7 @@ const readConsent = itemReader(Schemas.ConsentRecord);
  * Whichever write creates the item, it stamps the version and the mailbox: each write is an update
  * that may be the item's first.
  */
-export const stamped = (email: string) => ({
+const stamped = (email: string) => ({
   expression: "v = if_not_exists(v, :v), email = if_not_exists(email, :email)",
   values: { ":v": num(recordVersion), ":email": str(Schemas.mailboxKey(email)) },
 });
@@ -110,14 +110,17 @@ const AddressItem = Schema.Struct({
 
 const readRecord = itemReader(AddressItem);
 
-/** An occurrence is `<receivedAt>#<feedbackId>`; one that does not parse is outside the window. */
+/**
+ * An occurrence is `<bounce timestamp>#<feedbackId>` (ADR-0030); one that does not parse is outside
+ * the window. Entries from before ADR-0030 hold the processing time instead, in the same form.
+ */
 const occurredSince = (occurrence: string, windowStart: DateTime.Utc): boolean => {
   const separator = occurrence.indexOf("#");
 
   return (
     separator > 0 &&
-    Option.exists(DateTime.make(occurrence.slice(0, separator)), (receivedAt) =>
-      DateTime.isGreaterThanOrEqualTo(receivedAt, windowStart),
+    Option.exists(DateTime.make(occurrence.slice(0, separator)), (occurredAt) =>
+      DateTime.isGreaterThanOrEqualTo(occurredAt, windowStart),
     )
   );
 };
@@ -157,8 +160,20 @@ const suppressionMap = (suppression: AddressSuppression) =>
     ),
   );
 
-/** The first suppression stands: a later event for the same mailbox changes nothing. */
-export const suppressionWrites = (primitives: Pick<UpdatePrimitives, "update">) => {
+/** A transient bounce, as one event reported it. */
+export interface TransientBounce {
+  readonly email: string;
+  /** When the bounce happened, as a canonical ISO timestamp. */
+  readonly occurredAt: string;
+  readonly feedbackId: string;
+}
+
+/**
+ * What a feedback event does to a mailbox, for every mail this service sends. The first suppression
+ * stands: a later event for the same mailbox changes nothing. A transient bounce adds its event's
+ * entry to the window, so a redelivered event adds nothing new.
+ */
+export const mailboxFeedbackWrites = (primitives: Pick<UpdatePrimitives, "update">) => {
   const { update } = primitives;
 
   const suppressAddress = Effect.fn("Storage.suppressAddress")((
@@ -173,7 +188,20 @@ export const suppressionWrites = (primitives: Pick<UpdatePrimitives, "update">) 
     });
   });
 
-  return { suppressAddress } as const;
+  const addTransientBounce = Effect.fn("Storage.addTransientBounce")((bounce: TransientBounce) => {
+    const stamp = stamped(bounce.email);
+
+    return update("addTransientBounce", {
+      Key: addressKey(bounce.email),
+      UpdateExpression: `SET ${stamp.expression} ADD transientBounces :bounce`,
+      ExpressionAttributeValues: {
+        ...stamp.values,
+        ":bounce": strSet([`${bounce.occurredAt}#${bounce.feedbackId}`]),
+      },
+    });
+  });
+
+  return { suppressAddress, addTransientBounce } as const;
 };
 
 /**

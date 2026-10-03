@@ -36,7 +36,7 @@ import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 
 import { newIdentifier, nowIso } from "../src/Identifiers.ts";
 import { campaignKey, itemReader, str, tableLogicalId } from "../src/storage/Items.ts";
-import { suppressionWrites, unsubscribeWrites } from "../src/storage/Addresses.ts";
+import { mailboxFeedbackWrites, unsubscribeWrites } from "../src/storage/Addresses.ts";
 import { audienceOperations } from "../src/storage/Audience.ts";
 import { campaignStoreOperations } from "../src/storage/Campaigns.ts";
 import { feedbackWrites } from "../src/storage/Feedback.ts";
@@ -291,7 +291,7 @@ export const liveStorage = (
     return {
       ...audienceOperations(operations, tokens),
       ...campaignStoreOperations(operations, tokens),
-      ...suppressionWrites(updates),
+      ...mailboxFeedbackWrites(updates),
       ...unsubscribeWrites(updates),
       ...feedbackWrites(transactions),
     } as const;
@@ -787,7 +787,7 @@ export const rateLimitItem = Effect.gen(function* () {
 /** Every capability composed over one live table: what this suite drives, not what any function holds. */
 export type LiveStorage = ReturnType<typeof audienceOperations> &
   ReturnType<typeof campaignStoreOperations> &
-  ReturnType<typeof suppressionWrites> &
+  ReturnType<typeof mailboxFeedbackWrites> &
   ReturnType<typeof unsubscribeWrites> &
   ReturnType<typeof feedbackWrites>;
 

@@ -7,6 +7,7 @@
 - Supersedes in part: [ADR-0003](0003-feedback-events-through-eventbridge.md)'s "neither Lambda calls any SES suppression API"; [ADR-0008](0008-storage-capabilities-and-error-boundaries.md)'s capability rows for `FeedbackStore` and `AudienceStore`; [ADR-0011](0011-open-recipient-set-and-paced-dispatch.md)'s three pause reasons and its deferral of feedback counts to this lane.
 - Superseded in part: [ADR-0013](0013-repeat-safe-writes.md) for "Transaction conflicts are retried, lost responses are not" and its client-level opt-out.
 - Superseded in part: [ADR-0024](0024-typed-errors-and-cost-neutral-storage.md) for delivery delays, which are no longer published or logged, and for the transient-bounce window's own `SUPPRESSION#<mailbox>/TRANSIENT` item. The window is a field of the address item.
+- Amended: [ADR-0030](0030-event-keyed-mailbox-feedback-and-conservative-replay.md) for the transient window: each entry is `<bounce timestamp>#<feedbackId>`, written as its own update for every transient bounce of this service's mail, tagged or not, before and outside the campaign's history transaction.
 
 ## Context
 

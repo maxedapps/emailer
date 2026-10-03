@@ -1,12 +1,15 @@
 import { describe, expect, it } from "@effect/vitest";
+import { DateTime, Effect, Result } from "effect";
 
-import { classify } from "./FeedbackClassification.ts";
+import { classify, decodeEmailEvent } from "./FeedbackClassification.ts";
 
 import type { EmailEvent } from "./FeedbackClassification.ts";
 
 const mail = { messageId: "0100019" };
 
 const feedbackId = "0100019a-6c6f-4a39-8f12-0b2f9c3d4e5f";
+
+const bouncedAt = DateTime.makeUnsafe("2026-09-11T10:00:00.250Z");
 
 const bounce = (bounceType: string, bounceSubType: string | null): EmailEvent => ({
   eventType: "Bounce",
@@ -16,6 +19,7 @@ const bounce = (bounceType: string, bounceSubType: string | null): EmailEvent =>
     bounceSubType,
     bouncedRecipients: [{ emailAddress: "hard@example.com" }],
     feedbackId,
+    timestamp: bouncedAt,
   },
 });
 
@@ -39,10 +43,11 @@ describe("bounces", () => {
       classification: "permanent-bounce",
       suppress: true,
       outcome: "suppressed",
-      write: { effect: "count", counter: "bounced" },
+      counter: "bounced",
       kind: "bounce",
       feedbackId,
       recipients: ["hard@example.com"],
+      transientAt: undefined,
       bounceType: "Permanent",
       bounceSubType: "General",
     });
@@ -62,7 +67,8 @@ describe("bounces", () => {
         classification: "suppression-echo",
         suppress: true,
         outcome: "suppressed",
-        write: { effect: "history" },
+        counter: undefined,
+        transientAt: undefined,
       });
     },
   );
@@ -71,12 +77,13 @@ describe("bounces", () => {
     ["Transient", "MailboxFull"],
     ["Transient", "General"],
     ["Undetermined", "Undetermined"],
-  ])("sends a %s/%s bounce to the transient window without suppressing", (type, subtype) => {
+  ])("sends a %s/%s bounce to the transient window at its bounce time", (type, subtype) => {
     expect(classify(bounce(type, subtype))).toMatchObject({
       classification: "transient-bounce",
       suppress: false,
       outcome: "recorded",
-      write: { effect: "transient" },
+      counter: undefined,
+      transientAt: "2026-09-11T10:00:00.250Z",
       bounceType: type,
       bounceSubType: subtype,
     });
@@ -95,7 +102,7 @@ describe("complaints", () => {
       classification: "complaint",
       suppress: true,
       outcome: "suppressed",
-      write: { effect: "count", counter: "complained" },
+      counter: "complained",
       kind: "complaint",
       feedbackId,
       recipients: ["angry@example.com"],
@@ -115,7 +122,7 @@ describe("complaints", () => {
         classification: "ignored-complaint",
         suppress: false,
         outcome: "recorded",
-        write: { effect: "history" },
+        counter: undefined,
       });
     },
   );
@@ -125,7 +132,37 @@ describe("complaints", () => {
       classification: "suppression-echo",
       suppress: true,
       outcome: "suppressed",
-      write: { effect: "history" },
+      counter: undefined,
     });
   });
+});
+
+describe("decoding", () => {
+  const detail = (timestamp: string | undefined) => ({
+    eventType: "Bounce",
+    mail,
+    bounce: {
+      bounceType: "Transient",
+      bouncedRecipients: [{ emailAddress: "soft@example.com" }],
+      feedbackId,
+      timestamp,
+    },
+  });
+
+  it.effect("reads a bounce's timestamp in canonical form, whatever precision SES sent", () =>
+    Effect.gen(function* () {
+      const event = yield* decodeEmailEvent(detail("2026-09-11T10:00:00Z"));
+
+      expect(classify(event).transientAt).toBe("2026-09-11T10:00:00.000Z");
+    }),
+  );
+
+  it.effect("refuses a bounce without a readable timestamp", () =>
+    Effect.gen(function* () {
+      expect(Result.isFailure(yield* Effect.result(decodeEmailEvent(detail("soon"))))).toBe(true);
+      expect(Result.isFailure(yield* Effect.result(decodeEmailEvent(detail(undefined))))).toBe(
+        true,
+      );
+    }),
+  );
 });

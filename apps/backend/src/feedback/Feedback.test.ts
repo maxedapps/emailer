@@ -3,12 +3,13 @@ import { CampaignNotFound, StorageUnavailable } from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
 import type * as AWS from "alchemy/AWS";
 import { ConfigProvider, Effect, Layer, Logger, References, Result } from "effect";
+import { TestClock } from "effect/testing";
 
 import { expectedConfigurationSet, handleMessage } from "./Feedback.ts";
 import { FeedbackAlreadyRecorded, FeedbackStore } from "../storage/Feedback.ts";
 
 import type { AddressSuppression } from "../storage/Addresses.ts";
-import type { FeedbackRow, FeedbackWrite } from "../storage/Feedback.ts";
+import type { FeedbackCounter, FeedbackRow } from "../storage/Feedback.ts";
 
 type WriteOutcome = "committed" | "duplicate" | "unknown-campaign";
 
@@ -22,7 +23,7 @@ const feedbackId = "0100019a-6c6f-4a39-8f12-0b2f9c3d4e5f";
 
 interface RecordedWrite {
   readonly row: FeedbackRow;
-  readonly write: FeedbackWrite;
+  readonly counter: FeedbackCounter | undefined;
 }
 
 interface LogEntry {
@@ -32,6 +33,8 @@ interface LogEntry {
 
 interface World {
   readonly suppressions: Map<string, AddressSuppression>;
+  /** Each mailbox's transient window, as the string set the store adds to. */
+  readonly transients: Map<string, Set<string>>;
   readonly writes: Array<RecordedWrite>;
   readonly historyKeys: Set<string>;
   readonly writeOutcomes: Array<WriteOutcome>;
@@ -70,9 +73,17 @@ const storageOperations = (world: World): FeedbackStore["Service"] => ({
 
       world.suppressions.set(key, suppression);
     }),
-  recordFeedback: (row, write) =>
+  addTransientBounce: (bounce) =>
+    Effect.sync(() => {
+      const key = Schemas.mailboxKey(bounce.email);
+      const window = world.transients.get(key) ?? new Set<string>();
+
+      window.add(`${bounce.occurredAt}#${bounce.feedbackId}`);
+      world.transients.set(key, window);
+    }),
+  recordFeedback: (row, counter) =>
     Effect.suspend(() => {
-      world.writes.push({ row, write });
+      world.writes.push({ row, counter });
 
       return rememberWrite(world, historyKey(row));
     }),
@@ -87,6 +98,7 @@ const configuration = Layer.succeed(ConfigProvider.ConfigProvider)(
 
 const emptyWorld = (): World => ({
   suppressions: new Map(),
+  transients: new Map(),
   writes: [],
   historyKeys: new Set(),
   writeOutcomes: [],
@@ -193,9 +205,10 @@ const run = (detail: AWS.SES.EmailEventDetail) =>
     return world;
   });
 
-const countBounced: FeedbackWrite = { effect: "count", counter: "bounced" };
+const untagged = { "ses:configuration-set": [configurationSetName] };
 
-const countComplained: FeedbackWrite = { effect: "count", counter: "complained" };
+/** The window entry `bounceEvent` adds: its bounce time and its feedback id. */
+const windowEntry = `2026-09-11T10:00:00.000Z#${feedbackId}`;
 
 describe("bounces", () => {
   it.effect(
@@ -208,7 +221,8 @@ describe("bounces", () => {
         expect(world.suppressions.get("hard@example.com")?.messageId).toBe(messageId);
         expect(world.suppressions.get("hard@example.com")?.bounceSubType).toBe("General");
         expect(world.writes).toHaveLength(1);
-        expect(world.writes[0]?.write).toStrictEqual(countBounced);
+        expect(world.writes[0]?.counter).toBe("bounced");
+        expect(world.transients.size).toBe(0);
         expect(world.writes[0]?.row).toStrictEqual({
           campaignId,
           kind: "bounce",
@@ -227,20 +241,33 @@ describe("bounces", () => {
       }),
   );
 
-  it.effect("does not suppress a transient bounce and hands the store a transient row", () =>
+  it.effect(
+    "adds a transient bounce to the mailbox's window at its bounce time, and records it uncounted",
+    () =>
+      Effect.gen(function* () {
+        const world = yield* run(bounceEvent("Transient", "MailboxFull"));
+
+        expect(world.suppressions.size).toBe(0);
+        expect(world.transients.get("hard@example.com")).toStrictEqual(new Set([windowEntry]));
+        expect(world.writes).toHaveLength(1);
+        expect(world.writes[0]?.counter).toBeUndefined();
+        expect(world.writes[0]?.row).toMatchObject({
+          campaignId,
+          recipient: "hard@example.com",
+          outcome: "recorded",
+          bounceType: "Transient",
+          bounceSubType: "MailboxFull",
+        });
+      }),
+  );
+
+  it.effect("adds an untagged transient bounce to the window and writes no campaign row", () =>
     Effect.gen(function* () {
-      const world = yield* run(bounceEvent("Transient", "MailboxFull"));
+      const world = yield* run(bounceEvent("Transient", "General", ["soft@example.com"], untagged));
 
       expect(world.suppressions.size).toBe(0);
-      expect(world.writes).toHaveLength(1);
-      expect(world.writes[0]?.write).toStrictEqual({ effect: "transient" });
-      expect(world.writes[0]?.row).toMatchObject({
-        campaignId,
-        recipient: "hard@example.com",
-        outcome: "recorded",
-        bounceType: "Transient",
-        bounceSubType: "MailboxFull",
-      });
+      expect(world.transients.get("soft@example.com")).toStrictEqual(new Set([windowEntry]));
+      expect(world.writes).toHaveLength(0);
     }),
   );
 
@@ -267,7 +294,7 @@ describe("complaints", () => {
       expect(world.suppressions.get("angry@example.com")?.reason).toBe("complaint");
       expect(world.suppressions.get("angry@example.com")?.complaintFeedbackType).toBe("abuse");
       expect(world.writes).toHaveLength(1);
-      expect(world.writes[0]?.write).toStrictEqual(countComplained);
+      expect(world.writes[0]?.counter).toBe("complained");
       expect(world.writes[0]?.row).toMatchObject({
         kind: "complaint",
         outcome: "suppressed",
@@ -284,7 +311,7 @@ describe("complaints", () => {
       expect(world.suppressions.get("angry@example.com")?.complaintSubType).toBe(
         "OnAccountSuppressionList",
       );
-      expect(world.writes[0]?.write).toStrictEqual({ effect: "history" });
+      expect(world.writes[0]?.counter).toBeUndefined();
       expect(world.writes[0]?.row.complaintSubType).toBe("OnAccountSuppressionList");
     }),
   );
@@ -295,7 +322,7 @@ describe("complaints", () => {
 
       expect(world.suppressions.size).toBe(0);
       expect(world.writes).toHaveLength(1);
-      expect(world.writes[0]?.write).toStrictEqual({ effect: "history" });
+      expect(world.writes[0]?.counter).toBeUndefined();
       expect(world.writes[0]?.row.outcome).toBe("recorded");
     }),
   );
@@ -371,6 +398,20 @@ describe("idempotence and the campaign tag", () => {
     }),
   );
 
+  it.effect("adds a transient bounce delivered again later only once", () =>
+    Effect.gen(function* () {
+      const world = emptyWorld();
+      const event = bounceEvent("Transient", "General", ["soft@example.com"], untagged);
+
+      yield* handling(world, envelope(event, "envelope-1"));
+      // A redelivery is processed later: the entry must follow the bounce, not the processing.
+      yield* TestClock.adjust("2 hours");
+      yield* handling(world, envelope(event, "envelope-2"));
+
+      expect(world.transients.get("soft@example.com")).toStrictEqual(new Set([windowEntry]));
+    }),
+  );
+
   it.effect("fails the invocation when the suppression write is unavailable", () =>
     Effect.gen(function* () {
       const world = emptyWorld();
@@ -397,18 +438,12 @@ describe("idempotence and the campaign tag", () => {
 
   it.effect("still suppresses when the event carries no campaign tag", () =>
     Effect.gen(function* () {
-      const untagged = {
-        "ses:configuration-set": [configurationSetName],
-      };
-
       const world = yield* run(bounceEvent("Permanent", "General", ["hard@example.com"], untagged));
 
       expect(world.suppressions.has("hard@example.com")).toBe(true);
       expect(world.writes).toHaveLength(0);
-      expect(logsNamed(world, "feedback without a campaign tag (a test send)")).toHaveLength(1);
-      expect(logsNamed(world, "feedback without a campaign tag (a test send)")[0]?.level).toBe(
-        "Info",
-      );
+      expect(logsNamed(world, "feedback without a campaign tag")).toHaveLength(1);
+      expect(logsNamed(world, "feedback without a campaign tag")[0]?.level).toBe("Info");
     }),
   );
 
@@ -424,7 +459,7 @@ describe("idempotence and the campaign tag", () => {
 
         const flaky = Layer.succeed(FeedbackStore)({
           ...storageOperations(world),
-          recordFeedback: (row, write) =>
+          recordFeedback: (row, counter) =>
             historyFails
               ? Effect.fail(
                   new StorageUnavailable({
@@ -432,7 +467,7 @@ describe("idempotence and the campaign tag", () => {
                     failure: "InternalServerError",
                   }),
                 )
-              : storageOperations(world).recordFeedback(row, write),
+              : storageOperations(world).recordFeedback(row, counter),
         });
 
         const first = yield* Effect.result(
@@ -466,9 +501,9 @@ describe("write outcomes and summary", () => {
 
       const unknown = Layer.succeed(FeedbackStore)({
         ...storageOperations(world),
-        recordFeedback: (row, write) =>
+        recordFeedback: (row, counter) =>
           Effect.suspend(() => {
-            world.writes.push({ row, write });
+            world.writes.push({ row, counter });
             world.writeOutcomes.push("unknown-campaign");
 
             return Effect.fail(new CampaignNotFound());

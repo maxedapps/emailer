@@ -506,7 +506,7 @@ export const cancellationSuite = (test: LiveTest) => {
             bounceType: "Permanent",
             bounceSubType: "General",
           },
-          { effect: "count", counter: "bounced" },
+          "bounced",
         );
 
         yield* replayTransactWrite(resumeRequest);

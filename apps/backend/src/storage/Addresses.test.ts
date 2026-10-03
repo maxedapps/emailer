@@ -4,7 +4,12 @@ import { DateTime, Effect } from "effect";
 import { TestClock } from "effect/testing";
 import { describe, expect, it } from "@effect/vitest";
 
-import { addressReads, addressWrites, suppressionWrites, unsubscribeWrites } from "./Addresses.ts";
+import {
+  addressReads,
+  addressWrites,
+  mailboxFeedbackWrites,
+  unsubscribeWrites,
+} from "./Addresses.ts";
 import {
   conditionFailed,
   createdAt,
@@ -22,7 +27,7 @@ const operationsFor = (table: Table) => {
   const primitives = primitivesFor(table);
 
   return {
-    ...suppressionWrites(primitives),
+    ...mailboxFeedbackWrites(primitives),
     ...unsubscribeWrites(primitives),
     ...addressReads(primitives),
     ...addressWrites(primitives),
@@ -110,6 +115,34 @@ describe("suppressAddress", () => {
                   bounceSubType: { S: "General" },
                 },
               },
+            },
+          },
+        ]);
+      }),
+  );
+});
+
+describe("addTransientBounce", () => {
+  it.effect(
+    "adds the event's bounce time and feedback id to the mailbox's window, stamping the item",
+    () =>
+      Effect.gen(function* () {
+        const table = scriptedTable({});
+
+        yield* operationsFor(table).addTransientBounce({
+          email: "User@Example.com",
+          occurredAt: createdAt,
+          feedbackId: "0100019a-6c6f-4a39-8f12-0b2f9c3d4e5f",
+        });
+
+        expect(table.updateItemRequests).toStrictEqual([
+          {
+            Key: key,
+            UpdateExpression:
+              "SET v = if_not_exists(v, :v), email = if_not_exists(email, :email) ADD transientBounces :bounce",
+            ExpressionAttributeValues: {
+              ...stampValues,
+              ":bounce": { SS: [`${createdAt}#0100019a-6c6f-4a39-8f12-0b2f9c3d4e5f`] },
             },
           },
         ]);

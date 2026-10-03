@@ -1,11 +1,11 @@
 import type * as Schemas from "@emailer/api/Schemas";
-import { Schema } from "effect";
+import { DateTime, Schema } from "effect";
 
-import type { FeedbackOutcome, FeedbackWrite } from "../storage/Feedback.ts";
+import type { FeedbackCounter, FeedbackOutcome } from "../storage/Feedback.ts";
 
 /**
  * What an SES feedback event means for this system, decided once. Everything downstream — the
- * suppression write, the history row's outcome, the campaign counter or transient window, and the
+ * suppression or transient-window write, the history row's outcome, the campaign counter, and the
  * summary log — reads the decision from here and derives nothing of its own.
  */
 
@@ -25,6 +25,8 @@ export const EmailEvent = Schema.Union([
       bounceSubType: Schema.optional(Schema.NullOr(Schema.String)),
       bouncedRecipients: Schema.Array(Recipient),
       feedbackId: Schema.NonEmptyString,
+      /** When the receiving server sent the bounce. */
+      timestamp: Schema.DateTimeUtcFromString,
     }),
   }),
   Schema.Struct({
@@ -71,44 +73,46 @@ interface Decision {
   readonly classification: FeedbackClassification;
   readonly suppress: boolean;
   readonly outcome: FeedbackOutcome;
-  readonly write: FeedbackWrite;
+  /** What a campaign's mail adds to the campaign's counters, beside its history row. */
+  readonly counter: FeedbackCounter | undefined;
 }
 
 /**
- * The one table. Suppression and the history outcome always agree; the write says what the row
- * changes beside itself. Echoes suppress locally (that heals a lost event) and record, but count
- * nowhere: nothing reached a mailbox, and SES leaves them out of its own rates too.
+ * The one table. Suppression and the history outcome always agree. Echoes suppress locally (that
+ * heals a lost event) and record, but count nowhere: nothing reached a mailbox, and SES leaves them
+ * out of its own rates too. A transient bounce neither suppresses nor counts; it goes into the
+ * mailbox's window instead.
  */
 const decisions: Record<FeedbackClassification, Decision> = {
   "permanent-bounce": {
     classification: "permanent-bounce",
     suppress: true,
     outcome: "suppressed",
-    write: { effect: "count", counter: "bounced" },
+    counter: "bounced",
   },
   "suppression-echo": {
     classification: "suppression-echo",
     suppress: true,
     outcome: "suppressed",
-    write: { effect: "history" },
+    counter: undefined,
   },
   "transient-bounce": {
     classification: "transient-bounce",
     suppress: false,
     outcome: "recorded",
-    write: { effect: "transient" },
+    counter: undefined,
   },
   complaint: {
     classification: "complaint",
     suppress: true,
     outcome: "suppressed",
-    write: { effect: "count", counter: "complained" },
+    counter: "complained",
   },
   "ignored-complaint": {
     classification: "ignored-complaint",
     suppress: false,
     outcome: "recorded",
-    write: { effect: "history" },
+    counter: undefined,
   },
 };
 
@@ -116,6 +120,11 @@ export interface Classified extends Decision {
   readonly kind: Schemas.SuppressionReason;
   readonly feedbackId: string;
   readonly recipients: ReadonlyArray<string>;
+  /**
+   * When the bounce happened, for a transient bounce: it goes into each recipient's window, whichever
+   * mail it answered. Absent for every other event.
+   */
+  readonly transientAt?: string | undefined;
   readonly bounceType?: string | undefined;
   readonly bounceSubType?: string | undefined;
   readonly complaintFeedbackType?: string | undefined;
@@ -151,12 +160,17 @@ export const classify = (event: EmailEvent): Classified => {
   switch (event.eventType) {
     case "Bounce": {
       const bounceSubType = orUndefined(event.bounce.bounceSubType);
+      const decision = classifyBounce(event.bounce.bounceType, bounceSubType);
 
       return {
-        ...classifyBounce(event.bounce.bounceType, bounceSubType),
+        ...decision,
         kind: "bounce",
         feedbackId: event.bounce.feedbackId,
         recipients: event.bounce.bouncedRecipients.map((it) => it.emailAddress),
+        transientAt:
+          decision.classification === "transient-bounce"
+            ? DateTime.formatIso(event.bounce.timestamp)
+            : undefined,
         bounceType: event.bounce.bounceType,
         bounceSubType,
       };

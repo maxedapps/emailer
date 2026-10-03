@@ -8,7 +8,7 @@ import { campaignId, cancelled, createdAt, primitivesFor, scriptedTable } from "
 
 import type { Table } from "./Testing.ts";
 
-import type { FeedbackRow, FeedbackWrite } from "./Feedback.ts";
+import type { FeedbackRow } from "./Feedback.ts";
 
 const operationsFor = (table: Table) => feedbackWrites(primitivesFor(table));
 
@@ -40,15 +40,6 @@ const complaintRow: FeedbackRow = {
   receivedAt: createdAt,
   complaintFeedbackType: "abuse",
 };
-
-const count = (counter: "bounced" | "complained"): FeedbackWrite => ({
-  effect: "count",
-  counter,
-});
-
-const transient: FeedbackWrite = { effect: "transient" };
-
-const history: FeedbackWrite = { effect: "history" };
 
 const historyPut = (
   kind: "bounce" | "complaint",
@@ -84,26 +75,12 @@ const counterUpdate = (counter: "bounced" | "complained") => ({
   },
 });
 
-const transientUpdate = {
-  Update: {
-    Table: tableLogicalId,
-    Key: { pk: { S: `ADDRESS#${mailbox}` }, sk: { S: "ADDRESS" } },
-    UpdateExpression:
-      "SET v = if_not_exists(v, :v), email = if_not_exists(email, :email) ADD transientBounces :bounce",
-    ExpressionAttributeValues: {
-      ":v": { N: "1" },
-      ":email": { S: mailbox },
-      ":bounce": { SS: [`${createdAt}#${feedbackId}`] },
-    },
-  },
-};
-
 describe("recordFeedback", () => {
-  it.effect("puts the history row and adds the bounced counter on META for a count write", () =>
+  it.effect("puts the history row and adds the bounced counter on META", () =>
     Effect.gen(function* () {
       const table = scriptedTable({});
 
-      yield* operationsFor(table).recordFeedback(bounceRow, count("bounced"));
+      yield* operationsFor(table).recordFeedback(bounceRow, "bounced");
 
       expect(table.transactionRequests).toHaveLength(1);
       expect(table.transactionRequests[0]?.TransactItems).toStrictEqual([
@@ -116,11 +93,11 @@ describe("recordFeedback", () => {
     }),
   );
 
-  it.effect("adds the complained counter for a complaint count write", () =>
+  it.effect("adds the complained counter for a complaint", () =>
     Effect.gen(function* () {
       const table = scriptedTable({});
 
-      yield* operationsFor(table).recordFeedback(complaintRow, count("complained"));
+      yield* operationsFor(table).recordFeedback(complaintRow, "complained");
 
       expect(table.transactionRequests[0]?.TransactItems).toStrictEqual([
         historyPut("complaint", "suppressed", { complaintFeedbackType: { S: "abuse" } }),
@@ -130,7 +107,7 @@ describe("recordFeedback", () => {
   );
 
   it.effect(
-    "writes the history row alone for a history write and copies the outcome it was given",
+    "writes the history row alone without a counter and copies the outcome it was given",
     () =>
       Effect.gen(function* () {
         const table = scriptedTable({});
@@ -142,7 +119,7 @@ describe("recordFeedback", () => {
             complaintFeedbackType: "not-spam",
             complaintSubType: "OnAccountSuppressionList",
           },
-          history,
+          undefined,
         );
 
         expect(table.transactionRequests[0]?.TransactItems).toStrictEqual([
@@ -154,34 +131,13 @@ describe("recordFeedback", () => {
       }),
   );
 
-  it.effect(
-    "adds the bounce to the address item, stamping version and mailbox, and touches no META",
-    () =>
-      Effect.gen(function* () {
-        const table = scriptedTable({});
-
-        yield* operationsFor(table).recordFeedback(
-          { ...bounceRow, outcome: "recorded", bounceType: "Transient" },
-          transient,
-        );
-
-        expect(table.transactionRequests[0]?.TransactItems).toStrictEqual([
-          historyPut("bounce", "recorded", {
-            bounceType: { S: "Transient" },
-            bounceSubType: { S: "General" },
-          }),
-          transientUpdate,
-        ]);
-      }),
-  );
-
   it.effect("omits every provider field that is undefined", () =>
     Effect.gen(function* () {
       const table = scriptedTable({});
 
       yield* operationsFor(table).recordFeedback(
         { ...bounceRow, bounceSubType: undefined },
-        count("bounced"),
+        "bounced",
       );
 
       expect(table.transactionRequests[0]?.TransactItems[0]).toStrictEqual(
@@ -197,23 +153,21 @@ describe("recordFeedback", () => {
       });
 
       expect(
-        yield* Effect.flip(operationsFor(table).recordFeedback(bounceRow, count("bounced"))),
+        yield* Effect.flip(operationsFor(table).recordFeedback(bounceRow, "bounced")),
       ).toStrictEqual(new FeedbackAlreadyRecorded());
     }),
   );
 
-  it.effect(
-    "answers FeedbackAlreadyRecorded for a history write whose only item already exists",
-    () =>
-      Effect.gen(function* () {
-        const table = scriptedTable({
-          transactWriteItems: [cancelled("ConditionalCheckFailed")],
-        });
+  it.effect("answers FeedbackAlreadyRecorded for an uncounted row that already exists", () =>
+    Effect.gen(function* () {
+      const table = scriptedTable({
+        transactWriteItems: [cancelled("ConditionalCheckFailed")],
+      });
 
-        expect(
-          yield* Effect.flip(operationsFor(table).recordFeedback(bounceRow, history)),
-        ).toStrictEqual(new FeedbackAlreadyRecorded());
-      }),
+      expect(
+        yield* Effect.flip(operationsFor(table).recordFeedback(bounceRow, undefined)),
+      ).toStrictEqual(new FeedbackAlreadyRecorded());
+    }),
   );
 
   it.effect("answers CampaignNotFound from a condition failure on META", () =>
@@ -223,7 +177,7 @@ describe("recordFeedback", () => {
       });
 
       expect(
-        yield* Effect.flip(operationsFor(table).recordFeedback(complaintRow, count("complained"))),
+        yield* Effect.flip(operationsFor(table).recordFeedback(complaintRow, "complained")),
       ).toStrictEqual(new Errors.CampaignNotFound());
     }),
   );

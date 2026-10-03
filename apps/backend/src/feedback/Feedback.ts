@@ -133,8 +133,10 @@ const record = Effect.fn("Feedback.record")(function* (event: EmailEvent) {
   const storage = yield* FeedbackStore;
   const receivedAt = yield* nowIso;
 
-  if (classified.suppress) {
-    for (const recipient of classified.recipients) {
+  // The mailbox comes first and holds for every mail, campaign or not, so it does not depend on a
+  // campaign that may be unknown or gone, nor on the history write.
+  for (const recipient of classified.recipients) {
+    if (classified.suppress) {
       yield* storage.suppressAddress({
         email: recipient,
         reason: classified.kind,
@@ -146,12 +148,20 @@ const record = Effect.fn("Feedback.record")(function* (event: EmailEvent) {
         suppressedAt: receivedAt,
       });
     }
+
+    if (classified.transientAt !== undefined) {
+      yield* storage.addTransientBounce({
+        email: recipient,
+        occurredAt: classified.transientAt,
+        feedbackId: classified.feedbackId,
+      });
+    }
   }
 
-  // Every campaign send is tagged with its campaign; a test send deliberately is not, so its
-  // bounces and complaints suppress the address without reaching any campaign's counters.
+  // Every campaign send is tagged with its campaign; a test copy and a sign-up's confirmation
+  // deliberately are not, so their feedback reaches the mailbox and no campaign's counters.
   if (campaignId === undefined) {
-    return yield* Effect.logInfo("feedback without a campaign tag (a test send)", {
+    return yield* Effect.logInfo("feedback without a campaign tag", {
       messageId,
       kind: classified.kind,
       suppressed: classified.suppress,
@@ -175,7 +185,7 @@ const record = Effect.fn("Feedback.record")(function* (event: EmailEvent) {
           complaintFeedbackType: classified.complaintFeedbackType,
           complaintSubType: classified.complaintSubType,
         },
-        classified.write,
+        classified.counter,
       )
       .pipe(
         Effect.catchTags({
