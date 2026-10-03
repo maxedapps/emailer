@@ -11,6 +11,9 @@ import * as TestStage from "./TestStage.ts";
 
 const stack = "Emailer";
 
+/** A deploy or destroy takes minutes; a stalled one fails the command and stops a sweep. */
+const commandTimeout = Duration.minutes(30);
+
 class AlchemyFailed extends Data.TaggedError("AlchemyFailed")<{ readonly message: string }> {}
 
 const alchemy = (args: ReadonlyArray<string>, options: ChildProcess.CommandOptions) =>
@@ -34,23 +37,27 @@ const run = Effect.fn(function* (args: ReadonlyArray<string>) {
   );
 
   yield* succeeded(args, exitCode);
-});
+}, Effect.timeout(commandTimeout));
 
 /** Runs an Alchemy command for its output; its diagnostics still reach the terminal. */
-const read = Effect.fn(function* (args: ReadonlyArray<string>) {
-  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+const read = Effect.fn(
+  function* (args: ReadonlyArray<string>) {
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
-  const handle = yield* spawner.spawn(alchemy(args, { stderr: "inherit" }));
+    const handle = yield* spawner.spawn(alchemy(args, { stderr: "inherit" }));
 
-  const [output, exitCode] = yield* Effect.all(
-    [Stream.mkString(Stream.decodeText(handle.stdout)), handle.exitCode],
-    { concurrency: "unbounded" },
-  );
+    const [output, exitCode] = yield* Effect.all(
+      [Stream.mkString(Stream.decodeText(handle.stdout)), handle.exitCode],
+      { concurrency: "unbounded" },
+    );
 
-  yield* succeeded(args, exitCode);
+    yield* succeeded(args, exitCode);
 
-  return output;
-}, Effect.scoped);
+    return output;
+  },
+  Effect.scoped,
+  Effect.timeout(commandTimeout),
+);
 
 const testStages = Effect.map(read(["state", "list", stack]), (listing) =>
   TestStage.testStages(stack, listing),
