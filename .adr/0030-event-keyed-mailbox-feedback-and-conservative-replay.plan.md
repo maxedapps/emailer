@@ -1,6 +1,6 @@
 # Plan: Code review 241 fixes
 
-- Status: In progress
+- Status: Done
 - Decision: [ADR-0030](0030-event-keyed-mailbox-feedback-and-conservative-replay.md) (F4, F6). The other findings need no new design decision. Their records are amendments to ADR-0011 (F2, F3) and ADR-0022 (F1).
 - Source: code review of `main` @ `dea4c24`, 2026-10-03 (task 241). The user asked for every finding and every cleanup it names.
 
@@ -270,3 +270,20 @@ Plan review (Codex, round 1):
 Code review (Codex, round 2): no bug, security or simplification findings. It accepted the three departures above.
 
 - **R3 (fix, nit):** the replay wording said that old feedback "suppresses again". A transient bounce restores only the window, and an ignored complaint does neither, so the README and the CLI help now say "can restore the suppression or the transient-bounce window".
+
+## Verification
+
+- **Before the rebase:**
+  - `pnpm test:integration` passed 40 of 41 on stage `test_max`.
+  - The breaker case missed its 5-minute feedback settle window, although its counter reached the expected 97 shortly afterwards. Run alone, it passed.
+  - The manual walk on the fixed `--stage test` passed, and that stage was destroyed. Both runs used the pre-ADR-0031 stage names.
+- **After the rebase onto ADR-0031:**
+  - `pnpm check` passed (881 tests).
+  - `pnpm test:integration` passed 41 of 41 on its own stage.
+  - The manual walk on `test-2610030846-eieb` (`pnpm stages up`) passed, and `pnpm stages list` showed the stage while it was up. Then `pnpm stages down` ran, and the list showed no test stages.
+- **What the walk covered:**
+  - an unknown payload field and an unknown query parameter answered `400`, and a missing contact answered `404 ContactNotFound`;
+  - a campaign to `success@` and `bounce@simulator.amazonses.com` completed with 2 accepted and 1 bounce counted, and the bounced address was suppressed through the feedback function;
+  - an injected untagged `Transient` envelope, sent twice, left exactly one entry, `2026-10-03T08:00:01.500Z#…` (sent as `…01.5Z`), and no suppression;
+  - `addresses status` answered `200` under strict encoding;
+  - `addresses unsuppress --help` showed the replay rule.
