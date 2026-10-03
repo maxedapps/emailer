@@ -12,6 +12,7 @@
 
   They approved this record and its plan on 2026-09-25 by asking to continue, after renaming their local `.env` to `.env.prod`.
 - Plan: [0026-prod-data-retention-and-harness-driven-tests.plan.md](0026-prod-data-retention-and-harness-driven-tests.plan.md)
+- Amended by: [ADR-0031](0031-own-test-stage-per-worker.md). The live suite deploys a fresh `test-<id>` stage on every run instead of `ALCHEMY_TEST_STAGE` or `test_$USER`, so it no longer needs its guard against `prod`.
 
 ## Context
 

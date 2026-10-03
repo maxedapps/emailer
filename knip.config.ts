@@ -4,7 +4,7 @@ export default {
   workspaces: {
     ".": {
       // Stack files the Alchemy CLI loads; nothing imports them, so knip cannot find them.
-      entry: ["alchemy.run.ts", "stacks/*.ts"],
+      entry: ["alchemy.run.ts", "stacks/sending-identity.ts"],
       // Vendored from dmmulroy/anti-slop and kept as upstream ships it.
       ignore: ["tools/oxlint/anti-slop/**"],
       // The tsconfig plugin name @effect/tsgo reads, not a package.
