@@ -141,6 +141,8 @@ Publish MX, SPF and DMARC **before** the first deploy, so SES never finds the MA
 pnpm exec alchemy deploy --config stacks/sending-identity.ts --stage shared --env-file .env.prod --profile emailer --yes --no-input
 ```
 
+In `cloudflare` mode, the stack stops at startup without Cloudflare credentials. Renew an expired OAuth login with `pnpm exec alchemy profile refresh --profile emailer --provider Cloudflare`. A `CLOUDFLARE_API_TOKEN` in your shell that belongs to another Cloudflare account overrides the profile: run the deploy as `env -u CLOUDFLARE_API_TOKEN pnpm exec alchemy deploy …`.
+
 1. **Manual DNS only:** publish the three `CNAME`s from the stack output `dkimRecords` (`name` → `value`). Copy their target: the zone differs by Region and by identity.
 2. Wait for `DkimStatus=SUCCESS` and `MailFromDomainStatus=SUCCESS`, usually minutes and at most 72 hours.
    - Until DKIM verifies, SES refuses to send.

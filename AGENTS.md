@@ -15,13 +15,27 @@ We're using Alchemy (alchemy.run) and Effect (effect.website).
 - Document key decisions and findings as ADRs (Architecture Decision Records) in an `.adr` folder (which is to be committed)
 - Test deployments are absolutely wanted - on your own ephemeral test stage (see Test stages)
 - The repository is public: never put details specific to the operator or their company (names, brands, vendors, domains, addresses, account or infrastructure identifiers) into code, tests, fixtures or docs - use neutral placeholders such as `example.com`
+- Deploy output prints the AWS account ID: keep deploy logs out of commits, docs and PR bodies
+
+# Before pushing
+
+Run the leak check against the machine-local pattern file `P=~/.config/emailer/leak-pattern.txt` (never print it); always use `-i`, since the pattern is lowercase:
+
+- `test -s "$P"` must succeed.
+- `git diff --name-only --diff-filter=d origin/main HEAD | xargs -r grep -liIEf "$P"` must print nothing.
+- `git log -p --format=%B origin/main..HEAD | grep -ciIEf "$P"` must print `0`.
+- Grep a PR body the same way, and read the diff yourself: the pattern misses some personal details, such as a first name used as a fixture persona.
+
+# Dependencies
+
+pnpm refuses any locked package published less than 24 hours ago, `--frozen-lockfile` included. A bump lands only once the newest publish among all its locked entries, platform binaries included, is a day old; find it with `npm view <pkg>@<version> time` for each. Until then, work in a worktree with pnpm's generated `minimumReleaseAgeExclude` list, never commit that list, and prove `pnpm install --frozen-lockfile` passes without it before landing.
 
 # Test stages
 
 Runtime, end-to-end and manual checks run on a real stage of your own; unit tests and `pnpm check` stay local ([ADR-0031](.adr/0031-own-test-stage-per-worker.md)).
 
 - **Names:** `test-<UTC yyMMddHHmm>-<4 base36>`, made by the tools below. Never use a fixed name (`test`, `test_<user>`): parallel workers would deploy over each other.
-- **Setup:** `.env.test` holds the deploy keys; export CLI credentials and `AWS_REGION` as the README's "Develop and test" shows.
+- **Setup:** `.env.test` holds the deploy keys; export CLI credentials and `AWS_REGION` as the README's "Develop and test" shows. If `aws` reports an expired SSO session, ask the operator to run `aws sso login --profile <profile>`.
 - **Create:** `pnpm stages up` deploys a fresh stage and prints its name; `pnpm stages up <stage>` redeploys yours after a change (forced, so no function keeps an old bundle).
 - **Use:** take `apiUrl` from the deploy output and run the CLI with the test keys only, never through `pnpm emailer` (it loads `.env.prod`): `EMAILER_API_URL=<apiUrl> node --env-file=.env.test apps/cli/src/main.ts <command>`. Send only to SES mailbox-simulator addresses.
 - **Live suite:** `pnpm test:integration` deploys a fresh stage of its own, logs its name and destroys it.
