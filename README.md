@@ -499,7 +499,7 @@ The confirm page must **never confirm on GET**: mail scanners and link previews 
 
 Confirming joins the list as an import does, creating the contact if no one holds the address. It records the consent, which `addresses status` shows, and lifts an earlier opt-out from that list, and only that list.
 
-Send only the fields documented here. Unknown fields are ignored for now; they will answer **400** once the contract rejects them ([ADR-0022](.adr/0022-api-contract-rejects-undeclared-fields.md)).
+Send only the fields documented here: a field or query parameter the API does not declare answers **400** ([ADR-0022](.adr/0022-api-contract-rejects-undeclared-fields.md)).
 
 ## Operate
 

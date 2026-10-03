@@ -242,7 +242,12 @@ export const fakeService = (seed: Seed = {}) => {
         ),
       list: (request) =>
         receive("campaigns.list", { query: request.query }).pipe(
-          Effect.as({ items: [...campaigns.values()] }),
+          // A listing answers summaries: the strict contract refuses a body or variant rules here.
+          Effect.as({
+            items: [...campaigns.values()].map(
+              ({ text: _text, html: _html, variants: _variants, ...summary }) => summary,
+            ),
+          }),
         ),
       update: (request) =>
         receive("campaigns.update", { params: request.params, payload: request.payload }).pipe(

@@ -3,6 +3,7 @@
 - Status: Accepted
 - Date: 2026-09-23
 - Accepted: 2026-09-23
+- Confirmed: 2026-10-03. The API-level annotation landed with the move to Effect 4.0.0 ([ADR-0030 plan](0030-event-keyed-mailbox-feedback-and-conservative-replay.plan.md), T2).
 - Authority: On 2026-09-23 a whole-codebase review found that a mistyped request field is dropped silently. The user approved rejecting unknown fields as part of the cleanup plan (`work/codebase-cleanup.md`, in git history).
 
 ## Context
@@ -29,7 +30,7 @@ Since Effect RC113, schema-level `parseOptions` annotations are ignored. RC116 a
 
   The CLI and the service ship from the same repository, and every endpoint has a round-trip test, so a mismatch fails the unit suite before it reaches an operator.
 - **The CLI decodes files it sends just as strictly.** `lists import --file` decodes with `{ onExcessProperty: "error" }` and rejects an unknown key locally, naming its path, before any request is made.
-- **The API-level annotation waits for the next Effect RC.**
+- **The API-level annotation waited for an Effect release with the fix.** It landed with Effect 4.0.0 on 2026-10-03.
   - **The bug:** in RC117, `"error"` breaks the encoding of every `Schema.TaggedError`. The check reads own keys with `Reflect.ownKeys`, which includes an error's non-enumerable `stack`, so each declared error becomes a `500`.
   - **The fix:** [effect#8423](https://github.com/Effect-TS/effect/pull/8423) makes the check ignore non-enumerable properties. It merged on 2026-09-23, after RC117.
   - **Until then:** the CLI's strict decode covers the realistic case, a hand-written import file. The annotation is a one-line change, with a `400` test per unknown field, as part of the upgrade to the first RC that contains the fix.
@@ -45,14 +46,14 @@ Since Effect RC113, schema-level `parseOptions` annotations are ignored. RC116 a
 
 - **Typos fail loudly.**
   - The CLI names the offending key now.
-  - Direct API callers get a `400` with an empty body once the annotation lands. Until then, a raw caller's unknown field is still dropped; the CLI is the only caller today.
+  - Direct API callers get a `400` with an empty body.
 - **Contract additions ship together.** A new response field needs the CLI and the service to update in the same change, which one repository already enforces.
 - **Header schemas are a caution.** A header schema receives every request header, so adding one under this annotation would reject ordinary headers. The API declares none; the bearer token comes through security middleware.
 
 ## Confirmation
 
 - **Now:** "rejects an import file with a misspelled entry key, naming it, before any request" in `apps/cli/src/commands/Lists.test.ts` proves that a misspelled import-entry key fails in the CLI, naming its path, with no request sent.
-- **After the upgrade:** the `Api.test.ts` cases for an unknown payload key and an unknown query parameter answer `400`, and every existing round trip still passes.
+- **Since Effect 4.0.0:** the `Api.test.ts` "undeclared fields" cases answer `400` to an unknown payload key and an unknown query parameter, the "public errors" cases keep every declared error's status, and every round trip still passes.
 
 ## References
 

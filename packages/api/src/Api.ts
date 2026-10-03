@@ -358,7 +358,8 @@ class SubscriptionsGroup extends HttpApiGroup.make("subscriptions")
 /**
  * `middleware` applies to the groups added before it and to none added after, so the order is the
  * access rule: everything above it takes the admin token only, and the sign-up endpoints after it
- * take a scoped key only.
+ * take a scoped key only. Undeclared fields are refused everywhere: in a payload or a query (400),
+ * in a response the handler builds, and in what the client decodes (ADR-0022).
  */
 export class EmailerApi extends HttpApi.make("emailer")
   .add(ContactsGroup)
@@ -367,4 +368,5 @@ export class EmailerApi extends HttpApi.make("emailer")
   .add(AddressesGroup)
   .add(KeysGroup)
   .middleware(AdminAuthorization)
-  .add(SubscriptionsGroup) {}
+  .add(SubscriptionsGroup)
+  .annotate(HttpApi.ParseOptions, { onExcessProperty: "error" }) {}

@@ -345,6 +345,30 @@ describe("contacts", () => {
   );
 });
 
+// ADR-0022: the contract rejects fields it does not declare. The declared errors keep their status
+// under the same annotation, which the "public errors" cases prove.
+describe("undeclared fields", () => {
+  it.effect("answers 400 to a payload with a field the contract does not declare", () =>
+    Effect.gen(function* () {
+      const { respond } = yield* api();
+
+      const { status } = yield* respond(
+        send("POST", "/contacts", `{"email":"${email}","naem":"Sam"}`),
+      );
+
+      expect(status).toBe(400);
+    }),
+  );
+
+  it.effect("answers 400 to a query parameter the contract does not declare", () =>
+    Effect.gen(function* () {
+      const { respond } = yield* api();
+
+      expect((yield* respond(get("/contacts?limit=5&lmit=7"))).status).toBe(400);
+    }),
+  );
+});
+
 describe("lists", () => {
   it.effect("creates, gets, lists, renames and removes a list", () =>
     Effect.gen(function* () {
