@@ -87,13 +87,13 @@ Do not keep a plain `.env` in the repository root. Alchemy's test harness reads 
 | `EMAILER_DAILY_SEND_CEILING` | no       | Positive integer cap on the SES account's sends over the last 24 hours; any other value fails the deploy. SES counts the whole account, so every stage and any other sender on it draw from the same cap.                             |
 | `EMAILER_ALERT_EMAIL`        | no       | Alarm notifications. SNS sends one confirmation per stage; follow the `SubscribeURL` before expecting mail.                                                                                                                           |
 | `EMAILER_API_URL`            | CLI      | API Function URL from the `apiUrl` stack output.                                                                                                                                                                                      |
-| `AWS_PROFILE`                | deploy   | AWS CLI/SSO profile. Leave unset if you export credentials into the environment.                                                                                                                                                      |
+| `ALCHEMY_PROFILE`            | deploy   | Alchemy profile from [One-time setup](#one-time-setup). AWS credentials exported into the environment take precedence over its AWS entry.                                                                                             |
 
 Do not set `EMAILER_UNSUBSCRIBE_SECRET` or `EMAILER_PREVIEW_SECRET`. Alchemy mints both, binds them into the functions, and **rotates them when the stage is destroyed**, which invalidates every unsubscribe link already sent and every preview link.
 
 ## One-time setup
 
-**Once per machine.** Alchemy profiles are not AWS CLI profiles:
+**Once per machine.** Alchemy profiles are not AWS CLI profiles. Put the profile's name in your env file as `ALCHEMY_PROFILE=emailer`, so the commands that take `--env-file` pick it up:
 
 ```sh
 pnpm exec alchemy profile create emailer
@@ -138,10 +138,10 @@ Publish MX, SPF and DMARC **before** the first deploy, so SES never finds the MA
 ### Deploy and verify
 
 ```sh
-pnpm exec alchemy deploy --config stacks/sending-identity.ts --stage shared --env-file .env.prod --profile emailer --yes --no-input
+pnpm exec alchemy deploy --config stacks/sending-identity.ts --stage shared --env-file .env.prod --yes --no-input
 ```
 
-In `cloudflare` mode, the stack stops at startup without Cloudflare credentials. Renew an expired OAuth login with `pnpm exec alchemy profile refresh --profile emailer --provider Cloudflare`. A `CLOUDFLARE_API_TOKEN` in your shell that belongs to another Cloudflare account overrides the profile: run the deploy as `env -u CLOUDFLARE_API_TOKEN pnpm exec alchemy deploy …`.
+In `cloudflare` mode, the stack stops at startup without Cloudflare credentials. Renew an expired OAuth login with `pnpm exec alchemy profile refresh --env-file .env.prod --provider Cloudflare`. A `CLOUDFLARE_API_TOKEN` in your shell that belongs to another Cloudflare account overrides the profile: run the deploy as `env -u CLOUDFLARE_API_TOKEN pnpm exec alchemy deploy …`.
 
 1. **Manual DNS only:** publish the three `CNAME`s from the stack output `dkimRecords` (`name` → `value`). Copy their target: the zone differs by Region and by identity.
 2. Wait for `DkimStatus=SUCCESS` and `MailFromDomainStatus=SUCCESS`, usually minutes and at most 72 hours.
@@ -170,8 +170,8 @@ In `cloudflare` mode, the stack stops at startup without Cloudflare credentials.
 The identity stack must already be deployed. Pick a durable `--stage` (for example `prod`). Omitting it falls back to `live_$USER`.
 
 ```sh
-pnpm exec alchemy plan   --config alchemy.run.ts --stage prod --env-file .env.prod --profile emailer
-pnpm exec alchemy deploy --config alchemy.run.ts --stage prod --env-file .env.prod --profile emailer --yes --no-input
+pnpm exec alchemy plan   --config alchemy.run.ts --stage prod --env-file .env.prod
+pnpm exec alchemy deploy --config alchemy.run.ts --stage prod --env-file .env.prod --yes --no-input
 ```
 
 Do not pass `--detailed`: it prints bound secrets, including `EMAILER_API_TOKEN` and the signing keys. Treat a secret you have printed as exposed and replace it.
@@ -187,7 +187,7 @@ The three Function URLs are public (`authType: NONE`): the API authorizes with t
 Outputs: `apiUrl`, `unsubscribeUrl`, `previewUrl`, `alertsTopicArn`. Put `apiUrl` in `EMAILER_API_URL`.
 
 ```sh
-pnpm exec alchemy destroy --config alchemy.run.ts --stage prod --env-file .env.prod --profile emailer --yes --no-input
+pnpm exec alchemy destroy --config alchemy.run.ts --stage prod --env-file .env.prod --yes --no-input
 ```
 
 Destroying a stage deletes its resources and rotates the unsubscribe and preview keys, so every unsubscribe link already sent stops working. The sending identity and Alchemy bootstrap/state buckets stay.

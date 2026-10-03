@@ -14,7 +14,7 @@ We're using Alchemy (alchemy.run) and Effect (effect.website).
 - If you work with worktrees, you own that tree, and you must handle merging back as well as worktree cleanup!
 - Document key decisions and findings as ADRs (Architecture Decision Records) in an `.adr` folder (which is to be committed)
 - Test deployments are absolutely wanted - on your own ephemeral test stage (see Test stages)
-- The repository is public: never put details specific to the operator or their company (names, brands, vendors, domains, addresses, account or infrastructure identifiers) into code, tests, fixtures or docs - use neutral placeholders such as `example.com`
+- The repository is public: never put details specific to the operator or their company (names, brands, vendors, domains, addresses, account or infrastructure identifiers) into code, tests, fixtures or docs - use neutral placeholders such as `example.com`. A checkout's private names (AWS CLI profile, zones, test inboxes) live in the git-ignored `AGENTS.local.md`: read it when present
 - Deploy output prints the AWS account ID: keep deploy logs out of commits, docs and PR bodies
 
 # Before pushing
