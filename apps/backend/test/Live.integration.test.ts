@@ -20,6 +20,7 @@ import { variantsSuite } from "../src/campaigns/Variants.live.ts";
 import { subscriptionsSuite } from "../src/consent/Subscriptions.live.ts";
 import { unsubscribeSuite } from "../src/consent/Unsubscribe.live.ts";
 import { feedbackSuite } from "../src/feedback/Feedback.live.ts";
+import * as TestStage from "../../../tools/stages/TestStage.ts";
 import { awsClient, Deployment } from "./IntegrationSupport.ts";
 
 import type { LiveTest } from "./IntegrationSupport.ts";
@@ -30,12 +31,12 @@ if (existsSync(".env")) {
   throw new Error("Move ./.env to .env.prod before a live run: the test harness would read it.");
 }
 
-const stage = Test.defaultStage();
+// A fresh stage per run, so parallel runs never share one (ADR-0031). Its name goes straight to
+// stderr, which Vitest's agent reporter keeps for passing runs too, so a killed run can still be
+// destroyed with `pnpm stages down`.
+const stage = Effect.runSync(TestStage.make);
 
-// `afterAll` destroys whatever stage the run deployed.
-if (stage === "prod") {
-  throw new Error("The live suite deploys and destroys its stage; it never runs against prod.");
-}
+process.stderr.write(`Live suite stage: ${stage}\n`);
 
 /** Deploying and destroying a whole stage, with its function bundles, takes minutes. */
 const stageTimeout = 30 * 60_000;

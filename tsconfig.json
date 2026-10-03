@@ -5,7 +5,8 @@
     "alchemy.run.ts",
     "apps/**/*.ts",
     "packages/**/*.ts",
-    "stacks/**/*.ts"
+    "stacks/**/*.ts",
+    "tools/stages/**/*.ts"
   ],
-  "exclude": ["**/node_modules", "**/dist", "**/coverage", "tools"]
+  "exclude": ["**/node_modules", "**/dist", "**/coverage", "tools/oxlint"]
 }

@@ -11,5 +11,18 @@ We're using Alchemy (alchemy.run) and Effect (effect.website).
 - Evaluate your work by running automated tests and by testing manually
 - If you work with worktrees, you own that tree, and you must handle merging back as well as worktree cleanup!
 - Document key decisions and findings as ADRs (Architecture Decision Records) in an `.adr` folder (which is to be committed)
-- Test deployments are absolutely wanted - use `--stage test` with Alchemy => but keep those deployments ephemeral
+- Test deployments are absolutely wanted - on your own ephemeral test stage (see Test stages)
 - The repository is public: never put details specific to the operator or their company (names, brands, vendors, domains, addresses, account or infrastructure identifiers) into code, tests, fixtures or docs - use neutral placeholders such as `example.com`
+
+# Test stages
+
+Runtime, end-to-end and manual checks run on a real stage of your own; unit tests and `pnpm check` stay local ([ADR-0031](.adr/0031-own-test-stage-per-worker.md)).
+
+- **Names:** `test-<UTC yyMMddHHmm>-<4 base36>`, made by the tools below. Never use a fixed name (`test`, `test_<user>`): parallel workers would deploy over each other.
+- **Setup:** `.env.test` holds the deploy keys; export CLI credentials and `AWS_REGION` as the README's "Develop and test" shows.
+- **Create:** `pnpm stages up` deploys a fresh stage and prints its name; `pnpm stages up <stage>` redeploys yours after a change (forced, so no function keeps an old bundle).
+- **Use:** take `apiUrl` from the deploy output and run the CLI with the test keys only, never through `pnpm emailer` (it loads `.env.prod`): `EMAILER_API_URL=<apiUrl> node --env-file=.env.test apps/cli/src/main.ts <command>`. Send only to SES mailbox-simulator addresses.
+- **Live suite:** `pnpm test:integration` deploys a fresh stage of its own, logs its name and destroys it.
+- **Tear down:** `pnpm stages down <stage>` before you report, then `pnpm stages list` must not show it. A killed live run leaves its stage; destroy it the same way.
+- **Sweep:** `pnpm stages sweep` destroys only test stages older than 4 hours. Never destroy another worker's stage by hand, and leave stages in other formats alone. Work needing a stage beyond 4 hours takes a fresh one.
+- **Access:** public, like prod. The Function URLs answer anyone, the API needs the token from `.env.test`, and the unsubscribe and preview pages need links signed by that stage. Anyone holding `.env.test` (the operator and their agents) may open a test stage; never publish its API token or signed links.

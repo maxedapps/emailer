@@ -6,7 +6,7 @@ export default defineConfig({
       {
         test: {
           name: "unit",
-          include: ["apps/**/*.test.ts", "packages/**/*.test.ts"],
+          include: ["apps/**/*.test.ts", "packages/**/*.test.ts", "tools/stages/**/*.test.ts"],
           exclude: ["**/node_modules/**", "**/*.integration.test.ts"],
           testTimeout: 30_000,
         },

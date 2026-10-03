@@ -550,7 +550,7 @@ The account suppression list survives `alchemy destroy`. A test run can leave `s
 
 `pnpm check` checks formatting, runs lint (including unused-suppression reporting), knip (unused files, exports and dependencies), typecheck, the unit tests and an import probe.
 
-The live integration suite deploys its own stage, runs against it, and destroys it. Automated sends go only to SES mailbox-simulator addresses. One case temporarily disables the stage's dispatcher event-source mapping, so the suite refuses to run as `prod`.
+The live integration suite deploys a fresh test stage, runs against it, and destroys it. Automated sends go only to SES mailbox-simulator addresses.
 
 1. Fill `.env.test` with the deploy keys `.env.prod` holds (API token, sender identity, From address, postal address, Region). Nothing is copied out of a deployment.
 2. Export CLI credentials and the Region, because the test bodies call AWS through the SDK's default chain, which cannot read an SSO cache:
@@ -560,13 +560,19 @@ The live integration suite deploys its own stage, runs against it, and destroys 
    export AWS_REGION=<the Region in .env.test>
    ```
 
-3. Run `pnpm test:integration`. It loads `.env.test` and deploys the stage `test_<user>`; set `ALCHEMY_TEST_STAGE` to pick another. Add `-t "<suite name>"` to run one suite.
+3. Run `pnpm test:integration`. It loads `.env.test`, deploys a stage named `test-<UTC yyMMddHHmm>-<4 base36>` and logs the name. Add `-t "<suite name>"` to run one suite.
 
-A killed run leaves its stage deployed. Destroy it by hand:
+`pnpm stages` manages test stages with the same keys and credentials ([ADR-0031](.adr/0031-own-test-stage-per-worker.md)):
 
 ```sh
-pnpm exec alchemy destroy --config alchemy.run.ts --stage <stage> --env-file .env.test --yes --no-input
+pnpm stages up            # deploy a fresh test stage and print its name
+pnpm stages up <stage>    # redeploy it after a change
+pnpm stages list          # every test stage with its age
+pnpm stages down <stage>  # destroy one, e.g. the stage a killed live run left
+pnpm stages sweep         # destroy every test stage older than 4 hours
 ```
+
+The sweep and `down` act only on names in the test stage format, never on `prod` or the identity stack.
 
 ## License and credits
 
