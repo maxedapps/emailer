@@ -38,6 +38,8 @@ The live suite is the only slow suite. Its groups are Vitest tags (`apps/backend
 
 A new live suite adds its group to `LiveGroups.ts` and its suite to the live file. A module that only some groups exercise gets a narrow rule here and in `LiveReach.ts`; when unsure, leave it reaching all.
 
+**Not yet run live:** the gate landed without an AWS login, so no tagged group has run on a stage yet. The first gate after the next `aws sso login` that reaches the live suite is its first real run: check that only the selected groups run and that the stage is destroyed.
+
 # Before pushing
 
 Run the leak check against the machine-local pattern file `P=~/.config/emailer/leak-pattern.txt` (never print it); always use `-i`, since the pattern is lowercase:
