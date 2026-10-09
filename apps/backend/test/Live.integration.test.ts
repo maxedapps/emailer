@@ -1,7 +1,8 @@
 /**
  * The live suite: deploys `alchemy.run.ts` to its own stage, runs every live suite against it, and
  * destroys the stage. Alchemy's harness cannot share one deployment between test files, so this is
- * the one file, and each suite is a module it registers; select one with `-t`.
+ * the one file, and each suite is a module it registers under its group's tag: select groups with
+ * `--tags-filter`, single tests with `-t` (ADR-0033).
  */
 // A synchronous guard that must run before any test is collected.
 import { existsSync } from "node:fs";
@@ -9,6 +10,7 @@ import { existsSync } from "node:fs";
 import * as AWS from "alchemy/AWS";
 import * as Test from "alchemy/Test/Vitest";
 import { Effect } from "effect";
+import { describe } from "vitest";
 
 import Stack from "../../../alchemy.run.ts";
 import { apiSuite } from "../src/api/Api.live.ts";
@@ -20,8 +22,10 @@ import { unsubscribeSuite } from "../src/consent/Unsubscribe.live.ts";
 import { feedbackSuite } from "../src/feedback/Feedback.live.ts";
 import * as TestStage from "../../../tools/stages/TestStage.ts";
 import { awsClient, Deployment } from "./IntegrationSupport.ts";
+import { liveGroups } from "./LiveGroups.ts";
 
 import type { LiveTest } from "./IntegrationSupport.ts";
+import type { LiveGroup } from "./LiveGroups.ts";
 
 // Alchemy's harness reads `./.env` for every key the environment lacks, so a prod `.env` would leak
 // into the test stage: its alert address, its API token.
@@ -72,16 +76,18 @@ const live: LiveTest = (name, body, timeout) =>
     timeout === undefined ? undefined : { timeout },
   );
 
-apiSuite(live);
+const suites = {
+  api: apiSuite,
+  cancellation: cancellationSuite,
+  drafting: draftingSuite,
+  variants: variantsSuite,
+  unsubscribe: unsubscribeSuite,
+  subscriptions: subscriptionsSuite,
+  feedback: feedbackSuite,
+} satisfies Record<LiveGroup, (test: LiveTest) => void>;
 
-cancellationSuite(live);
-
-draftingSuite(live);
-
-variantsSuite(live);
-
-unsubscribeSuite(live);
-
-subscriptionsSuite(live);
-
-feedbackSuite(live);
+for (const group of liveGroups) {
+  describe(group, { tags: group }, () => {
+    suites[group](live);
+  });
+}

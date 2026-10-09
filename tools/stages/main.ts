@@ -3,10 +3,10 @@
  * (ADR-0031). Every command runs the Alchemy CLI on `alchemy.run.ts` with `.env.test`.
  */
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
-import { Console, Data, DateTime, Duration, Effect, Option, Stream } from "effect";
+import { Console, DateTime, Duration, Effect, Option } from "effect";
 import { Argument, Command } from "effect/cli";
-import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
+import * as Process from "../Process.ts";
 import * as TestStage from "./TestStage.ts";
 
 const stack = "Emailer";
@@ -14,50 +14,19 @@ const stack = "Emailer";
 /** A deploy or destroy takes minutes; a stalled one fails the command and stops a sweep. */
 const commandTimeout = Duration.minutes(30);
 
-class AlchemyFailed extends Data.TaggedError("AlchemyFailed")<{ readonly message: string }> {}
+const alchemyArgs = (args: ReadonlyArray<string>) => [
+  ...args,
+  "--config",
+  "alchemy.run.ts",
+  "--env-file",
+  ".env.test",
+];
 
-const alchemy = (args: ReadonlyArray<string>, options: ChildProcess.CommandOptions) =>
-  ChildProcess.make(
-    "alchemy",
-    [...args, "--config", "alchemy.run.ts", "--env-file", ".env.test"],
-    options,
-  );
+const run = (args: ReadonlyArray<string>) =>
+  Process.run("alchemy", alchemyArgs(args)).pipe(Effect.timeout(commandTimeout));
 
-const succeeded = (args: ReadonlyArray<string>, exitCode: number) =>
-  exitCode === 0
-    ? Effect.void
-    : Effect.fail(new AlchemyFailed({ message: `alchemy ${args[0]} exited with ${exitCode}` }));
-
-/** Runs an Alchemy command in the terminal, so its progress shows as it goes. */
-const run = Effect.fn(function* (args: ReadonlyArray<string>) {
-  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-
-  const exitCode = yield* spawner.exitCode(
-    alchemy(args, { stdin: "inherit", stdout: "inherit", stderr: "inherit" }),
-  );
-
-  yield* succeeded(args, exitCode);
-}, Effect.timeout(commandTimeout));
-
-/** Runs an Alchemy command for its output; its diagnostics still reach the terminal. */
-const read = Effect.fn(
-  function* (args: ReadonlyArray<string>) {
-    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-
-    const handle = yield* spawner.spawn(alchemy(args, { stderr: "inherit" }));
-
-    const [output, exitCode] = yield* Effect.all(
-      [Stream.mkString(Stream.decodeText(handle.stdout)), handle.exitCode],
-      { concurrency: "unbounded" },
-    );
-
-    yield* succeeded(args, exitCode);
-
-    return output;
-  },
-  Effect.scoped,
-  Effect.timeout(commandTimeout),
-);
+const read = (args: ReadonlyArray<string>) =>
+  Process.read("alchemy", alchemyArgs(args)).pipe(Effect.timeout(commandTimeout));
 
 const testStages = Effect.map(read(["state", "list", stack]), (listing) =>
   TestStage.testStages(stack, listing),

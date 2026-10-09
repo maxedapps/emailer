@@ -6,7 +6,7 @@
     "apps/**/*.ts",
     "packages/**/*.ts",
     "stacks/**/*.ts",
-    "tools/stages/**/*.ts"
+    "tools/**/*.ts"
   ],
   "exclude": ["**/node_modules", "**/dist", "**/coverage", "tools/oxlint"]
 }

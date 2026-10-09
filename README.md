@@ -572,7 +572,9 @@ The live integration suite deploys a fresh test stage, runs against it, and dest
    export AWS_REGION=<the Region in .env.test>
    ```
 
-3. Run `pnpm test:integration`. It loads `.env.test`, deploys a stage named `test-<UTC yyMMddHHmm>-<4 base36>` and logs the name. Add `-t "<suite name>"` to run one suite.
+3. Run `pnpm test:integration`. It loads `.env.test`, deploys a stage named `test-<UTC yyMMddHHmm>-<4 base36>` and logs the name. Add `--tags-filter=<group>` to run one group (`api`, `cancellation`, `drafting`, `variants`, `unsubscribe`, `subscriptions`, `feedback`), or `-t "<test name>"` for single tests.
+
+Before landing, run `pnpm gate` ([ADR-0033](.adr/0033-landing-gate-scoped-to-the-change.md)): it runs `pnpm check`, then the live suite for only the groups the change against `origin/main` reaches. A docs, CLI or tooling change deploys no stage.
 
 `pnpm stages` manages test stages with the same keys and credentials ([ADR-0031](.adr/0031-own-test-stage-per-worker.md)):
 

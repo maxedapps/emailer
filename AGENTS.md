@@ -17,6 +17,27 @@ We're using Alchemy (alchemy.run) and Effect (effect.website).
 - The repository is public: never put details specific to the operator or their company (names, brands, vendors, domains, addresses, account or infrastructure identifiers) into code, tests, fixtures or docs - use neutral placeholders such as `example.com`. A checkout's private names (AWS CLI profile, zones, test inboxes) live in the git-ignored `AGENTS.local.md`: read it when present
 - Deploy output prints the AWS account ID: keep deploy logs out of commits, docs and PR bodies
 
+# Landing gate
+
+Run `pnpm gate` once on the merged result before landing ([ADR-0033](.adr/0033-landing-gate-scoped-to-the-change.md)); fetch `origin` first. It runs `pnpm check` (fast, always whole), lists the paths changed against `git merge-base origin/main HEAD` (committed, uncommitted, untracked), prints each path's reach, and runs the live suite (`pnpm test:integration`, one fresh stage) for only the groups reached, or not at all. Never pick a bigger run by hand.
+
+The live suite is the only slow suite. Its groups are Vitest tags (`apps/backend/test/LiveGroups.ts`): `api`, `cancellation`, `drafting`, `variants`, `unsubscribe`, `subscriptions`, `feedback`. The map is `tools/gate/LiveReach.ts`; first match wins (`src/` is `apps/backend/src/`):
+
+| Paths                                                                                                                                                                   | Reach                             |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
+| `**/*.md`, `.adr/**`, `LICENSE`                                                                                                                                         | none                              |
+| `alchemy.run.ts`, `apps/backend/test/**`, `tools/stages/TestStage.ts`, `vitest.config.ts`, `tsconfig*.json`, `**/package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml` | all                               |
+| unit tests (`**/*.test.ts`), `src/storage/Testing.ts`, `apps/cli/**`, `stacks/**`, `src/identity/SendingDns.ts`, `tools/**`, lint, format and knip config               | none                              |
+| each `src/**/*.live.ts`                                                                                                                                                 | its own group                     |
+| `src/campaigns/TestSends.ts`                                                                                                                                            | drafting                          |
+| `src/campaigns/Previews.ts`, `PreviewPage.ts`, `Copies.ts`                                                                                                              | drafting, variants                |
+| `src/consent/UnsubscribePage.ts`                                                                                                                                        | unsubscribe                       |
+| `src/consent/Subscriptions.ts`                                                                                                                                          | subscriptions                     |
+| `src/feedback/Feedback.ts`, `FeedbackClassification.ts`                                                                                                                 | api, drafting, variants, feedback |
+| anything else (other backend modules, `packages/api`, new paths)                                                                                                        | all                               |
+
+A new live suite adds its group to `LiveGroups.ts` and its suite to the live file. A module that only some groups exercise gets a narrow rule here and in `LiveReach.ts`; when unsure, leave it reaching all.
+
 # Before pushing
 
 Run the leak check against the machine-local pattern file `P=~/.config/emailer/leak-pattern.txt` (never print it); always use `-i`, since the pattern is lowercase:

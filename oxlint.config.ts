@@ -42,6 +42,8 @@ export default defineConfig({
         ],
       },
     ],
+    // The live suite names each group's `describe` from its list of groups (ADR-0033).
+    "vitest/valid-title": ["error", { ignoreTypeOfDescribeName: true }],
     "typescript/no-floating-promises": "error",
     "typescript/no-misused-promises": "error",
     "typescript/no-explicit-any": "error",
