@@ -8,6 +8,7 @@
     "emailer": "node --env-file-if-exists=.env.prod apps/cli/src/main.ts",
     "stages": "node tools/stages/main.ts",
     "gate": "node tools/gate/main.ts",
+    "leak-check": "node tools/leak-check/main.ts",
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",
     "lint": "oxlint .",
