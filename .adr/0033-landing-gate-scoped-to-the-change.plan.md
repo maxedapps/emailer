@@ -41,8 +41,8 @@
 
 ### T4 — `pnpm gate` (`tools/gate/main.ts`)
 
-- Effect CLI like `pnpm stages`: `pnpm check`; then `changes` (`tools/gate/Changes.ts`): `git merge-base origin/main HEAD`, `git diff --name-only --no-renames <base>` plus `git ls-files --others --exclude-standard`; prints base, `path → reach` lines and the groups; runs `pnpm test:integration` with `--tags-filter` for a subset, without one for all, or skips it.
-- Tests (`Changes.test.ts`, a real Git fixture): committed, staged, unstaged and untracked paths and both rename sides are listed, ignored files are not; the integration branch's own later commits are not; a missing integration branch fails instead of yielding an empty diff.
+- Effect CLI like `pnpm stages`: `pnpm check`; then `changes` (`tools/gate/Changes.ts`): `git merge-base origin/main HEAD`, `git diff --name-only --no-renames -z <base>` plus `git ls-files --others --exclude-standard -z` (NUL-separated, so Git never quotes a non-ASCII path), each bounded by a 1-minute timeout; prints base, `path → reach` lines and the groups; runs `pnpm test:integration` with `--tags-filter` for a subset, without one for all, or skips it.
+- Tests (`Changes.test.ts`, a real Git fixture): committed, staged, unstaged and untracked paths and both rename sides are listed, a non-ASCII docs path verbatim, ignored files are not; the integration branch's own later commits are not; a missing integration branch fails instead of yielding an empty diff.
 - Timeouts: 15 minutes for the check, 2 hours for the live run (deploy and destroy of up to 30 minutes each, the slowest group between).
 - Wiring: `package.json` script `gate`; `tsconfig.json` and the unit project include `tools/**` (not the vendored oxlint plugins).
 

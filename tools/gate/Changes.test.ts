@@ -42,6 +42,7 @@ describe("changes", () => {
       yield* git("mv", "renamed.ts", "moved.ts");
       yield* write("edited.ts", "export const file = 2;\n");
       yield* write("untracked.ts", "export const file = 3;\n");
+      yield* write("überblick.md", "# Überblick\n");
       yield* write("ignored.log", "noise\n");
 
       const result = yield* changes(repo, "main");
@@ -54,6 +55,7 @@ describe("changes", () => {
         "renamed.ts",
         "staged.ts",
         "untracked.ts",
+        "überblick.md",
       ]);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
