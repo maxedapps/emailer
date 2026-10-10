@@ -44,10 +44,10 @@
 
 ### T4 — Dated skips (`tools/oxlint/emailer/`, `oxlint.config.ts`, `tsconfig.json`)
 
-- Plugin `emailer` with rule `flaky-skips`: report every `.skip` member call and every `skip` property in an object passed to a call; on `.skipIf` member calls, require the condition `vi.getRealSystemTime() < Date.parse("<YYYY-MM-DD>")` and `flaky: task-<N> until <same date>` in a comment on the call's first line or the line above, the date at most 14 days after today (UTC).
+- Plugin `emailer` with rule `flaky-skips`: report every `.skip` and `.runIf` member call and every `skip` property in an object passed to a call; on `.skipIf` member calls, require the condition `vi.getRealSystemTime() < Date.parse("<YYYY-MM-DD>")` and `flaky: task-<N> until <same date>` in a comment on the call's first line or the line above, the date at most 14 days after today (UTC).
 - `oxlint.config.ts`: load the plugin; enable the rule for `**/*.test.ts` and `**/*.live.ts` in `overrides`.
 - `tsconfig.json`: exclude only `tools/oxlint/anti-slop`, so the new plugin is typechecked.
-- Tests (`flaky-skips.test.ts`, oxlint's `RuleTester` from `oxlint/plugins-dev`): the canonical form dated today + 14 days (the boundary) and one dated yesterday pass; today + 15 days, an unmarked `skipIf`, `skipIf(true)` with a marker, a condition date differing from the marker, `it.skip`, `describe.skip`, `it.effect.skip`, `ctx.skip()`, `{ skip: true }` and a malformed marker fail.
+- Tests (`flaky-skips.test.ts`, oxlint's `RuleTester` from `oxlint/plugins-dev`): the canonical form dated today + 14 days (the boundary) and one dated yesterday pass; today + 15 days, an unmarked `skipIf`, `skipIf(true)` with a marker, a condition date differing from the marker, `it.skip`, `describe.skip`, `it.effect.skip`, `ctx.skip()`, `it.runIf`, `describe.runIf`, `it.effect.runIf`, `{ skip: true }` and a malformed marker fail.
 - Manual: an unannotated `.skip` in a real test file fails `pnpm lint`; a canonical skip dated yesterday runs and one dated tomorrow is skipped, also under `vi.useFakeTimers()` set past the date. Removed before commit.
 
 ### T5 — AGENTS.md, README

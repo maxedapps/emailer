@@ -42,7 +42,7 @@ A new live suite adds its group to `LiveGroups.ts` and its suite to the live fil
 
 # Flaky tests
 
-The shared `awesome-tests` skill holds the rules; emailer's specifics ([ADR-0035](.adr/0035-flaky-tests-rerun-ledger-and-dated-skips.md)):
+The shared [`awesome-tests`](~/.agents/skills/awesome-tests/SKILL.md) skill holds the rules; emailer's specifics ([ADR-0035](.adr/0035-flaky-tests-rerun-ledger-and-dated-skips.md)):
 
 - Vitest runs at most 4 workers. `pnpm test:integration` and the deploys and destroys of `pnpm stages` wait for headroom through `agents heavy` themselves.
 - A red `pnpm gate` reruns each failed test alone once (a live one on its own fresh stage), prints `passes alone`, `fails alone` or `did not run` for each, appends a line to `flakes.md` for each that passes alone, and stays red. Replace the line's cause `?` and commit it with the fix or the skip.

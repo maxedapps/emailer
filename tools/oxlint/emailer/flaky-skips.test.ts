@@ -82,6 +82,21 @@ new RuleTester({ languageOptions: { parserOptions: { lang: "ts" } } }).run(
         errors: [{ messageId: "permanent" }],
       },
       {
+        name: "it.runIf",
+        code: `it.runIf(false)("sends", () => {});`,
+        errors: [{ messageId: "permanent" }],
+      },
+      {
+        name: "describe.runIf",
+        code: `describe.runIf(false)("sending", () => {});`,
+        errors: [{ messageId: "permanent" }],
+      },
+      {
+        name: "it.effect.runIf",
+        code: `it.effect.runIf(false)("sends", () => {});`,
+        errors: [{ messageId: "permanent" }],
+      },
+      {
         name: "the skip option",
         code: `it("sends", { skip: true }, () => {});`,
         errors: [{ messageId: "permanent" }],

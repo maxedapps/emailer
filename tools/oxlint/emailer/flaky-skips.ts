@@ -90,7 +90,8 @@ export const flakySkipsRule = defineRule({
 
         const property = calledProperty(node);
 
-        if (property === "skip") {
+        // `runIf` skips on the opposite condition, so it would skip without a date as well.
+        if (property === "skip" || property === "runIf") {
           return context.report({ node, messageId: "permanent" });
         }
 
