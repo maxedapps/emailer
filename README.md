@@ -588,6 +588,8 @@ pnpm stages sweep         # destroy every test stage older than 4 hours
 
 The sweep and `down` act only on names in the test stage format, never on `prod` or the identity stack.
 
+`pnpm test:integration` and the deploys and destroys of `pnpm stages` wait until the machine has headroom, through the `agents heavy` command they expect on the `PATH` ([ADR-0035](.adr/0035-flaky-tests-rerun-ledger-and-dated-skips.md)). Vitest runs at most 4 workers.
+
 ## License and credits
 
 [MIT](LICENSE).

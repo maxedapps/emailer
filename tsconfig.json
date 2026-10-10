@@ -8,5 +8,5 @@
     "stacks/**/*.ts",
     "tools/**/*.ts"
   ],
-  "exclude": ["**/node_modules", "**/dist", "**/coverage", "tools/oxlint"]
+  "exclude": ["**/node_modules", "**/dist", "**/coverage", "tools/oxlint/anti-slop"]
 }

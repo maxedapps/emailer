@@ -15,6 +15,7 @@
     ".progress/**",
     "tools/oxlint/anti-slop/**",
     ".adr/**",
+    "flakes.md",
     "pnpm-lock.yaml"
   ]
 }

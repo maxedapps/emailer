@@ -16,8 +16,8 @@ export type Reach = "all" | ReadonlyArray<LiveGroup>;
 const backend = (file: string) => `apps/backend/src/${file}`;
 
 const rules: ReadonlyArray<readonly [Reach, ReadonlyArray<string>]> = [
-  // Docs, wherever they sit.
-  [[], ["**/*.md", ".adr/**", "LICENSE"]],
+  // Docs, wherever they sit, and Git's own settings.
+  [[], ["**/*.md", ".adr/**", "LICENSE", ".gitattributes"]],
   // What every run deploys, loads or installs.
   [
     "all",

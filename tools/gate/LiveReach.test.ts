@@ -9,6 +9,8 @@ describe("reach", () => {
     "AGENTS.md",
     ".adr/0033-landing-gate-scoped-to-the-change.md",
     "LICENSE",
+    "flakes.md",
+    ".gitattributes",
     "apps/backend/test/README.md",
     "apps/backend/src/sending/Mailer.test.ts",
     "packages/api/src/Schemas.test.ts",

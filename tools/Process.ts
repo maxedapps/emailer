@@ -31,12 +31,27 @@ const succeeded = (
         new CommandFailed({ message: `${[command, ...args].join(" ")} exited with ${exitCode}` }),
       );
 
+export interface RunOptions {
+  /** Variables added to the inherited environment. */
+  readonly env?: Readonly<Record<string, string>> | undefined;
+}
+
 /** Runs a command in the terminal, so its progress shows as it goes. */
-export const run = Effect.fn(function* (command: string, args: ReadonlyArray<string>) {
+export const run = Effect.fn(function* (
+  command: string,
+  args: ReadonlyArray<string>,
+  { env }: RunOptions = {},
+) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
   const exitCode = yield* spawner.exitCode(
-    ChildProcess.make(command, args, { stdin: "inherit", stdout: "inherit", stderr: "inherit" }),
+    ChildProcess.make(command, args, {
+      env,
+      extendEnv: true,
+      stdin: "inherit",
+      stdout: "inherit",
+      stderr: "inherit",
+    }),
   );
 
   yield* succeeded(command, args, exitCode);

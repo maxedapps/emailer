@@ -24,6 +24,7 @@ export default defineConfig({
     // Vendored from https://github.com/dmmulroy/anti-slop (MIT, Dillon Mulroy).
     { name: "anti-slop", specifier: "./tools/oxlint/anti-slop/index.ts" },
     { name: "anti-slop-effect", specifier: "./tools/oxlint/anti-slop/effect/index.ts" },
+    { name: "emailer", specifier: "./tools/oxlint/emailer/index.ts" },
   ],
   rules: {
     // Effect 4.0 marks its HTTP, HTTP API, CLI, persistence and process modules unstable; the API,
@@ -77,4 +78,11 @@ export default defineConfig({
     "anti-slop-effect/no-service-constructor-imports": "error",
     "anti-slop-effect/prefer-effect-match": "error",
   },
+  overrides: [
+    {
+      // A flaky test is skipped only until a date, then runs again (ADR-0035).
+      files: ["**/*.test.ts", "**/*.live.ts"],
+      rules: { "emailer/flaky-skips": "error" },
+    },
+  ],
 });

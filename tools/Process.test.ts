@@ -32,4 +32,12 @@ describe("run", () => {
       expect(error.message).toBe("node -e process.exit(2) exited with 2");
     }).pipe(Effect.provide(NodeServices.layer)),
   );
+
+  it.effect("adds the variables given to the inherited environment", () =>
+    Process.run(
+      "node",
+      ["-e", "process.exit(process.env.PROBE === 'set' && process.env.PATH ? 0 : 4)"],
+      { env: { PROBE: "set" } },
+    ).pipe(Effect.provide(NodeServices.layer)),
+  );
 });

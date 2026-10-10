@@ -25,7 +25,7 @@ The live suite is the only slow suite. Its groups are Vitest tags (`apps/backend
 
 | Paths                                                                                                                                                                   | Reach                             |
 | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
-| `**/*.md`, `.adr/**`, `LICENSE`                                                                                                                                         | none                              |
+| `**/*.md`, `.adr/**`, `LICENSE`, `.gitattributes`                                                                                                                       | none                              |
 | `alchemy.run.ts`, `apps/backend/test/**`, `tools/stages/TestStage.ts`, `vitest.config.ts`, `tsconfig*.json`, `**/package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml` | all                               |
 | unit tests (`**/*.test.ts`), `src/storage/Testing.ts`, `apps/cli/**`, `stacks/**`, `src/identity/SendingDns.ts`, `tools/**`, lint, format and knip config               | none                              |
 | each `src/**/*.live.ts`                                                                                                                                                 | its own group                     |
@@ -39,6 +39,15 @@ The live suite is the only slow suite. Its groups are Vitest tags (`apps/backend
 A new live suite adds its group to `LiveGroups.ts` and its suite to the live file. A module that only some groups exercise gets a narrow rule here and in `LiveReach.ts`; when unsure, leave it reaching all.
 
 **No subset run live yet:** the gate's own landing ran every group on a stage, since its change reaches all. The first gate whose change reaches only some groups is the first subset run: check that only those groups run and that the stage is destroyed.
+
+# Flaky tests
+
+The shared `awesome-tests` skill holds the rules; emailer's specifics ([ADR-0035](.adr/0035-flaky-tests-rerun-ledger-and-dated-skips.md)):
+
+- Vitest runs at most 4 workers. `pnpm test:integration` and the deploys and destroys of `pnpm stages` wait for headroom through `agents heavy` themselves.
+- A red `pnpm gate` reruns each failed test alone once (a live one on its own fresh stage), prints `passes alone`, `fails alone` or `did not run` for each, appends a line to `flakes.md` for each that passes alone, and stays red. Replace the line's cause `?` and commit it with the fix or the skip.
+- Skip a flaky test only as `it.skipIf(vi.getRealSystemTime() < Date.parse("<until>"))(…) // flaky: task-<N> until <until>`, at most 14 days ahead; it runs again from that day. `emailer/flaky-skips` (`tools/oxlint/emailer/`) fails every other skip. Each skip, and each test with a second ledger line, gets a fix task: `agents plan github.com/maxedapps/emailer --title 'Fix flaky <test>' '<brief>'`.
+- Run the whole live suite (`pnpm test:integration`) now and then on your own judgement, such as after a broad change or when the gate has not reached a group in a while, never on every change. When such runs keep timing out, say so and adapt the run or its timeouts.
 
 # Before pushing
 
