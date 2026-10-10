@@ -38,11 +38,20 @@ The live suite is the only slow suite. Its groups are Vitest tags (`apps/backend
 
 A new live suite adds its group to `LiveGroups.ts` and its suite to the live file. A module that only some groups exercise gets a narrow rule here and in `LiveReach.ts`; when unsure, leave it reaching all.
 
-**Not yet run live:** the gate landed without an AWS login, so no tagged group has run on a stage yet. The first gate after the next `aws sso login` that reaches the live suite is its first real run: check that only the selected groups run and that the stage is destroyed.
+**No subset run live yet:** the gate's own landing ran every group on a stage, since its change reaches all. The first gate whose change reaches only some groups is the first subset run: check that only those groups run and that the stage is destroyed.
 
 # Before pushing
 
 `pnpm leak-check` must pass before every push ([ADR-0034](.adr/0034-leak-check-in-every-landing.md)). It fails when the machine-local pattern file `~/.config/emailer/leak-pattern.txt` is missing or empty, or when its pattern (grep `-E`, case-insensitive) matches a file changed against `origin/main` or a line of the commits `origin/main..HEAD`, messages included. It prints only file names and a line count, never the pattern. `agents land` runs it in the gate, so no landing pushes without it.
+
+The pattern file lives only on the machine: one lowercase alternative a line, mode 600. On a machine without it, rebuild it from the operator's local sources rather than asking them, then check that `git grep -lIiEf ~/.config/emailer/leak-pattern.txt origin/main` prints nothing (a hit is a leak to fix or a term to drop). It holds:
+
+- the operator's and company's names, with spelling variants (`(ü|ue|u)`), and the street and town of the postal address in `.env.prod`;
+- the private domains in `.env.prod` and `AGENTS.local.md`: a company domain also covers its addresses, the SSO start URL and the profiles named after it;
+- the AWS account IDs in `~/.aws/config`, the Cloudflare account IDs in `~/.alchemy/profiles/*/cloudflare.json`, the zone ID in `AGENTS.local.md` and the prod Lambda URL ID in `.env.prod`'s `EMAILER_API_URL`;
+- the vendors the operator uses beside emailer (`agents knowledge` for the project) and the names of the machines it is checked out on.
+
+It leaves out what is public by design: the repository's GitHub owner, the copyright holder in `LICENSE` and public projects the docs name.
 
 Grep a PR body against the same file (`grep -ciIEf`, never print the pattern), and read the diff yourself: the pattern misses some personal details, such as a first name used as a fixture persona.
 

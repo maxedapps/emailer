@@ -32,7 +32,7 @@ export const leaks = Effect.fn(function* (repo: string, integration: string, pat
 
   if (size === 0n) {
     return yield* new PatternMissing({
-      message: `The leak pattern ${pattern} is missing or empty: nothing can be checked or pushed without it`,
+      message: `The leak pattern ${pattern} is missing or empty: rebuild it as AGENTS.md "Before pushing" says; nothing can be checked or pushed without it`,
     });
   }
 

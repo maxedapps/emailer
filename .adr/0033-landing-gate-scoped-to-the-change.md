@@ -4,7 +4,7 @@
 - Date: 2026-10-09
 - Accepted: 2026-10-09, after one plan review with the Codex reviewer (precedence of docs over shared support, exact narrow paths)
 - Authority: The user decided that checks scale with the change, in every project: the fast checks run whole, and a repository's gate runs only the slow tests its change reaches, mapped in its AGENTS.md and selected against the integration branch; where the mapping is unsure, the test runs (no nightly run backs it up).
-- Confirmed: 2026-10-09 by unit tests and a docs-only gate run (no stage); the groups' first live run waits for an AWS login (plan T6)
+- Confirmed: 2026-10-09 by unit tests and a docs-only gate run (no stage); on 2026-10-10 the landing gate ran every group live (plan T6)
 - Plan: [0033-landing-gate-scoped-to-the-change.plan.md](0033-landing-gate-scoped-to-the-change.plan.md)
 
 ## Context

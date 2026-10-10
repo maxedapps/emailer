@@ -1,6 +1,6 @@
 # Plan: A landing gate that runs only the live groups a change reaches
 
-- Status: Done (2026-10-09), live runs deferred: see T6
+- Status: Done (2026-10-09), the one-group live probe deferred: see T6
 - Decision: [ADR-0033](0033-landing-gate-scoped-to-the-change.md)
 
 ## Goal
@@ -57,7 +57,8 @@
 - Probe clone (`~/tmp`), whose `origin/main` is this branch's commit, so only the probe change counts: `pnpm gate` on a docs-only change deploys no stage and exits 0; on a comment in `apps/backend/src/consent/UnsubscribePage.ts` it deploys one stage, runs only the `unsubscribe` tests and destroys the stage; `pnpm stages list` clean.
 - The real `pnpm gate` once on the merged result before landing: this change touches the live file, `vitest.config.ts` and `package.json`, so it runs every group.
 - Done: unit tests, `pnpm check` (936 tests), the docs-only probe (no stage, exit 0), and the unsubscribe probe up to the live run (it selected only `unsubscribe`; a failed live run failed the gate). Tag selection checked with `vitest list --no-staticParse`.
-- Deferred: the deployed one-group probe and the live part of the landing gate. The AWS SSO login had expired, and by the user's rule a login never holds a task up. The landing gate ran `pnpm check` only. AGENTS.md ("Landing gate") flags the first real live run.
+- Done on 2026-10-10, after the AWS SSO login: the landing gate on the merged result, with every group live on its own stage.
+- Deferred: the deployed one-group probe. AGENTS.md ("Landing gate") flags the first subset run.
 
 ## Evidence
 
