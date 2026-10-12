@@ -4,6 +4,7 @@
 - Date: 2026-10-10
 - Authority: The emailer orchestrator decided that `agents land` must never push without the leak check, and that `pnpm gate` stays runnable while the pattern file is missing.
 - Confirmed: 2026-10-10 by unit tests and a gate run on this change
+- Superseded in part: 2026-10-12, task 793. agentmanager dropped `agents land`, its queue and the `agents-land` block. The same command is now the Check in AGENTS.md "Landing", run before every push with no separate turn check; read `agents land` below as that Check.
 
 ## Context
 

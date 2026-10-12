@@ -19,7 +19,7 @@ We're using Alchemy (alchemy.run) and Effect (effect.website).
 
 # Landing gate
 
-Run `pnpm gate` once on the merged result before landing ([ADR-0033](.adr/0033-landing-gate-scoped-to-the-change.md)); fetch `origin` first. It runs `pnpm check` (fast, always whole), lists the paths changed against `git merge-base origin/main HEAD` (committed, uncommitted, untracked), prints each path's reach, and runs the live suite (`pnpm test:integration`, one fresh stage) for only the groups reached, or not at all. Never pick a bigger run by hand. `agents land main` runs the leak check and the gate, then the whole landing turn, as the block at the end of this file declares.
+Run `pnpm gate` once on the merged result before landing ([ADR-0033](.adr/0033-landing-gate-scoped-to-the-change.md)); fetch `origin` first. It runs `pnpm check` (fast, always whole), lists the paths changed against `git merge-base origin/main HEAD` (committed, uncommitted, untracked), prints each path's reach, and runs the live suite (`pnpm test:integration`, one fresh stage) for only the groups reached, or not at all. Never pick a bigger run by hand. The Check under Landing runs it after the leak check.
 
 The live suite is the only slow suite. Its groups are Vitest tags (`apps/backend/test/LiveGroups.ts`): `api`, `cancellation`, `drafting`, `variants`, `unsubscribe`, `subscriptions`, `feedback`. The map is `tools/gate/LiveReach.ts`; first match wins (`src/` is `apps/backend/src/`):
 
@@ -51,7 +51,7 @@ The shared [`awesome-tests`](~/.agents/skills/awesome-tests/SKILL.md) skill hold
 
 # Before pushing
 
-`pnpm leak-check` must pass before every push ([ADR-0034](.adr/0034-leak-check-in-every-landing.md)). It fails when the machine-local pattern file `~/.config/emailer/leak-pattern.txt` is missing or empty, or when its pattern (grep `-E`, case-insensitive) matches a file changed against `origin/main` or a line of the commits `origin/main..HEAD`, messages included. It prints only file names and a line count, never the pattern. `agents land` runs it in the gate, so no landing pushes without it.
+`pnpm leak-check` must pass before every push ([ADR-0034](.adr/0034-leak-check-in-every-landing.md)). It fails when the machine-local pattern file `~/.config/emailer/leak-pattern.txt` is missing or empty, or when its pattern (grep `-E`, case-insensitive) matches a file changed against `origin/main` or a line of the commits `origin/main..HEAD`, messages included. It prints only file names and a line count, never the pattern. The Check runs it before every push.
 
 The pattern file lives only on the machine: one lowercase alternative a line, mode 600. On a machine without it, rebuild it from the operator's local sources rather than asking them, then check that `git grep -lIiEf ~/.config/emailer/leak-pattern.txt origin/main` prints nothing (a hit is a leak to fix or a term to drop). It holds:
 
@@ -81,8 +81,6 @@ Runtime, end-to-end and manual checks run on a real stage of your own; unit test
 - **Sweep:** `pnpm stages sweep` destroys only test stages older than 4 hours. Never destroy another worker's stage by hand, and leave stages in other formats alone. Work needing a stage beyond 4 hours takes a fresh one.
 - **Access:** public, like prod. The Function URLs answer anyone, the API needs the token from `.env.test`, and the unsubscribe and preview pages need links signed by that stage. Anyone holding `.env.test` (the operator and their agents) may open a test stage; never publish its API token or signed links.
 
-`agents land` runs these at the worktree's root (agentmanager ADR 0289):
+## Landing
 
-```agents-land
-gate: pnpm leak-check && pnpm gate
-```
+- Check: `pnpm leak-check && pnpm gate`
