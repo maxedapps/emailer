@@ -4,6 +4,7 @@
 - Date: 2026-10-10
 - Authority: The operator decided, for every project (task 636): cap Vitest at 4 workers and run every heavy script through `agents heavy`; when the gate goes red it reruns each failing test alone once and logs a pass to a flake ledger, and stays red; each skipped test carries its task and a date and expires after 14 days, with its own fix task; whole suites run when agents judge it worth it, on no schedule.
 - Superseded in part: 2026-10-12, task 793. `agents land` no longer exists, so nothing wraps the gate: its heavy scripts' own `agents heavy` calls are what wait for headroom.
+- Superseded in part: 2026-10-12, task 793. Decision 7: a whole live run happens only when the reach map sends a change to all groups or the orchestrator proposes one, each time after the person agrees (scope, estimated cost).
 - Plan: [0035-flaky-tests-rerun-ledger-and-dated-skips.plan.md](0035-flaky-tests-rerun-ledger-and-dated-skips.plan.md)
 
 ## Context
