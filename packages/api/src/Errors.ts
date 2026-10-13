@@ -299,7 +299,7 @@ export class SchedulerUnavailable extends Schema.TaggedError<SchedulerUnavailabl
   }
 }
 
-/** CloudWatch, read for the reputation alarms before anything is sent. */
+/** CloudWatch, read for the account-wide reputation alarms before anything is sent. */
 export class AlarmsUnavailable extends Schema.TaggedError<AlarmsUnavailable>()(
   "AlarmsUnavailable",
   dependencyFailure,

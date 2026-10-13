@@ -236,7 +236,7 @@ class CampaignsGroup extends HttpApiGroup.make("campaigns")
       params: { id: Schemas.EntityId },
       payload: Schemas.TestSendPayload,
       success: Schemas.TestSendResult,
-      // A send checks the account and the reputation alarms before anything goes out.
+      // A send checks the account and its reputation alarms before anything goes out.
       error: [
         ...storage,
         Errors.EmailServiceUnavailable,
@@ -326,7 +326,7 @@ class SubscriptionsGroup extends HttpApiGroup.make("subscriptions")
         Schemas.ConfirmationSent.pipe(HttpApiSchema.status(202)),
         Schemas.AlreadySubscribed,
       ],
-      // A confirmation mail checks the account and the reputation alarms before it goes out.
+      // A confirmation mail checks the account and its reputation alarms before it goes out.
       error: [
         ...storage,
         Errors.Forbidden,

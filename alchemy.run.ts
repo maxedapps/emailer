@@ -12,7 +12,11 @@ import FeedbackFunction, {
   feedbackRouting,
 } from "./apps/backend/src/feedback/Feedback.ts";
 import { feedbackPublishing } from "./apps/backend/src/sending/Mailer.ts";
-import { alertsTopic, reputationAlarms } from "./apps/backend/src/sending/Reputation.ts";
+import {
+  accountReputationAlarms,
+  alertsTopic,
+  setReputationAlarms,
+} from "./apps/backend/src/sending/Reputation.ts";
 import { dataTable } from "./apps/backend/src/storage/Table.ts";
 import { UnsubscribeFunction } from "./apps/backend/src/consent/Unsubscribe.ts";
 import UnsubscribePage from "./apps/backend/src/consent/UnsubscribePage.ts";
@@ -45,7 +49,8 @@ export default Stack(
     yield* feedbackRouting;
 
     const topic = yield* alertsTopic;
-    const [setBounceRate] = yield* reputationAlarms;
+    const [accountBounceRate] = yield* accountReputationAlarms;
+    const [setBounceRate] = yield* setReputationAlarms;
     const table = yield* dataTable;
 
     const alertEmail = yield* Config.option(Config.String("EMAILER_ALERT_EMAIL"));
@@ -65,6 +70,7 @@ export default Stack(
       alertsTopicArn: topic.topicArn,
       // For the live suite, which deploys this stack itself.
       tableName: table.tableName,
+      accountBounceAlarmName: accountBounceRate.alarmName,
       setBounceAlarmName: setBounceRate.alarmName,
     };
   }).pipe(

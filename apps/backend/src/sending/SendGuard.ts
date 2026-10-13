@@ -11,7 +11,7 @@ import { Config, Context, Duration, Effect, Exit, Layer, Option, Schema } from "
 import { RateLimiter } from "effect/persistence";
 
 import { unavailable } from "../Errors.ts";
-import { reputationAlarms } from "./Reputation.ts";
+import { accountReputationAlarms } from "./Reputation.ts";
 import { rateLimitStoreLayer } from "../storage/RateLimit.ts";
 
 export interface SendAllowance {
@@ -24,8 +24,8 @@ export interface SendAllowance {
 }
 
 /**
- * The allowance a SES `GetAccount` response and the reputation alarms' states leave. `ceiling` is
- * the optional `EMAILER_DAILY_SEND_CEILING`.
+ * The allowance a SES `GetAccount` response and the account-wide reputation alarms' states leave.
+ * `ceiling` is the optional `EMAILER_DAILY_SEND_CEILING`.
  */
 export const sendGuard = (
   account: sesv2.GetAccountResponse,
@@ -111,7 +111,8 @@ export const dailySendCeiling = Config.option(
 export class SendGuard extends Context.Service<SendGuard>()("emailer/backend/SendGuard", {
   make: Effect.gen(function* () {
     const getAccount = yield* AWS.SES.GetAccount();
-    const describeAlarms = yield* AWS.CloudWatch.DescribeAlarms(...(yield* reputationAlarms));
+    const haltingAlarms = yield* accountReputationAlarms;
+    const describeAlarms = yield* AWS.CloudWatch.DescribeAlarms(...haltingAlarms);
     const limiter = yield* RateLimiter.make;
     // Constructor Config is a deploy-time capture, which is what the optional
     // daily ceiling wants: the value is fixed for the function's lifetime.

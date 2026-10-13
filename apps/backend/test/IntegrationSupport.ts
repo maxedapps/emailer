@@ -122,6 +122,7 @@ export class Deployment extends Context.Service<
     readonly apiUrl: string;
     readonly unsubscribeUrl: string;
     readonly tableName: string;
+    readonly accountBounceAlarmName: string;
     readonly setBounceAlarmName: string;
   }
 >()("emailer/test/Deployment") {}
@@ -390,6 +391,28 @@ export const setAlarmState = (alarmName: string, state: cloudwatch.StateValue) =
       AlarmName: alarmName,
       StateValue: state,
       StateReason: "emailer integration test",
+    });
+  });
+
+/**
+ * Points the stage's alarm at a metric nobody publishes, so a state `setAlarmState` forces holds
+ * until the test changes it. An alarm on a metric with readings returns to its actual state at its
+ * next evaluation, within a minute. The live run destroys the stage, so nothing restores it.
+ */
+export const detachAlarm = (alarmName: string) =>
+  Effect.gen(function* () {
+    const put = yield* cloudwatch.putMetricAlarm;
+
+    yield* put({
+      AlarmName: alarmName,
+      Namespace: "Emailer/IntegrationTest",
+      MetricName: "Unpublished",
+      Statistic: "Maximum",
+      Period: 3600,
+      EvaluationPeriods: 1,
+      Threshold: 1,
+      ComparisonOperator: "GreaterThanOrEqualToThreshold",
+      TreatMissingData: "ignore",
     });
   });
 

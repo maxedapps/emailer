@@ -12,7 +12,7 @@ Self-hosted marketing email over Amazon SES. Deploy it to your own AWS account, 
 - **Delivery:** send now or schedule for later; cancel a pending send and resume a paused one.
 - **Sign-ups:** an API for your website's newsletter form, with double opt-in and stored consent evidence, reached with scoped keys ([Sign-ups from your website](#sign-ups-from-your-website)).
 - **Compliance:** one-click unsubscribe per list (`List-Unsubscribe` and `List-Unsubscribe-Post`) and your postal address in every footer.
-- **List hygiene:** bounced and complaining addresses are suppressed automatically. A campaign pauses itself when its list bounces or complains too much, and every campaign pauses when the account's reputation alarms fire.
+- **List hygiene:** bounced and complaining addresses are suppressed automatically. A campaign pauses itself when its list bounces or complains too much, and all sending stops when the whole SES account's reputation alarms fire or SES puts the account under review.
 - **Pacing:** sends stay within your SES rate and daily quota, with an optional daily cap of your own.
 - **Alerts:** CloudWatch alarms, delivered by email.
 - **Optional:** DNS records (DKIM, SPF, DMARC, MAIL FROM) managed in Route 53 or Cloudflare, and a display name on the From address.
@@ -507,7 +507,7 @@ Send only the fields documented here: a field or query parameter the API does no
 
 **Pause reasons.**
 
-- `reputation`: wait for the alarm to clear or the account to heal, then `campaigns resume`. A forced `ALARM` persists under `TreatMissingData: ignore` until reset (`aws cloudwatch set-alarm-state --state-value OK …`).
+- `reputation`: an account-wide alarm is in `ALARM` or SES has the account under review. Check the account, wait for the alarm to clear or the account to heal, then `campaigns resume`. Without new readings an alarm stays in `ALARM` under `TreatMissingData: ignore` until reset (`aws cloudwatch set-alarm-state --state-value OK …`), and a halt stops our own readings ([ADR-0036](.adr/0036-only-account-wide-signals-halt-sending.md)).
 - `feedback`: this campaign's list bounced or complained too much (5% hard bounces after 200 accepted, or 0.1% complaints after 1,000 accepted). Clean the list before resuming.
 - `rate-limited` / `daily-quota`: wait, then resume.
 - `sending-paused`: SES has sending paused for the account or the configuration set. Resume once it is enabled again (`aws sesv2 get-account` shows `SendingEnabled`).
@@ -518,8 +518,8 @@ Send only the fields documented here: a field or query parameter the API does no
 | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
 | `FeedbackFailuresVisible`                    | A bounce/complaint was accepted and could not be processed five times. Redrive it.                           |
 | `DispatchFailuresVisible`                    | The dispatcher failed on a campaign's queue message five times. The campaign is stuck `sending`; redrive it. |
-| `SetBounceRate` / `SetComplaintRate`         | This configuration set at 2% bounces / 0.05% complaints. Silent until the set has sent.                      |
-| `AccountBounceRate` / `AccountComplaintRate` | The whole account at 5% / 0.1%, including every other SES sender in the account.                             |
+| `SetBounceRate` / `SetComplaintRate`         | This configuration set at 2% bounces / 0.05% complaints. A warning only; silent until the set has sent.      |
+| `AccountBounceRate` / `AccountComplaintRate` | The whole account at 5% / 0.1%, including every other SES sender in the account. Halts all sending.          |
 
 A fresh stage with `EMAILER_ALERT_EMAIL` set can mail several `OK:` notifications on deploy (`OKActions` fire `INSUFFICIENT_DATA` → `OK`). Those actions stay: an alarm returning to OK is the signal to resume a `reputation` pause.
 

@@ -95,21 +95,11 @@ const reputationAlarm = <R>(
     }),
   );
 
-export const reputationAlarms = Effect.all([
-  reputationAlarm(
-    "SetBounceRate",
-    "Configuration-set bounce rate is at or above 2 percent.",
-    "Reputation.BounceRate",
-    reputationThresholds.set.bounce,
-    configurationSetMetric,
-  ),
-  reputationAlarm(
-    "SetComplaintRate",
-    "Configuration-set complaint rate is at or above 0.05 percent.",
-    "Reputation.ComplaintRate",
-    reputationThresholds.set.complaint,
-    configurationSetMetric,
-  ),
+/**
+ * The whole account's rates, at AWS's review ratios: they halt every send (ADR-0036), because a
+ * review hits the whole account.
+ */
+export const accountReputationAlarms = Effect.all([
   reputationAlarm(
     "AccountBounceRate",
     "Account bounce rate is at or above 5 percent.",
@@ -123,5 +113,26 @@ export const reputationAlarms = Effect.all([
     "Reputation.ComplaintRate",
     reputationThresholds.account.complaint,
     accountMetric,
+  ),
+]);
+
+/**
+ * This configuration set's rates: an early warning by mail that halts nothing (ADR-0036). A halt
+ * would starve them of readings, and under `ignore` they could then never clear.
+ */
+export const setReputationAlarms = Effect.all([
+  reputationAlarm(
+    "SetBounceRate",
+    "Configuration-set bounce rate is at or above 2 percent.",
+    "Reputation.BounceRate",
+    reputationThresholds.set.bounce,
+    configurationSetMetric,
+  ),
+  reputationAlarm(
+    "SetComplaintRate",
+    "Configuration-set complaint rate is at or above 0.05 percent.",
+    "Reputation.ComplaintRate",
+    reputationThresholds.set.complaint,
+    configurationSetMetric,
   ),
 ]);

@@ -18,6 +18,7 @@ import {
   contactFor,
   deleteSuppressedDestination,
   describeAlarms,
+  detachAlarm,
   getSuppressedDestination,
   liveStorage,
   pacedSendLimit,
@@ -568,19 +569,25 @@ export const apiSuite = (test: LiveTest) => {
     );
 
     test(
-      "pauses a send when the set bounce alarm is in ALARM and resumes after it is cleared",
+      "pauses a send on an account-wide alarm and completes it under a set-level one",
       Effect.gen(function* () {
         const settings = yield* configuration;
         const client = yield* makeEmailerClient(settings.apiUrl, settings.token);
-        const alarmName = (yield* Deployment).setBounceAlarmName;
+        const { accountBounceAlarmName, setBounceAlarmName } = yield* Deployment;
         const quota = yield* accountSendQuota;
         const timeout = campaignStateTimeout(5, quota?.MaxSendRate);
         const runId = yield* newIdentifier;
 
-        yield* Effect.gen(function* () {
-          yield* setAlarmState(alarmName, "ALARM");
+        // The account bounce alarm watches readings from the whole account; detached, its forced
+        // state holds. The set alarm's metric has no readings on a fresh stage.
+        yield* detachAlarm(accountBounceAlarmName);
 
-          expect((yield* describeAlarms(alarmName)).StateValue).toBe("ALARM");
+        yield* Effect.gen(function* () {
+          yield* setAlarmState(accountBounceAlarmName, "ALARM");
+          yield* setAlarmState(setBounceAlarmName, "ALARM");
+
+          expect((yield* describeAlarms(accountBounceAlarmName)).StateValue).toBe("ALARM");
+          expect((yield* describeAlarms(setBounceAlarmName)).StateValue).toBe("ALARM");
 
           const list = yield* client.lists.create({ payload: { name: `gate-${runId}` } });
 
@@ -590,7 +597,7 @@ export const apiSuite = (test: LiveTest) => {
             payload: {
               listId: list.id,
               subject: `Emailer gate ${runId}`,
-              text: "Five labelled simulator recipients behind a forced set bounce alarm.",
+              text: "Five labelled simulator recipients behind forced bounce alarms.",
             },
           });
 
@@ -613,7 +620,8 @@ export const apiSuite = (test: LiveTest) => {
 
           expect(paused.submission.reason).toBe("reputation");
 
-          yield* setAlarmState(alarmName, "OK");
+          // The set-level alarm stays in ALARM: it only warns, so the resumed run completes.
+          yield* setAlarmState(accountBounceAlarmName, "OK");
 
           const resumed = yield* client.campaigns.resume({ params: { id: campaign.id } });
 
@@ -624,7 +632,15 @@ export const apiSuite = (test: LiveTest) => {
           const completed = yield* awaitCampaignState(client, campaign.id, "completed", timeout);
 
           expect(completed.submission.state).toBe("completed");
-        }).pipe(Effect.ensuring(setAlarmState(alarmName, "OK").pipe(Effect.orDie)));
+          expect((yield* describeAlarms(setBounceAlarmName)).StateValue).toBe("ALARM");
+        }).pipe(
+          Effect.ensuring(
+            Effect.all([
+              setAlarmState(accountBounceAlarmName, "OK"),
+              setAlarmState(setBounceAlarmName, "OK"),
+            ]).pipe(Effect.orDie),
+          ),
+        );
       }),
       sendTestTimeout,
     );

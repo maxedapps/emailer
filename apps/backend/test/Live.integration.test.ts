@@ -65,6 +65,7 @@ const deployment = Effect.gen(function* () {
     apiUrl: deployed.apiUrl,
     unsubscribeUrl: deployed.unsubscribeUrl,
     tableName: deployed.tableName,
+    accountBounceAlarmName: deployed.accountBounceAlarmName,
     setBounceAlarmName: deployed.setBounceAlarmName,
   });
 });

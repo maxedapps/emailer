@@ -114,10 +114,11 @@ describe("sendGuard", () => {
     ).toStrictEqual({ limit: 8 });
   });
 
-  it("is halted when any of four metric alarms is in ALARM", () => {
-    expect(
-      sendGuard(account(healthy), described(["OK", "ALARM", "INSUFFICIENT_DATA", "OK"]), undefined),
-    ).toStrictEqual({ limit: 11, refusal: "reputation" });
+  it("is halted when either account-wide alarm is in ALARM", () => {
+    expect(sendGuard(account(healthy), described(["OK", "ALARM"]), undefined)).toStrictEqual({
+      limit: 11,
+      refusal: "reputation",
+    });
   });
 
   it("refuses as sending-paused when SES reports sending disabled, below a reputation halt", () => {
@@ -145,7 +146,7 @@ describe("sendGuard", () => {
 
   it("is not halted when every alarm is OK or INSUFFICIENT_DATA", () => {
     expect(
-      sendGuard(account(healthy), described(["OK", "OK", "INSUFFICIENT_DATA", "OK"]), undefined),
+      sendGuard(account(healthy), described(["OK", "INSUFFICIENT_DATA"]), undefined),
     ).toStrictEqual({ limit: 11 });
   });
 
