@@ -5,9 +5,7 @@ import { Argument, CliError, Command, Flag } from "effect/cli";
 import { report, withClient } from "../Client.ts";
 import { entityPageFlags, idArgument, pageQuery } from "../Flags.ts";
 import { renderMarkdown } from "../Markdown.ts";
-import { confirm, openInBrowser } from "../Terminal.ts";
-
-const refuse = (userMessage: string) => new CliError.UserError({ cause: userMessage, userMessage });
+import { confirm, openInBrowser, refuse } from "../Terminal.ts";
 
 /** A campaign body comes from one Markdown file, or from a text file and an optional HTML file. */
 const contentFlags = {

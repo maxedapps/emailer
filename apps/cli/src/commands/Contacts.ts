@@ -5,6 +5,7 @@ import { CliError, Command, Flag } from "effect/cli";
 import { inBatches, report, withClient } from "../Client.ts";
 import { decodeCsvAttributes } from "../CsvContacts.ts";
 import { entityPageFlags, idArgument, pageQuery } from "../Flags.ts";
+import { refuse } from "../Terminal.ts";
 
 /**
  * An attribute map as repeated `key=value` pairs. The same bounds the service enforces apply at
@@ -69,8 +70,6 @@ interface ContactChange {
   name?: string | null;
   attributes?: Schemas.AttributePatch | null;
 }
-
-const refuse = (userMessage: string) => new CliError.UserError({ cause: userMessage, userMessage });
 
 /**
  * An omitted flag leaves a field alone; `--clear-name` and `--clear-attributes` are how a CLI

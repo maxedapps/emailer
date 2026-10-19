@@ -3,6 +3,10 @@ import { Effect, Layer, Stdio, Stream, Terminal } from "effect";
 import { CliError, Prompt } from "effect/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
+/** A command refused before any request, with `userMessage` as all it prints. */
+export const refuse = (userMessage: string) =>
+  new CliError.UserError({ cause: userMessage, userMessage });
+
 /**
  * Node's terminal — keypresses from stdin, raw mode — with every write and measurement moved to
  * stderr. Stdout carries a command's result and nothing else, so a prompt written there would
