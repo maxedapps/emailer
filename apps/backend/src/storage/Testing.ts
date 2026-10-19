@@ -216,8 +216,10 @@ export const unusedAudience: AudienceOperations = {
   addressStatus: () => notExercised("AudienceStore", "addressStatus"),
   addressRecord: () => notExercised("AudienceStore", "addressRecord"),
   unsuppress: () => notExercised("AudienceStore", "unsuppress"),
+  optOut: () => notExercised("AudienceStore", "optOut"),
   subscriptionState: () => notExercised("AudienceStore", "subscriptionState"),
   requestSubscription: () => notExercised("AudienceStore", "requestSubscription"),
+  subscribeDirectly: () => notExercised("AudienceStore", "subscribeDirectly"),
   confirmSubscription: () => notExercised("AudienceStore", "confirmSubscription"),
 };
 

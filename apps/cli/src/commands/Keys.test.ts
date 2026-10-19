@@ -47,9 +47,32 @@ describe("scoped keys from the command line", () => {
     }),
   );
 
+  it.effect("creates a single opt-in key, with no confirm page", () =>
+    Effect.gen(function* () {
+      const service = fakeService();
+
+      const run = yield* runCli(service, [
+        "keys",
+        "create",
+        "--name",
+        "Waitlist",
+        "--list",
+        listId,
+        "--single-opt-in",
+      ]);
+
+      expect(Exit.isSuccess(run.exit)).toBe(true);
+      expect(service.payloadsOf("keys.create")).toStrictEqual([
+        { name: "Waitlist", lists: [listId] },
+      ]);
+    }),
+  );
+
   it.effect.each([
     ["no list", ["--confirm-url", confirmUrl]],
     ["a confirm page that is not https", ["--list", listId, "--confirm-url", "http://example.com"]],
+    ["no opt-in mode", ["--list", listId]],
+    ["both opt-in modes", ["--list", listId, "--confirm-url", confirmUrl, "--single-opt-in"]],
   ] as const)("refuses a key with %s before any request", ([_label, flags]) =>
     Effect.gen(function* () {
       const service = fakeService();

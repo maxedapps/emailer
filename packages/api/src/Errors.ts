@@ -81,7 +81,10 @@ export class EmailAlreadyUsed extends Schema.TaggedError<EmailAlreadyUsed>()(
   }
 }
 
-/** The contact's current address is opted out, so the contact may not be moved off it. */
+/**
+ * The address left a list: the contact holding it may not move to another address, and a single
+ * opt-in sign-up may not rejoin the list it left (ADR-0037).
+ */
 export class AddressOptedOut extends Schema.TaggedError<AddressOptedOut>()(
   "AddressOptedOut",
   { email: NormalizedEmailAddress },

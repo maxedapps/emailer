@@ -1,4 +1,9 @@
-import { AdminAuthorization, Integration, SubscriptionAuthorization } from "@emailer/api/Api";
+import {
+  AdminAuthorization,
+  Integration,
+  OptIn,
+  SubscriptionAuthorization,
+} from "@emailer/api/Api";
 import { Unauthorized } from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
 import { Config, Crypto, Data, Effect, Layer, Option, Redacted, Schema } from "effect";
@@ -52,9 +57,9 @@ const decodeScopedKey = Schema.decodeUnknownOption(
 );
 
 /**
- * A scoped key reaches only the sign-up endpoints, and gives them its lists and confirm page. A key
- * that does not parse, is unknown or revoked, or whose secret does not hash to the stored hash is
- * refused alike.
+ * A scoped key reaches only the sign-up endpoints, and gives them its lists and how its sign-ups
+ * opt in: double through its confirm page, single without one. A key that does not parse, is
+ * unknown or revoked, or whose secret does not hash to the stored hash is refused alike.
  */
 export const subscriptionAuthorization = Layer.effect(SubscriptionAuthorization)(
   Effect.gen(function* () {
@@ -86,7 +91,10 @@ export const subscriptionAuthorization = Layer.effect(SubscriptionAuthorization)
         return yield* Effect.provideService(httpEffect, Integration, {
           keyId,
           lists: stored.lists,
-          confirmUrl: stored.confirmUrl,
+          optIn:
+            stored.confirmUrl === undefined
+              ? OptIn.Single()
+              : OptIn.Double({ confirmUrl: stored.confirmUrl }),
         });
       }),
     });
@@ -101,13 +109,7 @@ export const createKey = Effect.fn("Auth.createKey")(function* (
   const id = yield* newIdentifier;
   const secret = yield* issueSecret;
 
-  const key: Schemas.ApiKey = {
-    id,
-    name: payload.name,
-    lists: payload.lists,
-    confirmUrl: payload.confirmUrl,
-    createdAt: yield* nowIso,
-  };
+  const key: Schemas.ApiKey = { id, ...payload, createdAt: yield* nowIso };
 
   yield* keys.createKey({ ...key, secretHash: yield* hashSecret(secret) });
 

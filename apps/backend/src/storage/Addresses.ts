@@ -28,12 +28,12 @@ export const pendingKey = (email: string, listId: string) => ({
 });
 
 /**
- * The evidence of one confirmed opt-in. Append-only: each confirmation adds its own, so a later
- * sign-up can never overwrite the evidence of an earlier one.
+ * The evidence of one opt-in, keyed by when the subscriber joined. Append-only: each opt-in adds its
+ * own, so a later sign-up can never overwrite the evidence of an earlier one.
  */
-export const consentKey = (email: string, listId: string, confirmedAt: string) => ({
+export const consentKey = (email: string, listId: string, joinedAt: string) => ({
   pk: addressKey(email).pk,
-  sk: str(`CONSENT#${listId}#${confirmedAt}`),
+  sk: str(`CONSENT#${listId}#${joinedAt}`),
 });
 
 /**
@@ -205,12 +205,12 @@ export const mailboxFeedbackWrites = (primitives: Pick<UpdatePrimitives, "update
 };
 
 /**
- * The public unsubscribe function's whole persistence need: one update that adds the list to the
- * mailbox's opt-outs, and so one DynamoDB permission. It is split from the reader and from
- * suppression precisely so the one unauthenticated surface in the system cannot read, query or
- * delete anything.
+ * An opt-out: one update that adds the list to the mailbox's opt-outs. It is the public unsubscribe
+ * function's whole persistence need, and so its one DynamoDB permission: split from the reader and
+ * from suppression precisely so the one unauthenticated surface in the system cannot read, query or
+ * delete anything. The API's opt-out on a site's behalf makes the same write (ADR-0037).
  */
-export const unsubscribeWrites = (primitives: Pick<UpdatePrimitives, "update">) => {
+export const optOutWrites = (primitives: Pick<UpdatePrimitives, "update">) => {
   const { update } = primitives;
 
   /** Adding to a set is idempotent, so a repeated opt-out changes nothing. */

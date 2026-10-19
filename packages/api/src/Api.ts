@@ -1,4 +1,4 @@
-import { Context, Schema } from "effect";
+import { Context, Data, Schema } from "effect";
 import {
   HttpApi,
   HttpApiEndpoint,
@@ -22,13 +22,24 @@ export class AdminAuthorization extends HttpApiMiddleware.Service<AdminAuthoriza
   },
 ) {}
 
-/** The scoped key a sign-up request came with: the lists it may add to, and its confirm page. */
+/**
+ * How a key's sign-ups join a list (ADR-0037): through a link mailed to the subscriber and
+ * confirmed on the site's page, or at once.
+ */
+export type OptIn = Data.TaggedEnum<{
+  Double: { readonly confirmUrl: string };
+  Single: {};
+}>;
+
+export const OptIn = Data.taggedEnum<OptIn>();
+
+/** The scoped key a request came with: the lists it may act on, and how its sign-ups opt in. */
 export class Integration extends Context.Service<
   Integration,
   {
     readonly keyId: string;
     readonly lists: ReadonlyArray<string>;
-    readonly confirmUrl: string;
+    readonly optIn: OptIn;
   }
 >()("emailer/Api/Integration") {}
 
@@ -314,9 +325,10 @@ class KeysGroup extends HttpApiGroup.make("keys")
   .prefix("/keys") {}
 
 /**
- * What an integrating site calls with its scoped key: a sign-up, confirmed through the link it
- * mails. Every answer means the same to the subscriber — check your inbox — so a site can show one
- * message for all of them.
+ * What an integrating site calls with its scoped key: a sign-up, which a double opt-in key confirms
+ * through the link it mails and a single opt-in key joins at once, and an opt-out from the site's
+ * own unsubscribe link. A site can show one message for every sign-up answer, so its form never
+ * tells a visitor whether an address is subscribed.
  */
 class SubscriptionsGroup extends HttpApiGroup.make("subscriptions")
   .add(
@@ -324,14 +336,18 @@ class SubscriptionsGroup extends HttpApiGroup.make("subscriptions")
       payload: Schemas.SubscribePayload,
       success: [
         Schemas.ConfirmationSent.pipe(HttpApiSchema.status(202)),
+        Schemas.Subscribed.pipe(HttpApiSchema.status(201)),
         Schemas.AlreadySubscribed,
       ],
-      // A confirmation mail checks the account and its reputation alarms before it goes out.
+      // A confirmation mail checks the account and its reputation alarms before it goes out; a
+      // single opt-in joins as a confirmation does.
       error: [
         ...storage,
         Errors.Forbidden,
         Errors.ListNotFound,
         Errors.AddressUndeliverable,
+        Errors.AddressOptedOut,
+        Errors.ContactChanged,
         Errors.ConfirmationRecentlySent,
         Errors.SendingPaused,
         Errors.EmailServiceUnavailable,
@@ -350,6 +366,12 @@ class SubscriptionsGroup extends HttpApiGroup.make("subscriptions")
         Errors.ListNotFound,
         Errors.ContactChanged,
       ],
+    }),
+    // The same opt-out as the unsubscribe link in the service's own mail, and as idempotent.
+    HttpApiEndpoint.post("optOut", "/opt-out", {
+      payload: Schemas.OptOutPayload,
+      success: HttpApiSchema.NoContent,
+      error: [...storage, Errors.Forbidden],
     }),
   )
   .prefix("/subscriptions")

@@ -457,16 +457,27 @@ export const ConsentWording = Schema.String.check(
 /** An address as the calling site saw it, kept as consent evidence rather than parsed. */
 export const IpAddress = Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(maxIpLength));
 
-/** The evidence of one confirmed opt-in: what was asked, where and from where, and when. */
-export const ConsentRecord = Schema.Struct({
+/** What the subscriber agreed to, where, and from which address, whichever way they joined. */
+const consentEvidence = {
   listId: EntityId,
   source: EntityName,
   wording: ConsentWording,
   ip: IpAddress,
+};
+
+/** A double opt-in: asked for on the site, then confirmed through the mailed link. */
+const DoubleOptInConsent = Schema.Struct({
+  ...consentEvidence,
   requestedAt: Timestamp,
   confirmedAt: Timestamp,
   confirmIp: IpAddress,
 });
+
+/** A single opt-in: the site's sign-up joined the list at once (ADR-0037). */
+const SingleOptInConsent = Schema.Struct({ ...consentEvidence, subscribedAt: Timestamp });
+
+/** The evidence of one opt-in. Each way of joining has its own timestamps, which tell them apart. */
+export const ConsentRecord = Schema.Union([DoubleOptInConsent, SingleOptInConsent]);
 
 export type ConsentRecord = typeof ConsentRecord.Type;
 
@@ -737,12 +748,15 @@ export const ConfirmUrl = Schema.String.check(
   ),
 );
 
-/** A scoped API key as listed: what it may do, never its secret. */
+/**
+ * A scoped API key as listed: what it may do, never its secret. A key with a confirm page signs up
+ * with double opt-in; one without adds subscribers at once, single opt-in (ADR-0037).
+ */
 export const ApiKey = Schema.Struct({
   id: EntityId,
   name: EntityName,
   lists: Schema.NonEmptyArray(EntityId),
-  confirmUrl: ConfirmUrl,
+  confirmUrl: Schema.optionalKey(ConfirmUrl),
   createdAt: Timestamp,
 });
 
@@ -756,7 +770,7 @@ export const CreateApiKeyPayload = Schema.Struct({
       new Set(lists).size === lists.length ? undefined : "Expected each list at most once",
     ),
   ),
-  confirmUrl: ConfirmUrl,
+  confirmUrl: Schema.optionalKey(ConfirmUrl),
 });
 
 export type CreateApiKeyPayload = typeof CreateApiKeyPayload.Type;
@@ -809,6 +823,11 @@ export type ConfirmPayload = typeof ConfirmPayload.Type;
 
 /** The subscriber is on the list. */
 export const Subscribed = Schema.TaggedStruct("Subscribed", { listId: EntityId });
+
+/** An opt-out the site received through its own unsubscribe link, for one of the key's lists. */
+export const OptOutPayload = Schema.Struct({ listId: EntityId, email: EmailAddress });
+
+export type OptOutPayload = typeof OptOutPayload.Type;
 
 /** A short-lived public link to a campaign's rendered preview. */
 export const PreviewLink = Schema.Struct({ url: Schema.String, expiresAt: Timestamp });

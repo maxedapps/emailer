@@ -1,7 +1,7 @@
 import * as AWS from "alchemy/AWS";
 import { Context, Effect, Layer } from "effect";
 
-import { unsubscribeWrites } from "./Addresses.ts";
+import { optOutWrites } from "./Addresses.ts";
 import { updatePrimitives } from "./Primitives.ts";
 import { dataTable } from "./Table.ts";
 
@@ -13,7 +13,7 @@ import type { TableOperations } from "./Items.ts";
  * unauthenticated requests holds no permission to read, query or delete anything.
  */
 const unsubscribeStoreOperations = (operations: Pick<TableOperations, "updateItem">) =>
-  unsubscribeWrites(updatePrimitives(operations));
+  optOutWrites(updatePrimitives(operations));
 
 export type UnsubscribeOperations = ReturnType<typeof unsubscribeStoreOperations>;
 

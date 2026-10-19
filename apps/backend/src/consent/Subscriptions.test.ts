@@ -1,13 +1,13 @@
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
-import { Integration } from "@emailer/api/Api";
+import { Integration, OptIn } from "@emailer/api/Api";
 import * as Errors from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
 import { DateTime, Duration, Effect, Layer, Schema } from "effect";
 import { TestClock } from "effect/testing";
 import { createHash } from "node:crypto";
 
-import { confirm, subscribe } from "./Subscriptions.ts";
+import { confirm, optOut, subscribe } from "./Subscriptions.ts";
 import { Mail, Mailer, SendRejected, SubmissionUncertain } from "../sending/Mailer.ts";
 import { recentAllowance, SendGuard } from "../sending/SendGuard.ts";
 import { AudienceStore } from "../storage/Audience.ts";
@@ -15,7 +15,12 @@ import { SubscriptionState } from "../storage/Subscriptions.ts";
 import { unusedAudience } from "../storage/Testing.ts";
 
 import type { SendError } from "../sending/Mailer.ts";
-import type { SubscriptionConfirmation, SubscriptionRequest } from "../storage/Subscriptions.ts";
+import type { AddressOptOut } from "../storage/Addresses.ts";
+import type {
+  DirectSubscription,
+  SubscriptionConfirmation,
+  SubscriptionRequest,
+} from "../storage/Subscriptions.ts";
 
 const listId = "0195f0a0-1111-4222-8333-44444444109e";
 
@@ -34,6 +39,7 @@ const payload: Schemas.SubscribePayload = {
 };
 
 interface Scenario {
+  readonly optIn?: OptIn;
   readonly state?: SubscriptionState;
   readonly recent?: SendGuard["Service"]["recent"];
   readonly sendFailure?: SendError;
@@ -46,18 +52,21 @@ interface Sent {
 }
 
 /**
- * The sign-up's services. The store keeps the hour rule as storage does, by the `requestedAt` it is
- * given, so the clock the domain reads decides.
+ * The sign-up's services, for a double opt-in key unless the scenario says otherwise. The store
+ * keeps the hour rule as storage does, by the `requestedAt` it is given, so the clock the domain
+ * reads decides.
  */
 const fixture = (scenario: Scenario = {}) => {
   const requests: Array<SubscriptionRequest> = [];
+  const joins: Array<DirectSubscription> = [];
+  const optOuts: Array<AddressOptOut> = [];
   const sent: Array<Sent> = [];
 
   const layer = Layer.mergeAll(
     Layer.succeed(Integration)({
       keyId: "key",
       lists: [listId, otherListId],
-      confirmUrl: confirmPage,
+      optIn: scenario.optIn ?? OptIn.Double({ confirmUrl: confirmPage }),
     }),
     Layer.succeed(AudienceStore)({
       ...unusedAudience,
@@ -85,6 +94,16 @@ const fixture = (scenario: Scenario = {}) => {
 
           requests.push(request);
         }),
+      subscribeDirectly: (subscription) =>
+        scenario.listMissing === true
+          ? Effect.fail(new Errors.ListNotFound())
+          : Effect.sync(() => {
+              joins.push(subscription);
+            }),
+      optOut: (request) =>
+        Effect.sync(() => {
+          optOuts.push(request);
+        }),
     }),
     Layer.succeed(SendGuard)({
       current: Effect.die(new Error("A sign-up reads the recent allowance, not the current one")),
@@ -104,7 +123,7 @@ const fixture = (scenario: Scenario = {}) => {
     NodeCrypto.layer,
   );
 
-  return { layer, requests, sent };
+  return { layer, requests, joins, optOuts, sent };
 };
 
 const signingUp = (fix: ReturnType<typeof fixture>, request = payload) =>
@@ -262,6 +281,16 @@ describe("subscribe", () => {
     }),
   );
 
+  it.effect("mails a link to an address that left the list, so its owner may rejoin", () =>
+    Effect.gen(function* () {
+      const fix = fixture({ state: SubscriptionState.OptedOut() });
+
+      expect(yield* signingUp(fix)).toStrictEqual(Schemas.ConfirmationSent.make({}));
+      expect(fix.requests).toHaveLength(1);
+      expect(fix.sent).toHaveLength(1);
+    }),
+  );
+
   it.effect("counts a submission whose outcome is unknown as sent", () =>
     Effect.gen(function* () {
       const fix = fixture({ sendFailure: new SubmissionUncertain({ reason: "timeout" }) });
@@ -278,7 +307,11 @@ describe("confirm", () => {
     const confirmations: Array<SubscriptionConfirmation> = [];
 
     const layer = Layer.mergeAll(
-      Layer.succeed(Integration)({ keyId: "key", lists: [listId], confirmUrl: confirmPage }),
+      Layer.succeed(Integration)({
+        keyId: "key",
+        lists: [listId],
+        optIn: OptIn.Double({ confirmUrl: confirmPage }),
+      }),
       Layer.succeed(AudienceStore)({
         ...unusedAudience,
         confirmSubscription: (confirmation) =>
@@ -337,6 +370,116 @@ describe("confirm", () => {
 
       expect(yield* Effect.flip(confirming(fix, token))).toStrictEqual(error);
       expect(fix.confirmations).toHaveLength(0);
+    }),
+  );
+});
+
+describe("subscribe with a single opt-in key", () => {
+  /** A single opt-in mails nothing, so its send guard dies if asked. */
+  const single = (scenario: Scenario = {}) =>
+    fixture({
+      optIn: OptIn.Single(),
+      recent: Effect.die(new Error("A single opt-in reads no send guard")),
+      ...scenario,
+    });
+
+  it.effect("joins the list at once with the sign-up as consent, and mails nothing", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(now);
+
+      const fix = single();
+      const request = { ...payload, attributes: { page_path: "/waitlist" } };
+
+      expect(yield* signingUp(fix, request)).toStrictEqual(Schemas.Subscribed.make({ listId }));
+
+      const contactId = fix.joins[0]?.contactId ?? "";
+
+      expect(Schema.is(Schemas.EntityId)(contactId)).toBe(true);
+      expect(fix.joins).toStrictEqual([
+        {
+          email: "Sam@example.com",
+          listId,
+          name: "Sam",
+          attributes: { page_path: "/waitlist" },
+          source: "Website footer",
+          wording: "Send me the monthly newsletter.",
+          ip: "203.0.113.7",
+          contactId,
+          subscribedAt: "2026-09-25T10:00:00.000Z",
+        },
+      ]);
+      expect(fix.requests).toHaveLength(0);
+      expect(fix.sent).toHaveLength(0);
+    }),
+  );
+
+  it.effect("answers an address already on the list with 200", () =>
+    Effect.gen(function* () {
+      const fix = single({ state: SubscriptionState.Subscribed() });
+
+      expect(yield* signingUp(fix)).toStrictEqual(Schemas.AlreadySubscribed.make({}));
+      expect(fix.joins).toHaveLength(0);
+    }),
+  );
+
+  it.effect.each([
+    [
+      "an address that left the list, which stays out",
+      { state: SubscriptionState.OptedOut() },
+      payload,
+      new Errors.AddressOptedOut({ email: "sam@example.com" }),
+    ],
+    [
+      "a list the key does not cover",
+      {},
+      { ...payload, listId: "0195f0a0-1111-4222-8333-44444444309e" },
+      new Errors.Forbidden(),
+    ],
+    ["a list that is gone", { listMissing: true }, payload, new Errors.ListNotFound()],
+    [
+      "an undeliverable address",
+      { state: SubscriptionState.Undeliverable({ reason: "suppressed" }) },
+      payload,
+      new Errors.AddressUndeliverable({ reason: "suppressed" }),
+    ],
+  ] as const)("refuses %s, mailing nothing", ([_label, scenario, request, error]) =>
+    Effect.gen(function* () {
+      const fix = single(scenario);
+
+      expect(yield* Effect.flip(signingUp(fix, request))).toStrictEqual(error);
+      expect(fix.requests).toHaveLength(0);
+      expect(fix.sent).toHaveLength(0);
+    }),
+  );
+});
+
+describe("optOut", () => {
+  const optingOut = (fix: ReturnType<typeof fixture>, request: Schemas.OptOutPayload) =>
+    optOut(request).pipe(Effect.provide(fix.layer));
+
+  it.effect("opts the address out of a list the key covers", () =>
+    Effect.gen(function* () {
+      const fix = fixture({ optIn: OptIn.Single() });
+
+      yield* optingOut(fix, { listId: otherListId, email: "Sam@example.com" });
+
+      expect(fix.optOuts).toStrictEqual([{ email: "Sam@example.com", listId: otherListId }]);
+    }),
+  );
+
+  it.effect("refuses a list the key does not cover, writing nothing", () =>
+    Effect.gen(function* () {
+      const fix = fixture();
+
+      expect(
+        yield* Effect.flip(
+          optingOut(fix, {
+            listId: "0195f0a0-1111-4222-8333-44444444309e",
+            email: "a@example.com",
+          }),
+        ),
+      ).toStrictEqual(new Errors.Forbidden());
+      expect(fix.optOuts).toHaveLength(0);
     }),
   );
 });

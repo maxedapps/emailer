@@ -4,12 +4,7 @@ import { DateTime, Effect } from "effect";
 import { TestClock } from "effect/testing";
 import { describe, expect, it } from "@effect/vitest";
 
-import {
-  addressReads,
-  addressWrites,
-  mailboxFeedbackWrites,
-  unsubscribeWrites,
-} from "./Addresses.ts";
+import { addressReads, addressWrites, mailboxFeedbackWrites, optOutWrites } from "./Addresses.ts";
 import {
   conditionFailed,
   createdAt,
@@ -29,7 +24,7 @@ const operationsFor = (table: Table) => {
 
   return {
     ...mailboxFeedbackWrites(primitives),
-    ...unsubscribeWrites(primitives),
+    ...optOutWrites(primitives),
     ...addressReads(primitives),
     ...addressWrites(primitives),
   } as const;
@@ -280,7 +275,7 @@ describe("addressStatus", () => {
 
 describe("addressRecord", () => {
   it.effect(
-    "reads the address's partition and reports its item, consents and pending sign-ups",
+    "reads the address's partition and reports its item, consents of both kinds and pending sign-ups",
     () =>
       Effect.gen(function* () {
         yield* TestClock.setTime(now);
@@ -297,19 +292,30 @@ describe("addressRecord", () => {
           confirmIp: "203.0.113.8",
         };
 
+        const directConsent = {
+          listId: otherListId,
+          source: "Waitlist",
+          wording: "Tell me when it opens.",
+          ip: "203.0.113.9",
+          subscribedAt: "2026-09-12T08:00:00.000Z",
+        };
+
+        const consentItem = (record: Record<string, string>, at: string) => ({
+          pk: key.pk,
+          sk: { S: `CONSENT#${record["listId"]}#${at}` },
+          v: { N: "1" },
+          ...Object.fromEntries(
+            Object.entries(record).map(([name, value]) => [name, { S: value }]),
+          ),
+        });
+
         const table = scriptedTable({
           query: [
             Effect.succeed({
               Items: [
                 stored({ ...optedOut, ...suppressed, ...bounces(...occurrences) }),
-                {
-                  pk: key.pk,
-                  sk: { S: `CONSENT#${listId}#${consent.confirmedAt}` },
-                  v: { N: "1" },
-                  ...Object.fromEntries(
-                    Object.entries(consent).map(([name, value]) => [name, { S: value }]),
-                  ),
-                },
+                consentItem(consent, consent.confirmedAt),
+                consentItem(directConsent, directConsent.subscribedAt),
                 {
                   pk: key.pk,
                   sk: { S: `PENDING#${otherListId}` },
@@ -335,7 +341,7 @@ describe("addressRecord", () => {
           optOuts: [listId],
           suppression: { reason: "bounce", suppressedAt: createdAt, bounceSubType: "General" },
           transientBounces: occurrences,
-          consents: [consent],
+          consents: [consent, directConsent],
           pending: [
             { listId: otherListId, requestedAt: createdAt, expiresAt: "2026-09-18T10:00:00.000Z" },
           ],

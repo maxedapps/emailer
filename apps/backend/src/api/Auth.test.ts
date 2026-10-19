@@ -1,6 +1,6 @@
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
-import { Integration, SubscriptionAuthorization } from "@emailer/api/Api";
+import { Integration, OptIn, SubscriptionAuthorization } from "@emailer/api/Api";
 import { ApiKeyNotFound, StorageUnavailable } from "@emailer/api/Errors";
 import { ConfigProvider, Effect, Inspectable, Layer, Redacted, Result, Schema } from "effect";
 import { HttpRouter, HttpServer } from "effect/http";
@@ -87,14 +87,17 @@ const storedKey: StoredApiKey = {
   secretHash: "8ff2188e7463211f1a0af5b018552b52a593961c9d2787014067565a31862a83",
 };
 
-/** One endpoint behind the scoped-key middleware, answering the integration it was given. */
+/**
+ * One endpoint behind the scoped-key middleware, answering the integration it was given: its
+ * confirm page for double opt-in, null for single opt-in.
+ */
 class ProbeGroup extends HttpApiGroup.make("probe")
   .add(
     HttpApiEndpoint.get("integration", "/integration", {
       success: Schema.Struct({
         keyId: Schema.String,
         lists: Schema.Array(Schema.String),
-        confirmUrl: Schema.String,
+        confirmUrl: Schema.NullOr(Schema.String),
       }),
     }),
   )
@@ -103,7 +106,16 @@ class ProbeGroup extends HttpApiGroup.make("probe")
 class ProbeApi extends HttpApi.make("probe").add(ProbeGroup) {}
 
 const probe = HttpApiBuilder.group(ProbeApi, "probe", (handlers) =>
-  handlers.handle("integration", () => Effect.service(Integration)),
+  handlers.handle("integration", () =>
+    Effect.map(Effect.service(Integration), ({ keyId, lists, optIn }) => ({
+      keyId,
+      lists,
+      confirmUrl: OptIn.$match(optIn, {
+        Double: (double) => double.confirmUrl,
+        Single: () => null,
+      }),
+    })),
+  ),
 );
 
 /** Asks the probe with `credential`, the key store answering `getKey` with `stored`. */
@@ -144,12 +156,30 @@ const found = () => Effect.succeed(storedKey);
 const parseJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
 
 describe("subscriptionAuthorization", () => {
-  it.effect("authorizes a stored key and provides its lists and confirm page", () =>
+  it.effect("authorizes a stored key and provides its lists and double opt-in confirm page", () =>
     Effect.gen(function* () {
       const response = yield* presenting(`emk.${keyId}.${secret}`, found);
 
       expect(response.status).toBe(200);
-      expect(yield* parseJson(response.body)).toStrictEqual({ keyId, lists: [listId], confirmUrl });
+      expect(yield* parseJson(response.body)).toStrictEqual({
+        keyId,
+        lists: [listId],
+        confirmUrl,
+      });
+    }),
+  );
+
+  it.effect("provides single opt-in for a key stored without a confirm page", () =>
+    Effect.gen(function* () {
+      const { confirmUrl: _, ...singleKey } = storedKey;
+      const response = yield* presenting(`emk.${keyId}.${secret}`, () => Effect.succeed(singleKey));
+
+      expect(response.status).toBe(200);
+      expect(yield* parseJson(response.body)).toStrictEqual({
+        keyId,
+        lists: [listId],
+        confirmUrl: null,
+      });
     }),
   );
 

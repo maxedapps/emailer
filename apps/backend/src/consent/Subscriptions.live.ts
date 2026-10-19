@@ -128,6 +128,89 @@ export const subscriptionsSuite = (test: LiveTest) => {
     );
 
     test(
+      "adds a subscriber directly through a single opt-in key, and opts out through the API",
+      Effect.gen(function* () {
+        const settings = yield* configuration;
+        const admin = yield* makeEmailerClient(settings.apiUrl, settings.token);
+        const storage = yield* liveStorage(settings.tableName);
+        const runId = yield* newIdentifier;
+        const list = yield* admin.lists.create({ payload: { name: `waitlist-${runId}` } });
+        const other = yield* admin.lists.create({ payload: { name: `waitlist-other-${runId}` } });
+
+        const created = yield* admin.keys.create({
+          payload: { name: `live-single-${runId}`, lists: [list.id] },
+        });
+
+        expect(created).not.toHaveProperty("confirmUrl");
+
+        const site = yield* makeEmailerClient(settings.apiUrl, Redacted.make(created.key));
+
+        // Nothing is mailed, so an address no mailbox stands behind will do.
+        const probe = yield* uniqueAddress;
+
+        const signUp = {
+          listId: list.id,
+          email: probe,
+          name: "Probe",
+          attributes: { page_path: "/waitlist" },
+          consent,
+          ip: "203.0.113.7",
+        };
+
+        expect(yield* site.subscriptions.subscribe({ payload: signUp })).toStrictEqual(
+          Schemas.Subscribed.make({ listId: list.id }),
+        );
+
+        const contact = yield* admin.contacts.getByEmail({ query: { email: probe } });
+
+        const members = yield* admin.lists.listMembers({
+          params: { listId: list.id },
+          query: {},
+        });
+
+        expect(contact).toMatchObject({ name: "Probe", attributes: { page_path: "/waitlist" } });
+        expect(members.items.map((member) => member.id)).toStrictEqual([contact.id]);
+
+        const joined = yield* storage.addressRecord(probe);
+
+        expect(joined.pending).toStrictEqual([]);
+        expect(joined.consents).toStrictEqual([
+          { listId: list.id, ...consent, ip: "203.0.113.7", subscribedAt: contact.createdAt },
+        ]);
+
+        expect(yield* site.subscriptions.subscribe({ payload: signUp })).toStrictEqual(
+          Schemas.AlreadySubscribed.make({}),
+        );
+
+        const optOut = { listId: list.id, email: probe };
+
+        yield* site.subscriptions.optOut({ payload: optOut });
+        yield* site.subscriptions.optOut({ payload: optOut });
+
+        expect((yield* storage.addressRecord(probe)).optOuts).toStrictEqual([list.id]);
+        expect(yield* storage.addressStatus(probe, list.id)).toBe("unsubscribed");
+
+        expect(yield* Effect.flip(site.subscriptions.subscribe({ payload: signUp }))).toStrictEqual(
+          new Errors.AddressOptedOut({ email: probe }),
+        );
+        expect(yield* storage.addressStatus(probe, list.id)).toBe("unsubscribed");
+
+        expect(
+          yield* Effect.flip(
+            site.subscriptions.subscribe({ payload: { ...signUp, listId: other.id } }),
+          ),
+        ).toStrictEqual(new Errors.Forbidden());
+        expect(
+          yield* Effect.flip(
+            site.subscriptions.optOut({ payload: { ...optOut, listId: other.id } }),
+          ),
+        ).toStrictEqual(new Errors.Forbidden());
+
+        yield* admin.keys.revoke({ params: { id: created.id } });
+      }),
+    );
+
+    test(
       "expires pending sign-ups through the table's TTL",
       Effect.gen(function* () {
         const { tableName } = yield* Deployment;

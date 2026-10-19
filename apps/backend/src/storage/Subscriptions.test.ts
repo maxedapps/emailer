@@ -8,7 +8,11 @@ import { SubscriptionState, subscriptionOperations } from "./Subscriptions.ts";
 import { tableLogicalId } from "./Items.ts";
 import { cancelled, contactId, listId, scriptedTable, succeeded, tokensFor } from "./Testing.ts";
 
-import type { SubscriptionConfirmation, SubscriptionRequest } from "./Subscriptions.ts";
+import type {
+  DirectSubscription,
+  SubscriptionConfirmation,
+  SubscriptionRequest,
+} from "./Subscriptions.ts";
 import type { Table, TransactionReply } from "./Testing.ts";
 
 const email = "sam@example.com";
@@ -175,7 +179,12 @@ describe("subscriptionState", () => {
     [
       "a member who left the list",
       [addressItem({ optOuts: { SS: [listId] } }), reservation, membership],
-      SubscriptionState.NotSubscribed(),
+      SubscriptionState.OptedOut(),
+    ],
+    [
+      "an address that left the list without a contact",
+      [addressItem({ optOuts: { SS: [listId] } })],
+      SubscriptionState.OptedOut(),
     ],
     [
       "a member who left another list",
@@ -245,10 +254,11 @@ const consentPut = {
       confirmedAt: { S: confirmedAt },
       confirmIp: { S: "203.0.113.8" },
     },
+    ConditionExpression: "attribute_not_exists(pk)",
   },
 };
 
-const joins = (joinedId: string) =>
+const joins = (joinedId: string, addedAt = confirmedAt) =>
   [`LIST#${listId}|MEMBER#${joinedId}`, `CONTACT#${joinedId}|LISTOF#${listId}`].map((key) => {
     const [pk = "", sk = ""] = key.split("|");
 
@@ -262,7 +272,7 @@ const joins = (joinedId: string) =>
           ":v": { N: "1" },
           ":listId": { S: listId },
           ":contactId": { S: joinedId },
-          ":addedAt": { S: confirmedAt },
+          ":addedAt": { S: addedAt },
         },
       },
     };
@@ -402,6 +412,137 @@ describe("confirmSubscription", () => {
 
       expect(yield* confirming(table)).toBe(listId);
       expect(table.transactionRequests).toHaveLength(2);
+    }),
+  );
+});
+
+const subscribedAt = "2026-09-25T10:00:00.000Z";
+
+const subscription: DirectSubscription = {
+  email,
+  listId,
+  name: "Sam",
+  attributes: { page_path: "/waitlist" },
+  source: "Website footer",
+  wording: "Send me the monthly newsletter.",
+  ip: "203.0.113.7",
+  contactId: newContactId,
+  subscribedAt,
+};
+
+const directConsentPut = {
+  Put: {
+    Table: tableLogicalId,
+    Item: {
+      pk: { S: addressPk },
+      sk: { S: `CONSENT#${listId}#${subscribedAt}` },
+      v: { N: "1" },
+      listId: { S: listId },
+      source: { S: "Website footer" },
+      wording: { S: "Send me the monthly newsletter." },
+      ip: { S: "203.0.113.7" },
+      subscribedAt: { S: subscribedAt },
+    },
+    ConditionExpression: "attribute_not_exists(pk)",
+  },
+};
+
+const subscribing = (table: Table) => operationsFor(table).subscribeDirectly(subscription);
+
+describe("subscribeDirectly", () => {
+  it.effect("creates the contact with its attributes, joins it and records the consent", () =>
+    Effect.gen(function* () {
+      const table = holding([list], [succeeded]);
+
+      yield* subscribing(table);
+
+      expect(table.transactionRequests.map((sent) => sent.TransactItems)).toStrictEqual([
+        [
+          {
+            Put: {
+              Table: tableLogicalId,
+              Item: {
+                pk: { S: `CONTACT#${newContactId}` },
+                sk: { S: "META" },
+                gsi1pk: { S: "contact" },
+                gsi1sk: { S: `${subscribedAt}#${newContactId}` },
+                v: { N: "1" },
+                id: { S: newContactId },
+                email: { S: email },
+                name: { S: "Sam" },
+                attributes: { M: { page_path: { S: "/waitlist" } } },
+                createdAt: { S: subscribedAt },
+                revision: { N: "1" },
+              },
+              ConditionExpression: "attribute_not_exists(pk)",
+            },
+          },
+          {
+            Put: {
+              Table: tableLogicalId,
+              Item: {
+                pk: { S: `EMAIL#${email}` },
+                sk: { S: "META" },
+                v: { N: "1" },
+                contactId: { S: newContactId },
+              },
+              ConditionExpression: "attribute_not_exists(pk)",
+            },
+          },
+          ...joins(newContactId, subscribedAt),
+          directConsentPut,
+        ],
+      ]);
+    }),
+  );
+
+  it.effect("joins the contact holding the address, and never touches its opt-outs", () =>
+    Effect.gen(function* () {
+      const table = holding(
+        [list, reservation, addressItem({ optOuts: { SS: [otherListId] } })],
+        [succeeded],
+      );
+
+      yield* subscribing(table);
+
+      expect(table.transactionRequests[0]?.TransactItems).toStrictEqual([
+        {
+          ConditionCheck: {
+            Table: tableLogicalId,
+            Key: { pk: { S: `CONTACT#${contactId}` }, sk: { S: "META" } },
+            ConditionExpression: "attribute_exists(pk)",
+          },
+        },
+        {
+          ConditionCheck: {
+            Table: tableLogicalId,
+            Key: { pk: { S: `EMAIL#${email}` }, sk: { S: "META" } },
+            ConditionExpression: "contactId = :holder",
+            ExpressionAttributeValues: { ":holder": { S: contactId } },
+          },
+        },
+        ...joins(contactId, subscribedAt),
+        directConsentPut,
+      ]);
+    }),
+  );
+
+  it.effect("answers ListNotFound for a list that is gone, writing nothing", () =>
+    Effect.gen(function* () {
+      const table = holding([]);
+
+      expect(yield* Effect.flip(subscribing(table))).toStrictEqual(new Errors.ListNotFound());
+      expect(table.transactionRequests).toHaveLength(0);
+    }),
+  );
+
+  it.effect("never replaces the consent of a sign-up in the same millisecond", () =>
+    Effect.gen(function* () {
+      const lost = cancelled("None", "None", "None", "None", "ConditionalCheckFailed");
+      const table = holding([list], [lost, lost, lost]);
+
+      expect(yield* Effect.flip(subscribing(table))).toStrictEqual(new Errors.ContactChanged());
+      expect(table.transactionRequests).toHaveLength(3);
     }),
   );
 });

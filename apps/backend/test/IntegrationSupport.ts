@@ -36,7 +36,7 @@ import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 
 import { newIdentifier, nowIso } from "../src/Identifiers.ts";
 import { campaignKey, itemReader, str, tableLogicalId } from "../src/storage/Items.ts";
-import { mailboxFeedbackWrites, unsubscribeWrites } from "../src/storage/Addresses.ts";
+import { mailboxFeedbackWrites } from "../src/storage/Addresses.ts";
 import { audienceOperations } from "../src/storage/Audience.ts";
 import { campaignStoreOperations } from "../src/storage/Campaigns.ts";
 import { feedbackWrites } from "../src/storage/Feedback.ts";
@@ -293,7 +293,6 @@ export const liveStorage = (
       ...audienceOperations(operations, tokens),
       ...campaignStoreOperations(operations, tokens),
       ...mailboxFeedbackWrites(updates),
-      ...unsubscribeWrites(updates),
       ...feedbackWrites(transactions),
     } as const;
   });
@@ -811,7 +810,6 @@ export const rateLimitItem = Effect.gen(function* () {
 export type LiveStorage = ReturnType<typeof audienceOperations> &
   ReturnType<typeof campaignStoreOperations> &
   ReturnType<typeof mailboxFeedbackWrites> &
-  ReturnType<typeof unsubscribeWrites> &
   ReturnType<typeof feedbackWrites>;
 
 const statusDeadline = "60 seconds";

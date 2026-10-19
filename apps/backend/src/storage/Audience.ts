@@ -1,6 +1,6 @@
 import { Context, Crypto, Effect, Layer } from "effect";
 
-import { addressReads, addressWrites } from "./Addresses.ts";
+import { addressReads, addressWrites, optOutWrites } from "./Addresses.ts";
 import { contactOperations } from "./Contacts.ts";
 import { listOperations } from "./Lists.ts";
 import { membershipOperations } from "./Membership.ts";
@@ -13,8 +13,9 @@ import { AllTableOperationsHttp, allTableOperations } from "./Table.ts";
 import type { TableOperations } from "./Items.ts";
 
 /**
- * Everything the API does to the audience: contacts, lists, membership, imports and sign-ups, plus
- * the mailability question the send path asks about an address. These share transactions —
+ * Everything the API does to the audience: contacts, lists, membership, imports, sign-ups and
+ * opt-outs, plus the mailability question the send path asks about an address. These share
+ * transactions —
  * creating a contact writes its address reservation, importing writes members and reservations
  * together — so splitting them further would fragment a transaction across services without
  * narrowing a single permission.
@@ -30,6 +31,7 @@ export const audienceOperations = (operations: TableOperations, tokens: Transact
     ...membershipOperations(primitives),
     ...addressReads(primitives),
     ...addressWrites(primitives),
+    ...optOutWrites(primitives),
     ...subscriptionOperations(primitives),
   } as const;
 };

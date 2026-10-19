@@ -121,6 +121,7 @@ const subscriptionsHandlers = HttpApiBuilder.group(EmailerApi, "subscriptions", 
   handlers.handleAll({
     subscribe: (request) => Subscriptions.subscribe(request.payload),
     confirm: (request) => Subscriptions.confirm(request.payload),
+    optOut: (request) => Subscriptions.optOut(request.payload),
   }),
 );
 

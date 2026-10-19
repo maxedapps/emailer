@@ -4,6 +4,7 @@ import { Command, Flag } from "effect/cli";
 
 import { report, withClient } from "../Client.ts";
 import { idArgument } from "../Flags.ts";
+import { refuse } from "../Terminal.ts";
 
 const keysCreate = Command.make(
   "create",
@@ -20,16 +21,31 @@ const keysCreate = Command.make(
       Flag.filterMap(Option.liftPredicate(Arr.isReadonlyArrayNonEmpty), () => "Expected a --list"),
     ),
     confirmUrl: Flag.String("confirm-url").pipe(
-      Flag.withDescription("The site's https page that confirms a sign-up"),
+      Flag.withDescription(
+        "Double opt-in: the site's https page that confirms a sign-up mailed to the subscriber",
+      ),
       Flag.withSchema(Schemas.ConfirmUrl),
+      Flag.optional,
+    ),
+    singleOptIn: Flag.Boolean("single-opt-in").pipe(
+      Flag.withDescription("Single opt-in: a sign-up joins the list at once, with no mail"),
+      Flag.withDefault(false),
     ),
   },
   Effect.fn(function* (input) {
+    // The key's opt-in mode decides how strong its sign-ups' consent is, so it is never a default.
+    if (Option.isSome(input.confirmUrl) === input.singleOptIn) {
+      return yield* refuse("Pass exactly one of --confirm-url <url> and --single-opt-in");
+    }
+
+    const optIn = Option.match(input.confirmUrl, {
+      onNone: () => ({}),
+      onSome: (confirmUrl) => ({ confirmUrl }),
+    });
+
     yield* report(
       yield* withClient((client) =>
-        client.keys.create({
-          payload: { name: input.name, lists: input.lists, confirmUrl: input.confirmUrl },
-        }),
+        client.keys.create({ payload: { name: input.name, lists: input.lists, ...optIn } }),
       ),
     );
   }),

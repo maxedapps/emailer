@@ -771,7 +771,7 @@ describe("keys", () => {
   );
 
   it.effect(
-    "answers 201 for a created key, and 400 for a confirm page that is not https or a list named twice",
+    "answers 201 for a created key with or without a confirm page, and 400 for one that is not https or a list named twice",
     () =>
       Effect.gen(function* () {
         const { respond } = yield* api({ keys: { createKey: () => Effect.void } });
@@ -780,6 +780,10 @@ describe("keys", () => {
           JSON.stringify({ name: "Website", lists: [listId], confirmUrl: url });
 
         expect((yield* respond(send("POST", "/keys", payload(confirmUrl)))).status).toBe(201);
+        expect(
+          (yield* respond(send("POST", "/keys", JSON.stringify({ name: "Site", lists: [listId] }))))
+            .status,
+        ).toBe(201);
         expect(
           (yield* respond(send("POST", "/keys", payload("http://www.example.com/confirm")))).status,
         ).toBe(400);
@@ -912,6 +916,63 @@ describe("subscriptions", () => {
       if (tag !== undefined) {
         expect(response.body).toContain(`"_tag":"${tag}"`);
       }
+    }),
+  );
+
+  /** A sign-up through a key stored without a confirm page: single opt-in. */
+  const signUpDirectly = (state: SubscriptionState): Stubs => {
+    const { confirmUrl: _, ...singleKey } = storedKey;
+
+    return {
+      keys: { getKey: () => Effect.succeed(singleKey) },
+      audience: {
+        subscriptionState: () => Effect.succeed(state),
+        subscribeDirectly: () => Effect.void,
+      },
+    };
+  };
+
+  it.effect.each([
+    [
+      "a new subscriber",
+      SubscriptionState.NotSubscribed(),
+      201,
+      `{"_tag":"Subscribed","listId":"${listId}"}`,
+    ],
+    [
+      "an address that left the list",
+      SubscriptionState.OptedOut(),
+      409,
+      `{"_tag":"AddressOptedOut","email":"${email}"}`,
+    ],
+  ] as const)(
+    "answers a single opt-in sign-up of %s with its status and body",
+    ([_label, state, status, body]) =>
+      Effect.gen(function* () {
+        const { respond } = yield* api(signUpDirectly(state));
+        const response = yield* respond(subscribing());
+
+        expect([response.status, response.body]).toStrictEqual([status, body]);
+      }),
+  );
+
+  it.effect("opts out with 204, and answers 403 for a list outside the key", () =>
+    Effect.gen(function* () {
+      const calls: Array<ReadonlyArray<unknown>> = [];
+
+      const { respond } = yield* api({ audience: { optOut: recording(calls, undefined) } });
+
+      const optingOut = (target: string) =>
+        respond(
+          send("POST", "/subscriptions/opt-out", JSON.stringify({ listId: target, email }), scoped),
+        );
+
+      const done = yield* optingOut(listId);
+      const refused = yield* optingOut(campaignId);
+
+      expect([done.status, done.body]).toStrictEqual([204, ""]);
+      expect([refused.status, refused.body]).toStrictEqual([403, `{"_tag":"Forbidden"}`]);
+      expect(calls).toStrictEqual([[{ email, listId }]]);
     }),
   );
 

@@ -1,5 +1,6 @@
-import { Integration } from "@emailer/api/Api";
+import { Integration, OptIn } from "@emailer/api/Api";
 import {
+  AddressOptedOut,
   AddressUndeliverable,
   ConfirmationNotFound,
   EmailServiceUnavailable,
@@ -35,18 +36,19 @@ const confirmationLink = (
 };
 
 /**
- * Stores the pending sign-up and mails its link. The guard's recent allowance is asked first, so a
- * paused account writes nothing. SES refusing the mail after the write blocks a new one for an hour, which ADR-0027
- * accepts; a submission whose outcome is unknown may have gone out, so it counts as sent.
+ * Stores the pending sign-up and mails its link, which names the list. The guard's recent allowance
+ * is asked first, so a paused account writes nothing. SES refusing the mail after the write blocks
+ * a new one for an hour, which ADR-0027 accepts; a submission whose outcome is unknown may have
+ * gone out, so it counts as sent.
  */
 const requestConfirmation = Effect.fn("Subscriptions.requestConfirmation")(function* (
   payload: Schemas.SubscribePayload,
-  listName: string,
+  confirmPage: string,
 ) {
-  const integration = yield* Integration;
   const audience = yield* AudienceStore;
   const guard = yield* SendGuard;
   const mailer = yield* Mailer;
+  const list = yield* audience.getList(payload.listId);
   const allowance = yield* guard.recent;
 
   if (allowance.refusal !== undefined) {
@@ -68,7 +70,7 @@ const requestConfirmation = Effect.fn("Subscriptions.requestConfirmation")(funct
   });
 
   const confirmUrl = confirmationLink(
-    integration.confirmUrl,
+    confirmPage,
     Schemas.mailboxKey(payload.email),
     payload.listId,
     secret,
@@ -76,7 +78,7 @@ const requestConfirmation = Effect.fn("Subscriptions.requestConfirmation")(funct
 
   yield* Effect.sleep(yield* guard.slot(allowance.limit));
 
-  yield* mailer.send(payload.email, Mail.Confirmation({ listName, confirmUrl })).pipe(
+  yield* mailer.send(payload.email, Mail.Confirmation({ listName: list.name, confirmUrl })).pipe(
     Effect.catchTag("SubmissionUncertain", () => Effect.void),
     Effect.mapError(unavailable(EmailServiceUnavailable, "sendConfirmation")),
   );
@@ -85,8 +87,34 @@ const requestConfirmation = Effect.fn("Subscriptions.requestConfirmation")(funct
 });
 
 /**
- * A site's sign-up: the first half of the double opt-in. Nothing joins the list here; the
- * subscriber does, once they use the mailed link.
+ * A single opt-in (ADR-0037): the subscriber joins at once, with the sign-up as the consent
+ * evidence.
+ */
+const subscribeDirectly = Effect.fn("Subscriptions.subscribeDirectly")(function* (
+  payload: Schemas.SubscribePayload,
+) {
+  const audience = yield* AudienceStore;
+
+  yield* audience.subscribeDirectly({
+    email: payload.email,
+    listId: payload.listId,
+    name: payload.name,
+    attributes: payload.attributes,
+    source: payload.consent.source,
+    wording: payload.consent.wording,
+    ip: payload.ip,
+    contactId: yield* newIdentifier,
+    subscribedAt: yield* nowIso,
+  });
+
+  return Schemas.Subscribed.make({ listId: payload.listId });
+});
+
+/**
+ * A site's sign-up, as its key opts in. A double opt-in key starts the confirmation: nothing joins
+ * the list here; the subscriber does, once they use the mailed link, which also takes them back
+ * after they left. A single opt-in key joins them at once, but never back onto a list they left:
+ * anyone can type an address into a form, and only the mailbox's owner may undo its opt-out.
  */
 export const subscribe = Effect.fn("Subscriptions.subscribe")(function* (
   payload: Schemas.SubscribePayload,
@@ -98,13 +126,22 @@ export const subscribe = Effect.fn("Subscriptions.subscribe")(function* (
     return yield* new Forbidden();
   }
 
-  const list = yield* audience.getList(payload.listId);
   const state = yield* audience.subscriptionState(payload.listId, payload.email);
 
   return yield* SubscriptionState.$match(state, {
     Undeliverable: ({ reason }) => Effect.fail(new AddressUndeliverable({ reason })),
     Subscribed: () => Effect.succeed(Schemas.AlreadySubscribed.make({})),
-    NotSubscribed: () => requestConfirmation(payload, list.name),
+    OptedOut: () =>
+      OptIn.$match(integration.optIn, {
+        Double: ({ confirmUrl }) => requestConfirmation(payload, confirmUrl),
+        Single: () =>
+          Effect.fail(new AddressOptedOut({ email: Schemas.mailboxKey(payload.email) })),
+      }),
+    NotSubscribed: () =>
+      OptIn.$match(integration.optIn, {
+        Double: ({ confirmUrl }) => requestConfirmation(payload, confirmUrl),
+        Single: () => subscribeDirectly(payload),
+      }),
   });
 });
 
@@ -150,4 +187,19 @@ export const confirm = Effect.fn("Subscriptions.confirm")(function* (
   });
 
   return Schemas.Subscribed.make({ listId });
+});
+
+/**
+ * An opt-out from the site's own unsubscribe link (ADR-0037): the same write as the service's
+ * signed link, so repeating it changes nothing.
+ */
+export const optOut = Effect.fn("Subscriptions.optOut")(function* (payload: Schemas.OptOutPayload) {
+  const integration = yield* Integration;
+  const audience = yield* AudienceStore;
+
+  if (!integration.lists.includes(payload.listId)) {
+    return yield* new Forbidden();
+  }
+
+  yield* audience.optOut({ email: payload.email, listId: payload.listId });
 });

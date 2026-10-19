@@ -135,6 +135,7 @@ export const fakeService = (seed: Seed = {}) => {
     handlers.handleAll({
       subscribe: unused("subscriptions.subscribe"),
       confirm: unused("subscriptions.confirm"),
+      optOut: unused("subscriptions.optOut"),
     }),
   );
 

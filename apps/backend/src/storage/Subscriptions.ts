@@ -4,6 +4,7 @@ import {
   ContactChanged,
   ListNotFound,
 } from "@emailer/api/Errors";
+import * as Schemas from "@emailer/api/Schemas";
 import { Data, DateTime, Duration, Effect } from "effect";
 
 import { itemWriter, str, strSet, tableLogicalId } from "./Items.ts";
@@ -47,6 +48,8 @@ export type SubscriptionState = Data.TaggedEnum<{
   Undeliverable: { readonly reason: "suppressed" | "bouncing" };
   /** A member of the list who has not left it. */
   Subscribed: {};
+  /** The address left the list, whether or not its contact is still a member. */
+  OptedOut: {};
   NotSubscribed: {};
 }>;
 
@@ -54,6 +57,15 @@ export const SubscriptionState = Data.taggedEnum<SubscriptionState>();
 
 /** A pending sign-up as requested, before storage gives it its expiry. */
 export type SubscriptionRequest = Omit<PendingSubscription, "ttl">;
+
+/**
+ * A single opt-in sign-up (ADR-0037): whom to add and how, the consent evidence, and the identifier
+ * a new contact would take.
+ */
+export type DirectSubscription = Omit<SubscriptionRequest, "requestedAt" | "secretHash"> & {
+  readonly contactId: string;
+  readonly subscribedAt: string;
+};
 
 /** A confirmation link used, and the identifier a new contact would take. */
 export interface SubscriptionConfirmation {
@@ -77,7 +89,7 @@ export const subscriptionOperations = (
 
   /**
    * The address item and the reservation are read together; the membership only if a contact holds
-   * the address. An address that left the list is not subscribed to it, whatever its membership.
+   * the address. An address that left the list is opted out of it, whatever its membership.
    */
   const subscriptionState = Effect.fn("Storage.subscriptionState")(function* (
     listId: string,
@@ -95,7 +107,11 @@ export const subscriptionOperations = (
       return SubscriptionState.Undeliverable({ reason: address.mailbox });
     }
 
-    if (reservation.Item === undefined || address.optOuts.includes(listId)) {
+    if (address.optOuts.includes(listId)) {
+      return SubscriptionState.OptedOut();
+    }
+
+    if (reservation.Item === undefined) {
       return SubscriptionState.NotSubscribed();
     }
 
@@ -154,6 +170,78 @@ export const subscriptionOperations = (
   });
 
   /**
+   * Joining as an import would, plus the consent record: the steps every opt-in writes, whichever
+   * way it came. The candidate is made at the moment of joining, so its `createdAt` dates the
+   * membership and keys the consent record. That record is append-only: two sign-ups joining in the
+   * same millisecond would share its key, so the later one is refused as a lost race
+   * (`ContactChanged`) rather than replacing the earlier evidence; sent again, it finds the address
+   * subscribed.
+   */
+  const consentedJoin = Effect.fnUntraced(function* (
+    candidate: Schemas.Contact,
+    holders: ReadonlyMap<string, string>,
+    consent: Schemas.ConsentRecord,
+  ) {
+    const joined = yield* joinActions(consent.listId, [candidate], holders, candidate.createdAt);
+
+    return [
+      ...joined.actions,
+      {
+        Put: {
+          Table: tableLogicalId,
+          Item: {
+            ...consentKey(candidate.email, consent.listId, candidate.createdAt),
+            ...(yield* writeConsent(consent)),
+          },
+          ConditionExpression: "attribute_not_exists(pk)",
+        },
+        refused: () => new ContactChanged(),
+      },
+    ] satisfies ReadonlyArray<Action<ContactChanged>>;
+  });
+
+  /**
+   * A single opt-in: joins the list and records the consent in one transaction, with no link to
+   * confirm. It never lifts an opt-out; the caller refuses an address that left the list.
+   */
+  const subscribeDirectly = Effect.fn("Storage.subscribeDirectly")(function* (
+    subscription: DirectSubscription,
+  ) {
+    const { email, listId, subscribedAt } = subscription;
+
+    const [list, holders] = yield* Effect.all(
+      [
+        readItem("subscribeDirectly", listKey(listId)),
+        readHolders(primitives, "subscribeDirectly", [email]),
+      ],
+      { concurrency: 2 },
+    );
+
+    if (list.Item === undefined) {
+      return yield* new ListNotFound();
+    }
+
+    const candidate = contactOf(
+      subscription.contactId,
+      email,
+      subscription.name,
+      subscription.attributes,
+      subscribedAt,
+    );
+
+    return yield* transact(
+      "subscribeDirectly",
+      yield* consentedJoin(candidate, holders, {
+        listId,
+        source: subscription.source,
+        wording: subscription.wording,
+        ip: subscription.ip,
+        subscribedAt,
+      }),
+    );
+  }, retryLostRace);
+
+  /**
    * Joins the pending subscriber to the list as an import would, records the consent, consumes the
    * link and lifts the list's opt-out, in one transaction.
    *
@@ -201,8 +289,6 @@ export const subscriptionOperations = (
       confirmedAt,
     );
 
-    const joined = yield* joinActions(listId, [candidate], holders, confirmedAt);
-
     const liftOptOut: Array<Action<never>> = address.optOuts.includes(listId)
       ? [
           {
@@ -226,24 +312,15 @@ export const subscriptionOperations = (
         },
         refused: () => new ConfirmationNotFound(),
       },
-      ...joined.actions,
-      {
-        Put: {
-          Table: tableLogicalId,
-          Item: {
-            ...consentKey(email, listId, confirmedAt),
-            ...(yield* writeConsent({
-              listId,
-              source: stored.source,
-              wording: stored.wording,
-              ip: stored.ip,
-              requestedAt: stored.requestedAt,
-              confirmedAt,
-              confirmIp: confirmation.confirmIp,
-            })),
-          },
-        },
-      },
+      ...(yield* consentedJoin(candidate, holders, {
+        listId,
+        source: stored.source,
+        wording: stored.wording,
+        ip: stored.ip,
+        requestedAt: stored.requestedAt,
+        confirmedAt,
+        confirmIp: confirmation.confirmIp,
+      })),
       ...liftOptOut,
     ];
 
@@ -252,5 +329,10 @@ export const subscriptionOperations = (
     return listId;
   }, retryLostRace);
 
-  return { subscriptionState, requestSubscription, confirmSubscription } as const;
+  return {
+    subscriptionState,
+    requestSubscription,
+    subscribeDirectly,
+    confirmSubscription,
+  } as const;
 };
