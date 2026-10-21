@@ -1,8 +1,6 @@
 import type { KnipConfig } from "knip";
 
 export default {
-  // The machine's headroom queue the heavy scripts wait in (ADR-0035), installed outside the repository.
-  ignoreBinaries: ["agents"],
   workspaces: {
     ".": {
       // Stack files the Alchemy CLI loads; nothing imports them, so knip cannot find them.

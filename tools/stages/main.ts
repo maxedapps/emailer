@@ -1,7 +1,6 @@
 /**
  * `pnpm stages`: deploys, lists and destroys this worker's own test stages, and sweeps stale ones
- * (ADR-0031). Every command runs the Alchemy CLI on `alchemy.run.ts` with `.env.test`; deploys and
- * destroys wait for the machine's headroom through `agents heavy` (ADR-0035).
+ * (ADR-0031). Every command runs the Alchemy CLI on `alchemy.run.ts` with `.env.test`.
  */
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Console, DateTime, Duration, Effect, Option } from "effect";
@@ -24,9 +23,7 @@ const alchemyArgs = (args: ReadonlyArray<string>) => [
 ];
 
 const run = (args: ReadonlyArray<string>) =>
-  Process.run("agents", ["heavy", "--", "alchemy", ...alchemyArgs(args)]).pipe(
-    Effect.timeout(commandTimeout),
-  );
+  Process.run("alchemy", alchemyArgs(args)).pipe(Effect.timeout(commandTimeout));
 
 const read = (args: ReadonlyArray<string>) =>
   Process.read("alchemy", alchemyArgs(args)).pipe(Effect.timeout(commandTimeout));
