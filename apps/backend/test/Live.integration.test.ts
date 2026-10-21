@@ -27,10 +27,10 @@ import { liveGroups } from "./LiveGroups.ts";
 import type { LiveTest } from "./IntegrationSupport.ts";
 import type { LiveGroup } from "./LiveGroups.ts";
 
-// Alchemy's harness reads `./.env` for every key the environment lacks, so a prod `.env` would leak
-// into the test stage: its alert address, its API token.
+// Alchemy's harness reads `./.env` for every key the environment lacks, so a stray `.env` would leak
+// into the test stage: a prod alert address, a prod API token. The keys come from the `test` vault.
 if (existsSync(".env")) {
-  throw new Error("Move ./.env to .env.prod before a live run: the test harness would read it.");
+  throw new Error("Remove ./.env before a live run: the test harness would read it (ADR-0038).");
 }
 
 // A fresh stage per run, so parallel runs never share one (ADR-0031). Its name goes straight to

@@ -1,6 +1,7 @@
 /**
  * `pnpm stages`: deploys, lists and destroys this worker's own test stages, and sweeps stale ones
- * (ADR-0031). Every command runs the Alchemy CLI on `alchemy.run.ts` with `.env.test`.
+ * (ADR-0031). Every command runs the Alchemy CLI on `alchemy.run.ts` with the deploy keys `agents run`
+ * puts into the environment from the `test` vault (ADR-0038).
  */
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Console, DateTime, Duration, Effect, Option } from "effect";
@@ -14,13 +15,7 @@ const stack = "Emailer";
 /** A deploy or destroy takes minutes; a stalled one fails the command and stops a sweep. */
 const commandTimeout = Duration.minutes(30);
 
-const alchemyArgs = (args: ReadonlyArray<string>) => [
-  ...args,
-  "--config",
-  "alchemy.run.ts",
-  "--env-file",
-  ".env.test",
-];
+const alchemyArgs = (args: ReadonlyArray<string>) => [...args, "--config", "alchemy.run.ts"];
 
 const run = (args: ReadonlyArray<string>) =>
   Process.run("alchemy", alchemyArgs(args)).pipe(Effect.timeout(commandTimeout));

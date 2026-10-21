@@ -16,6 +16,7 @@ We're using Alchemy (alchemy.run) and Effect (effect.website).
 - Test deployments are absolutely wanted - on your own ephemeral test stage (see Test stages)
 - The repository is public: never put details specific to the operator or their company (names, brands, vendors, domains, addresses, account or infrastructure identifiers) into code, tests, fixtures or docs - use neutral placeholders such as `example.com`. A checkout's private names (AWS CLI profile, zones, test inboxes) live in the git-ignored `AGENTS.local.md`: read it when present
 - Deploy output prints the AWS account ID: keep deploy logs out of commits, docs and PR bodies
+- Secrets come from emailer's agentmanager vaults through `agents run` ([ADR-0038](.adr/0038-secrets-from-agentmanager-vaults.md)): `prod` for prod (`pnpm emailer`), `test` for test stages (`pnpm stages`, `pnpm test:integration`, the gate). A worktree takes no `.env*` file and no script loads `.env.prod` or `.env.test`; a root `.env` stays forbidden, since Alchemy would read it. Never print a value: `agents secrets list|diff` show names only, and a probe prints `set`/`unset`
 
 # Landing gate
 
@@ -53,11 +54,11 @@ The shared [`awesome-tests`](~/.agents/skills/awesome-tests/SKILL.md) skill hold
 
 `pnpm leak-check` must pass before every push ([ADR-0034](.adr/0034-leak-check-in-every-landing.md)). It fails when the machine-local pattern file `~/.config/emailer/leak-pattern.txt` is missing or empty, or when its pattern (grep `-E`, case-insensitive) matches a file changed against `origin/main` or a line of the commits `origin/main..HEAD`, messages included. It prints only file names and a line count, never the pattern. The Check runs it before every push.
 
-The pattern file lives only on the machine: one lowercase alternative a line, mode 600. On a machine without it, rebuild it from the operator's local sources rather than asking them, then check that `git grep -lIiEf ~/.config/emailer/leak-pattern.txt origin/main` prints nothing (a hit is a leak to fix or a term to drop). It holds:
+The pattern file lives only on the machine: one lowercase alternative a line, mode 600. On a machine without it, rebuild it from the operator's local sources rather than asking them (read vault values only inside `agents run --env prod`, straight into the file, never printed), then check that `git grep -lIiEf ~/.config/emailer/leak-pattern.txt origin/main` prints nothing (a hit is a leak to fix or a term to drop). It holds:
 
-- the operator's and company's names, with spelling variants (`(ü|ue|u)`), and the street and town of the postal address in `.env.prod`;
-- the private domains in `.env.prod` and `AGENTS.local.md`: a company domain also covers its addresses, the SSO start URL and the profiles named after it;
-- the AWS account IDs in `~/.aws/config`, the Cloudflare account IDs in `~/.alchemy/profiles/*/cloudflare.json`, the zone ID in `AGENTS.local.md` and the prod Lambda URL ID in `.env.prod`'s `EMAILER_API_URL`;
+- the operator's and company's names, with spelling variants (`(ü|ue|u)`), and the street and town of the `prod` vault's `EMAILER_POSTAL_ADDRESS`;
+- the private domains in the `prod` vault and `AGENTS.local.md`: a company domain also covers its addresses, the SSO start URL and the profiles named after it;
+- the AWS account IDs in `~/.aws/config`, the Cloudflare account IDs in `~/.alchemy/profiles/*/cloudflare.json`, the zone ID in `AGENTS.local.md` and the prod Lambda URL ID in the `prod` vault's `EMAILER_API_URL`;
 - the vendors the operator uses beside emailer (`agents knowledge` for the project) and the names of the machines it is checked out on.
 
 It leaves out what is public by design: the repository's GitHub owner, the copyright holder in `LICENSE` and public projects the docs name.
@@ -73,13 +74,13 @@ pnpm refuses any locked package published less than 24 hours ago, `--frozen-lock
 Runtime, end-to-end and manual checks run on a real stage of your own; unit tests and `pnpm check` stay local ([ADR-0031](.adr/0031-own-test-stage-per-worker.md)).
 
 - **Names:** `test-<UTC yyMMddHHmm>-<4 base36>`, made by the tools below. Never use a fixed name (`test`, `test_<user>`): parallel workers would deploy over each other.
-- **Setup:** `.env.test` holds the deploy keys; export CLI credentials and `AWS_REGION` as the README's "Develop and test" shows. If `aws` reports an expired SSO session, ask the operator to run `aws sso login --profile <profile>`.
+- **Setup:** the `test` vault holds the deploy keys, which `pnpm stages` and `pnpm test:integration` read through `agents run --env test`; export CLI credentials and `AWS_REGION` as the README's "Develop and test" shows. If `aws` reports an expired SSO session, ask the operator to run `aws sso login --profile <profile>`.
 - **Create:** `pnpm stages up` deploys a fresh stage and prints its name; `pnpm stages up <stage>` redeploys yours after a change (forced, so no function keeps an old bundle).
-- **Use:** take `apiUrl` from the deploy output and run the CLI with the test keys only, never through `pnpm emailer` (it loads `.env.prod`): `EMAILER_API_URL=<apiUrl> node --env-file=.env.test apps/cli/src/main.ts <command>`. Send only to SES mailbox-simulator addresses.
+- **Use:** take `apiUrl` from the deploy output and run the CLI with the test keys only, never through `pnpm emailer` (it reads the `prod` vault): `EMAILER_API_URL=<apiUrl> agents run --env test -- node apps/cli/src/main.ts <command>` (the variable you set wins over the vault). Send only to SES mailbox-simulator addresses.
 - **Live suite:** `pnpm test:integration` deploys a fresh stage of its own, logs its name and destroys it.
 - **Tear down:** `pnpm stages down <stage>` before you report, then `pnpm stages list` must not show it. A killed live run leaves its stage; destroy it the same way.
 - **Sweep:** `pnpm stages sweep` destroys only test stages older than 4 hours. Never destroy another worker's stage by hand, and leave stages in other formats alone. Work needing a stage beyond 4 hours takes a fresh one.
-- **Access:** public, like prod. The Function URLs answer anyone, the API needs the token from `.env.test`, and the unsubscribe and preview pages need links signed by that stage. Anyone holding `.env.test` (the operator and their agents) may open a test stage; never publish its API token or signed links.
+- **Access:** public, like prod. The Function URLs answer anyone, the API needs the `test` vault's token, and the unsubscribe and preview pages need links signed by that stage. Anyone with the `test` vault (the operator and their agents) may open a test stage; never publish its API token or signed links.
 
 ## Landing
 

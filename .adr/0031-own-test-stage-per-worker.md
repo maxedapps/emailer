@@ -10,6 +10,7 @@
 - Authority: The user decided that runtime, end-to-end and manual tests run on real, ephemeral `test-<id>` Alchemy stages, that parallel workers never share one, that a sweep removes only stale ones, and that each repository sets its own default access for them.
 - Plan: [0031-own-test-stage-per-worker.plan.md](0031-own-test-stage-per-worker.plan.md)
 - Amends: [ADR-0026](0026-prod-data-retention-and-harness-driven-tests.md), which let the live suite pick its stage from `ALCHEMY_TEST_STAGE`, else `test_$USER`.
+- Amended by [ADR-0038](0038-secrets-from-agentmanager-vaults.md): the deploy keys come from the `test` vault through `agents run`, no longer from `.env.test`.
 
 ## Context
 
