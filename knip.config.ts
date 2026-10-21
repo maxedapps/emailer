@@ -1,12 +1,10 @@
 import type { KnipConfig } from "knip";
 
 export default {
-  // The vault reader the secret-reading scripts run under (ADR-0038), installed outside the repository.
-  ignoreBinaries: ["agents"],
   workspaces: {
     ".": {
-      // Stack files the Alchemy CLI loads, and a script `agents run` starts: knip finds neither.
-      entry: ["alchemy.run.ts", "stacks/sending-identity.ts", "tools/stages/main.ts"],
+      // Stack files the Alchemy CLI loads; nothing imports them, so knip cannot find them.
+      entry: ["alchemy.run.ts", "stacks/sending-identity.ts"],
       // Vendored from dmmulroy/anti-slop and kept as upstream ships it.
       ignore: ["tools/oxlint/anti-slop/**"],
       // The tsconfig plugin name @effect/tsgo reads, not a package.

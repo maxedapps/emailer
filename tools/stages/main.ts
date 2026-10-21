@@ -1,7 +1,7 @@
 /**
  * `pnpm stages`: deploys, lists and destroys this worker's own test stages, and sweeps stale ones
- * (ADR-0031). Every command runs the Alchemy CLI on `alchemy.run.ts` with the deploy keys `agents run`
- * puts into the environment from the `test` vault (ADR-0038).
+ * (ADR-0031). Every command runs the Alchemy CLI on `alchemy.run.ts` with the deploy keys in its
+ * environment, which the script fills from an optional `.env.test` (ADR-0039).
  */
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Console, DateTime, Duration, Effect, Option } from "effect";

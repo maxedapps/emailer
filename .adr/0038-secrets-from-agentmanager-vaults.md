@@ -1,6 +1,6 @@
 # ADR-0038: Secrets from agentmanager's vaults
 
-- Status: Accepted
+- Status: Superseded by [ADR-0039](0039-secrets-from-the-process-environment.md)
 - Date: 2026-10-21
 - Accepted: 2026-10-21, after one plan review with the Codex reviewer
 - Authority: On 2026-10-21 the operator asked every project to read its secrets from agentmanager's vaults instead of `.env` files, keeping the files (and Infisical) in place until a later removal they confirm.

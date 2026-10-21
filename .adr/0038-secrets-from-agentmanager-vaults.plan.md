@@ -1,6 +1,6 @@
 # Plan: Secrets from agentmanager's vaults
 
-- Status: Accepted
+- Status: Done; superseded by [ADR-0039](0039-secrets-from-the-process-environment.md)
 - Decision: [ADR-0038](0038-secrets-from-agentmanager-vaults.md)
 
 ## Goal

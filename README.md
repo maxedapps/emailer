@@ -42,7 +42,6 @@ Self-hosted marketing email over Amazon SES. Deploy it to your own AWS account, 
 - An AWS account with **SES production access** in the Region you will deploy to (sandbox can only mail verified addresses and the SES mailbox simulator)
 - A domain you control
 - [Alchemy](https://alchemy.run) **2.0.0-beta.80**, pinned in this repo with Effect **4.0.0**
-- agentmanager's `agents` CLI on the `PATH`: its vaults hold the configuration ([Configure](#configure))
 
 ```sh
 pnpm install --frozen-lockfile
@@ -53,13 +52,13 @@ Do not skip lifecycle scripts. There is no build step: Node 24 runs the TypeScri
 ## First deployment at a glance
 
 1. Get SES production access in your Region.
-2. Fill in the `prod` vault ([Configure](#configure)).
+2. Fill in `.env.prod` ([Configure](#configure)).
 3. Create the Alchemy profile and bootstrap the account ([One-time setup](#one-time-setup)).
 4. Set up the sending identity ([Sending identity](#sending-identity-once-per-account-and-region)):
    - without `EMAILER_DNS`, publish its MAIL FROM and DMARC records first;
    - deploy the identity stack, then publish its DKIM records if DNS is manual;
    - wait until SES reports it verified.
-5. Deploy the service and put `apiUrl` into the `prod` vault ([Deploy the service](#deploy-the-service)).
+5. Deploy the service and put `apiUrl` into `.env.prod` ([Deploy the service](#deploy-the-service)).
 6. If you set `EMAILER_ALERT_EMAIL`, confirm the subscription mail it receives.
 7. Send your first campaign ([Your first campaign](#your-first-campaign)).
 
@@ -71,15 +70,10 @@ Nothing is manual outside the CLI when `EMAILER_DNS` manages your zone, except a
 
 ## Configure
 
-The configuration lives in emailer's agentmanager vaults, one per environment: `prod` for your deployment, `test` for test stages ([Develop and test](#develop-and-test), [ADR-0038](.adr/0038-secrets-from-agentmanager-vaults.md)). `agents run --env <env> -- <command>` runs a command with the vault's variables in its environment; a variable already set in your shell wins. No script reads `.env.prod` or `.env.test`.
+Every command reads its configuration from the process environment ([ADR-0039](.adr/0039-secrets-from-the-process-environment.md)). `.env.example` lists the names. Supply them in either way:
 
-To fill a vault, copy `.env.example` to a file outside the repository, fill it in, import it and delete the copy. Change a single value later with `agents secrets set` (the value on stdin):
-
-```sh
-agents secrets import --env prod <filled copy>
-agents secrets diff --env prod <filled copy>   # names only: every one `same`
-agents secrets list --env prod
-```
+- **Env files:** copy `.env.example` to an untracked `.env.prod` for your deployment, and to `.env.test` for test stages ([Develop and test](#develop-and-test)). `pnpm emailer` loads `.env.prod`; `pnpm stages` and `pnpm test:integration` load `.env.test`. A variable already set in your shell wins, and a missing file is no error. Neither file interpolates `$OTHER`.
+- **A secrets manager** that injects variables into a command, such as `op run`, `infisical run` or `doppler run`: prefix any command with it, e.g. `<tool> run -- pnpm emailer …`, and keep no env file.
 
 Do not keep a plain `.env` in the repository root. Alchemy reads `./.env` as a fallback for every key the environment lacks, so its values would reach test deploys; the live suite refuses to start while one exists.
 
@@ -102,7 +96,7 @@ Do not set `EMAILER_UNSUBSCRIBE_SECRET` or `EMAILER_PREVIEW_SECRET`. Alchemy min
 
 ## One-time setup
 
-**Once per machine.** Alchemy profiles are not AWS CLI profiles. Put the profile's name into the vault as `ALCHEMY_PROFILE=emailer`, so the commands run under `agents run` pick it up:
+**Once per machine.** Alchemy profiles are not AWS CLI profiles. Put the profile's name into your configuration as `ALCHEMY_PROFILE=emailer`, so the deploy commands pick it up:
 
 ```sh
 pnpm exec alchemy profile create emailer
@@ -115,7 +109,7 @@ pnpm exec alchemy profile edit --profile emailer --add AWS --method sso --set ss
 pnpm exec alchemy provider aws bootstrap --aws-profile <your-aws-sso-profile> --region <region>
 ```
 
-**Only for `EMAILER_DNS=cloudflare`.** Add Cloudflare to the profile, with OAuth or an API token that has Zone Read and DNS Edit on the zone. A `CLOUDFLARE_API_TOKEN` together with `CLOUDFLARE_ACCOUNT_ID`, in the environment or the vault, takes precedence over the profile.
+**Only for `EMAILER_DNS=cloudflare`.** Add Cloudflare to the profile, with OAuth or an API token that has Zone Read and DNS Edit on the zone. A `CLOUDFLARE_API_TOKEN` together with `CLOUDFLARE_ACCOUNT_ID`, in the environment or `.env.prod`, takes precedence over the profile.
 
 ```sh
 pnpm exec alchemy profile edit --profile emailer --add Cloudflare
@@ -147,10 +141,10 @@ Publish MX, SPF and DMARC **before** the first deploy, so SES never finds the MA
 ### Deploy and verify
 
 ```sh
-agents run --env prod -- pnpm exec alchemy deploy --config stacks/sending-identity.ts --stage shared --yes --no-input
+pnpm exec alchemy deploy --config stacks/sending-identity.ts --stage shared --env-file .env.prod --yes --no-input
 ```
 
-In `cloudflare` mode, the stack stops at startup without Cloudflare credentials. Renew an expired OAuth login with `agents run --env prod -- pnpm exec alchemy profile refresh --provider Cloudflare`. A `CLOUDFLARE_API_TOKEN` in your shell that belongs to another Cloudflare account overrides the profile: run the deploy as `env -u CLOUDFLARE_API_TOKEN agents run --env prod -- pnpm exec alchemy deploy …`.
+In `cloudflare` mode, the stack stops at startup without Cloudflare credentials. Renew an expired OAuth login with `pnpm exec alchemy profile refresh --env-file .env.prod --provider Cloudflare`. A `CLOUDFLARE_API_TOKEN` in your shell that belongs to another Cloudflare account overrides the profile: run the deploy as `env -u CLOUDFLARE_API_TOKEN pnpm exec alchemy deploy …`.
 
 1. **Manual DNS only:** publish the three `CNAME`s from the stack output `dkimRecords` (`name` → `value`). Copy their target: the zone differs by Region and by identity.
 2. Wait for `DkimStatus=SUCCESS` and `MailFromDomainStatus=SUCCESS`, usually minutes and at most 72 hours.
@@ -179,9 +173,11 @@ In `cloudflare` mode, the stack stops at startup without Cloudflare credentials.
 The identity stack must already be deployed. Pick a durable `--stage` (for example `prod`). Omitting it falls back to `live_$USER`.
 
 ```sh
-agents run --env prod -- pnpm exec alchemy plan   --config alchemy.run.ts --stage prod
-agents run --env prod -- pnpm exec alchemy deploy --config alchemy.run.ts --stage prod --yes --no-input
+pnpm exec alchemy plan   --config alchemy.run.ts --stage prod --env-file .env.prod
+pnpm exec alchemy deploy --config alchemy.run.ts --stage prod --env-file .env.prod --yes --no-input
 ```
+
+With a secrets manager, drop `--env-file .env.prod` and prefix the command instead (`<tool> run -- pnpm exec alchemy …`). Alchemy lets the file named by `--env-file` win over your shell, unlike the `pnpm` scripts.
 
 Do not pass `--detailed`: it prints bound secrets, including `EMAILER_API_TOKEN` and the signing keys. Treat a secret you have printed as exposed and replace it.
 
@@ -196,7 +192,7 @@ The three Function URLs are public (`authType: NONE`): the API authorizes with t
 Outputs: `apiUrl`, `unsubscribeUrl`, `previewUrl`, `alertsTopicArn`. Put `apiUrl` in `EMAILER_API_URL`.
 
 ```sh
-agents run --env prod -- pnpm exec alchemy destroy --config alchemy.run.ts --stage prod --yes --no-input
+pnpm exec alchemy destroy --config alchemy.run.ts --stage prod --env-file .env.prod --yes --no-input
 ```
 
 Destroying a stage deletes its resources and rotates the unsubscribe and preview keys, so every unsubscribe link already sent stops working. The sending identity and Alchemy bootstrap/state buckets stay.
@@ -205,7 +201,7 @@ Stage `prod` keeps its DynamoDB table when destroyed, because it holds every opt
 
 ## Use
 
-`pnpm emailer` runs the CLI with the `prod` vault; variables already set in your shell take precedence. For another environment, run Node under its vault, e.g. `EMAILER_API_URL=<apiUrl> agents run --env test -- node apps/cli/src/main.ts …` for a test stage.
+`pnpm emailer` runs the CLI with `.env.prod` ([Configure](#configure)); variables already set in your shell take precedence. For another file, run Node directly, e.g. `EMAILER_API_URL=<apiUrl> node --env-file=.env.test apps/cli/src/main.ts …` for a test stage.
 
 ```sh
 pnpm emailer --help
@@ -614,19 +610,19 @@ The account suppression list survives `alchemy destroy`. A test run can leave `s
 
 The live integration suite deploys a fresh test stage, runs against it, and destroys it. Automated sends go only to SES mailbox-simulator addresses.
 
-1. Fill the `test` vault with the deploy keys the `prod` vault holds (API token, sender identity, From address, postal address, Region), as [Configure](#configure) shows. Nothing is copied out of a deployment. Never print a value: `agents secrets list` and `diff` show names only, and the scripts read the vault through `agents run --env test`.
+1. Fill `.env.test`, or your secrets manager's test environment, with the deploy keys `.env.prod` holds (API token, sender identity, From address, postal address, Region), as [Configure](#configure) shows. Nothing is copied out of a deployment.
 2. Export CLI credentials and the Region, because the test bodies call AWS through the SDK's default chain, which cannot read an SSO cache:
 
    ```sh
    eval "$(aws configure export-credentials --profile <profile> --format env)"
-   export AWS_REGION=<the Region in the test vault>
+   export AWS_REGION=<the Region in your test configuration>
    ```
 
-3. Run `pnpm test:integration`. It reads the `test` vault through `agents run`, deploys a stage named `test-<UTC yyMMddHHmm>-<4 base36>` and logs the name. Add `--tags-filter=<group>` to run one group (`api`, `cancellation`, `drafting`, `variants`, `unsubscribe`, `subscriptions`, `feedback`), or `-t "<test name>"` for single tests.
+3. Run `pnpm test:integration`. It loads `.env.test` when present, deploys a stage named `test-<UTC yyMMddHHmm>-<4 base36>` and logs the name. Add `--tags-filter=<group>` to run one group (`api`, `cancellation`, `drafting`, `variants`, `unsubscribe`, `subscriptions`, `feedback`), or `-t "<test name>"` for single tests.
 
 Before landing, run `pnpm gate` ([ADR-0033](.adr/0033-landing-gate-scoped-to-the-change.md)): it runs `pnpm check`, then the live suite for only the groups the change against `origin/main` reaches. A docs, CLI or tooling change deploys no stage.
 
-`pnpm stages` manages test stages with the same vault and credentials ([ADR-0031](.adr/0031-own-test-stage-per-worker.md)):
+`pnpm stages` manages test stages with the same configuration and credentials ([ADR-0031](.adr/0031-own-test-stage-per-worker.md)):
 
 ```sh
 pnpm stages up            # deploy a fresh test stage and print its name
