@@ -70,8 +70,14 @@ describe("composeConfirmation", () => {
   const message = composeConfirmation("News & <Updates>", confirmUrl, postalAddress);
 
   it("asks to confirm the list by name, and sets no unsubscribe headers", () => {
-    expect(message.subject).toBe("Please confirm your subscription to News & <Updates>");
+    expect(message.subject).toBe("Please confirm your email address for News & <Updates>");
     expect(message.headers).toStrictEqual([]);
+  });
+
+  it("never calls the sign-up a subscription, which can read as paid", () => {
+    for (const part of [message.subject, message.text, message.html]) {
+      expect(part).not.toMatch(/subscri/i);
+    }
   });
 
   it("gives the link, its expiry, what to do if it wasn't you, and the postal address", () => {

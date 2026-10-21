@@ -330,7 +330,7 @@ describe("makeSend", () => {
         Destination: { ToAddresses: ["sam@example.com"] },
         Content: {
           Simple: {
-            Subject: { Data: "Please confirm your subscription to News" },
+            Subject: { Data: "Please confirm your email address for News" },
             Headers: [],
           },
         },

@@ -174,9 +174,9 @@ export const composeConfirmation = (
   const ignore = "If you didn't ask for this, ignore this email and you won't be added.";
 
   return {
-    subject: `Please confirm your subscription to ${listName}`,
+    subject: `Please confirm your email address for ${listName}`,
     text: [
-      `Someone asked to subscribe this address to ${listName}. To confirm, open this link:`,
+      `Someone asked to add this address to ${listName}. To confirm, open this link:`,
       "",
       confirmUrl,
       "",
@@ -187,8 +187,8 @@ export const composeConfirmation = (
     ].join("\n"),
     html: [
       `<div style="max-width:600px;margin:0 auto;padding:24px;font-family:${confirmationFont};font-size:16px;line-height:1.5;color:#111827;">`,
-      `<p>Someone asked to subscribe this address to <strong>${escapeHtml(listName)}</strong>.</p>`,
-      `<p><a href="${escapeHtml(confirmUrl)}" style="display:inline-block;padding:12px 20px;background-color:#111827;color:#ffffff;text-decoration:none;border-radius:6px;">Confirm my subscription</a></p>`,
+      `<p>Someone asked to add this address to <strong>${escapeHtml(listName)}</strong>.</p>`,
+      `<p><a href="${escapeHtml(confirmUrl)}" style="display:inline-block;padding:12px 20px;background-color:#111827;color:#ffffff;text-decoration:none;border-radius:6px;">Confirm my email address</a></p>`,
       `<p>Or open this link: <a href="${escapeHtml(confirmUrl)}">${escapeHtml(confirmUrl)}</a></p>`,
       `<p>${escapeHtml(expiry)} ${escapeHtml(ignore)}</p>`,
       `<p style="font-size:12px;color:#6b7280;">${escapeHtml(postal)}</p>`,
