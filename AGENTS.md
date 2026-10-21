@@ -46,7 +46,7 @@ The shared [`awesome-tests`](~/.agents/skills/awesome-tests/SKILL.md) skill hold
 
 - Vitest runs at most 4 workers. `pnpm test:integration` and the deploys and destroys of `pnpm stages` wait for headroom through `agents heavy` themselves.
 - A red `pnpm gate` reruns each failed test alone once (a live one on its own fresh stage), prints `passes alone`, `fails alone` or `did not run` for each, appends a line to `flakes.md` for each that passes alone, and stays red. Replace the line's cause `?` and commit it with the fix or the skip.
-- Skip a flaky test only as `it.skipIf(vi.getRealSystemTime() < Date.parse("<until>"))(…) // flaky: task-<N> until <until>`, at most 14 days ahead; it runs again from that day. `emailer/flaky-skips` (`tools/oxlint/emailer/`) fails every other skip. Each skip, and each test with a second ledger line, gets a fix task: `agents plan github.com/maxedapps/emailer --title 'Fix flaky <test>' '<brief>'`.
+- Skip a flaky test only as `it.skipIf(vi.getRealSystemTime() < Date.parse("<until>"))(…) // flaky: task-<N> until <until>`, at most 14 days ahead; it runs again from that day. `emailer/flaky-skips` (`tools/oxlint/emailer/`) fails every other skip. Flakes stay in the ledger, never in `agents plan`: the project orchestrator fixes them in batches during maintenance or sweeps, one fix task per batch.
 - Run the whole live suite (`pnpm test:integration`) only when the reach map sends a change to all groups or the orchestrator proposes one, each time after asking your person with `agents report --ask` (scope, estimated cost). When such runs keep timing out, run it in parts (`--tags-filter=<group>`) instead of repeating it.
 
 # Before pushing

@@ -52,7 +52,7 @@
 
 ### T5 — AGENTS.md, README
 
-- AGENTS.md "Flaky tests" section: worker cap; the gate's rerun, verdicts and the ledger (replace the cause `?`, commit with the fix or skip); skips (the lint rule's marker and how it fails; `agents plan github.com/maxedapps/emailer --title 'Fix flaky <test>' '<brief>'` per skip); whole live suite now and then by judgement; link the shared `awesome-tests` skill (it now holds the flake rules), keeping only emailer specifics.
+- AGENTS.md "Flaky tests" section: worker cap; the gate's rerun, verdicts and the ledger (replace the cause `?`, commit with the fix or skip); skips (the lint rule's marker and how it fails; flakes stay in the ledger for the orchestrator's fix batches, superseded in part by task 1534); whole live suite now and then by judgement; link the shared `awesome-tests` skill (it now holds the flake rules), keeping only emailer specifics.
 - README "Develop and test": one line that heavy scripts wait for machine headroom through `agents heavy`.
 - Reach table: `.gitattributes` joins the "none" row; `flakes.md` is `**/*.md` (none).
 
