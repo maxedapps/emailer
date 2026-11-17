@@ -42,13 +42,20 @@
 - The CLI's stderr terminal implements `Terminal.size`, as Node's terminal does for stdout.
 - The API's errors carry the brand type argument that `@effect/tsgo`'s correctness preset now asks for.
 - Tests: credentials are `Redacted`, the alarm fixture carries `ActionConfiguration`, and the campaign tests provide `SecureRandom`. The transport tests provide credentials to the invocation, since the bindings now read them per call. The malformed-request test expects no log line (ADR-0040, 4).
+- `lambdaBasics` gives each function `logging: { retention: Duration.days(7) }` and `timeoutMargin: Duration.zero`, and declares no log group of its own (ADR-0040, 5 and 6).
 - Drop the #1842 workaround from `alchemy.run.ts`; update the version references in the README, `Feedback.ts` and `Tokens.ts`.
 - Verify: `pnpm check`.
 
 ### T3 — Stage and live suite
 
-- Deploy a stage of my own and exercise the CLI against it: a list, a contact, a campaign draft and a test send to the SES mailbox simulator. Then destroy it.
+- Rehearse an existing stage's upgrade: deploy a stage of my own from `origin/main`, forget its five log-group records (`alchemy state rm`), deploy this branch onto it, and check that the five log groups kept their events and 7-day retention and that Lambda's timeouts are unchanged.
+- On that stage, exercise the CLI against it: a list, a contact, a campaign draft and a test send to the SES mailbox simulator. Then destroy it.
 - Run the gate on the merged result. A dependency change reaches every live group, so the operator is asked about that run first (scope and estimated cost).
+
+## Settled findings
+
+- medium bug: beta.87's default 1 s `timeoutMargin` lengthens every function's Lambda timeout, billed on each timeout — fixed: `timeoutMargin: Duration.zero` in `lambdaBasics` (ADR-0040, 6).
+- medium simplification: the `<id>Logs` resources duplicate the function's own `logging.retention` — fixed: `lambdaBasics` sets `logging`, the resources go, and existing stages forget the old records first (ADR-0040, 5 and Consequences).
 
 ## Evidence
 

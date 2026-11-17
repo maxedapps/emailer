@@ -230,7 +230,7 @@ export const makePreviewHandler = (settings: PreviewSender) =>
   );
 
 const previewProps = Effect.gen(function* () {
-  const basics = yield* lambdaBasics("Preview", "preview");
+  const basics = yield* lambdaBasics("preview");
 
   const secret = yield* previewSecret;
 

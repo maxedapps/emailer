@@ -245,7 +245,7 @@ export const handleMessage = (expected: string, body: string) =>
   );
 
 const feedbackProps = Effect.gen(function* () {
-  const basics = yield* lambdaBasics("Feedback", "feedback");
+  const basics = yield* lambdaBasics("feedback");
 
   const mail = yield* configurationSet;
 

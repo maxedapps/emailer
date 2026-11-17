@@ -126,7 +126,7 @@ const subscriptionsHandlers = HttpApiBuilder.group(EmailerApi, "subscriptions", 
 );
 
 const apiProps = Effect.gen(function* () {
-  const basics = yield* lambdaBasics("Api", "api");
+  const basics = yield* lambdaBasics("api");
 
   // Bare tags, not the inline class form: the inline form always builds when
   // yielded, which would run the public functions' props and init inside this

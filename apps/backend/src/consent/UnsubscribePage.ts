@@ -114,7 +114,7 @@ export const makeUnsubscribeHandler = HttpRouter.toHttpEffect(
 ).pipe(Effect.map(respondingToFailures), Effect.provide(routerConfig));
 
 const unsubscribeProps = Effect.gen(function* () {
-  const basics = yield* lambdaBasics("Unsubscribe", "unsubscribe");
+  const basics = yield* lambdaBasics("unsubscribe");
 
   const secret = yield* unsubscribeSecret;
 

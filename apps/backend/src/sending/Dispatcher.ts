@@ -17,7 +17,7 @@ const invocationTimeout = Duration.minutes(5);
 const sliceMargin = Duration.seconds(30);
 
 const dispatcherProps = Effect.gen(function* () {
-  const basics = yield* lambdaBasics("Dispatcher", "dispatcher");
+  const basics = yield* lambdaBasics("dispatcher");
 
   const unsubscribe = yield* UnsubscribeFunction;
   const secret = yield* unsubscribeSecret;

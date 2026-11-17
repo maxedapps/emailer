@@ -1,35 +1,31 @@
 import * as Retry from "@distilled.cloud/aws/Retry";
 import { Stack } from "alchemy";
-import * as AWS from "@alchemy.run/aws";
 import { Duration, Effect, Layer, Schedule } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/http";
 
 import { reportingLayer } from "./Reporting.ts";
 
-const logRetention = Duration.days(7);
-
 /**
  * What every function in the stack shares: a stage-scoped name, the runtime and architecture, and
- * its own log group with bounded retention, declared as `<id>Logs`. Each function keeps its
- * `main: import.meta.url`, because that is what points the bundler at its module.
+ * its log group with a bounded retention, which Alchemy creates (or adopts) before the function can
+ * run and removes with it. Each function keeps its `main: import.meta.url`, because that is what
+ * points the bundler at its module.
  *
- * The log group needs no ordering against its function: the provider adopts a group Lambda already
- * created and applies the retention, and the function removes its group when it is deleted.
+ * Lambda's timeout is each function's own: no margin past it. Alchemy's default margin interrupts a
+ * timed-out handler for its finalizers and holds the invocation a second longer, billed on every
+ * timeout; the dispatcher already ends its slices short of its timeout, and the rest finish far
+ * inside theirs.
  */
-export const lambdaBasics = (id: string, name: string) =>
+export const lambdaBasics = (name: string) =>
   Effect.gen(function* () {
     const { stage } = yield* Stack;
-    const functionName = `emailer-${stage}-${name}`;
-
-    yield* AWS.Logs.LogGroup(`${id}Logs`, {
-      logGroupName: `/aws/lambda/${functionName}`,
-      retention: logRetention,
-    });
 
     return {
-      functionName,
+      functionName: `emailer-${stage}-${name}`,
       runtime: "nodejs24.x",
       architecture: "arm64",
+      logging: { retention: Duration.days(7) },
+      timeoutMargin: Duration.zero,
     } as const;
   });
 
