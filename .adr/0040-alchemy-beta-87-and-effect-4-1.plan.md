@@ -43,7 +43,7 @@
 - The API's errors carry the brand type argument that `@effect/tsgo`'s correctness preset now asks for.
 - Tests: credentials are `Redacted`, the alarm fixture carries `ActionConfiguration`, and the campaign tests provide `SecureRandom`. The transport tests provide credentials to the invocation, since the bindings now read them per call. The malformed-request test expects no log line (ADR-0040, 4).
 - `lambdaBasics` gives each function `logging: { retention: Duration.days(7) }` and `timeoutMargin: Duration.zero`, and declares no log group of its own (ADR-0040, 5 and 6).
-- Drop the #1842 workaround from `alchemy.run.ts`; update the version references in the README, `Feedback.ts` and `Tokens.ts`.
+- Drop the #1842 workaround from `alchemy.run.ts`, and `--force` from `pnpm stages up` and the README's deploy once a stage shows that a code change plans an update; update the version references in the README, `Feedback.ts` and `Tokens.ts`.
 - Verify: `pnpm check`.
 
 ### T3 — Stage and live suite
@@ -61,3 +61,10 @@
 
 - From → to per package (T1), and what was adapted (T2).
 - The stage name and its CLI run, and the gate's result.
+
+As built, on stage `test-2611171615-3n7m`:
+
+- **Upgrade rehearsal:** deployed from `origin/main` (beta.80), one API call logged, the five `<id>Logs` records forgotten with `alchemy state rm Emailer/<stage>/<id>Logs`, then this branch deployed onto it. All five log groups kept their creation time, the API's earlier log stream and 7-day retention; Lambda's timeouts stayed 60, 300, 30, 30 and 10 seconds.
+- **No `--force`:** `alchemy plan` on the deployed stage reported no changes; after one string in `PreviewPage.ts` changed, it planned `Preview` and `Api` as updates.
+- **CLI:** created a list and a contact on the mailbox simulator, added the contact, created a Markdown draft, sent a test copy (`accepted` by SES) and opened its preview link (200, the draft's subject and body).
+- **Teardown:** `pnpm stages down`; `pnpm stages list` no longer shows the stage, and no log group remains.

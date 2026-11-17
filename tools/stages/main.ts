@@ -47,8 +47,7 @@ const up = Command.make(
     });
 
     yield* Console.log(`Deploying ${name}`);
-    // Forced, because Alchemy can plan a changed function as noop and keep its old bundle.
-    yield* run(["deploy", "--stage", name, "--force", "--yes", "--no-input"]);
+    yield* run(["deploy", "--stage", name, "--yes", "--no-input"]);
     yield* Console.log(`Deployed ${name}`);
   }),
 ).pipe(Command.withDescription("Deploy a fresh test stage, or redeploy the one given"));

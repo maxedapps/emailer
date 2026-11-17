@@ -75,7 +75,7 @@ Runtime, end-to-end and manual checks run on a real stage of your own; unit test
 
 - **Names:** `test-<UTC yyMMddHHmm>-<4 base36>`, made by the tools below. Never use a fixed name (`test`, `test_<user>`): parallel workers would deploy over each other.
 - **Setup:** the test configuration holds the deploy keys (see the Secrets rule); export CLI credentials and `AWS_REGION` as the README's "Develop and test" shows. If `aws` reports an expired SSO session, ask the operator to run `aws sso login --profile <profile>`.
-- **Create:** `pnpm stages up` deploys a fresh stage and prints its name; `pnpm stages up <stage>` redeploys yours after a change (forced, so no function keeps an old bundle).
+- **Create:** `pnpm stages up` deploys a fresh stage and prints its name; `pnpm stages up <stage>` redeploys yours after a change.
 - **Use:** take `apiUrl` from the deploy output and run the CLI with the test keys only, never through `pnpm emailer` (it loads the prod configuration): `EMAILER_API_URL=<apiUrl> agents run --env test -- node apps/cli/src/main.ts <command>` (the variable you set wins). Send only to SES mailbox-simulator addresses.
 - **Live suite:** `pnpm test:integration` deploys a fresh stage of its own, logs its name and destroys it.
 - **Tear down:** `pnpm stages down <stage>` before you report, then `pnpm stages list` must not show it. A killed live run leaves its stage; destroy it the same way.

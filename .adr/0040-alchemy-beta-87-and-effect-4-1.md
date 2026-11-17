@@ -3,7 +3,7 @@
 - Status: Accepted
 - Date: 2026-11-17
 - Authority: On 2026-11-17 the operator asked whether any dependency upgrades were possible (task 3939). The brief: land every upgrade installable now, adapt the code to breaking changes and new idioms instead of pinning back, and ask about any upgrade with a real tradeoff.
-- Amends [ADR-0024](0024-typed-errors-and-cost-neutral-storage.md): a request the API cannot decode is no longer logged. Amends [ADR-0026](0026-prod-data-retention-and-harness-driven-tests.md): each function's log group is the function's own, not a separate resource.
+- Amends [ADR-0024](0024-typed-errors-and-cost-neutral-storage.md): a request the API cannot decode is no longer logged. Amends [ADR-0031](0031-own-test-stage-per-worker.md): `pnpm stages up` no longer forces a redeploy. Amends [ADR-0026](0026-prod-data-retention-and-harness-driven-tests.md): each function's log group is the function's own, not a separate resource.
 - Plan: [0040-alchemy-beta-87-and-effect-4-1.plan.md](0040-alchemy-beta-87-and-effect-4-1.plan.md)
 
 ## Context
@@ -22,7 +22,7 @@
 4. **An authenticated request the API cannot decode is answered 400 and not logged** (amends ADR-0024 plan T2). It is the client's error, not a failure of the service, so it now behaves like every other ignored error.
 5. **Each function owns its log group** through `logging: { retention: Duration.days(7) }` in `lambdaBasics`; the separate `<id>Logs` resources go (amends ADR-0026).
 6. **No timeout margin** (`timeoutMargin: Duration.zero`): Lambda's timeout stays each function's `timeout`. The dispatcher already ends its slices short of its timeout, and the other functions finish far inside theirs, so the interruption would buy nothing for a second billed on every timeout.
-7. **Shims for fixed Alchemy issues go:** the stack no longer resolves `AWSEnvironment` first ([alchemy#1842](https://github.com/alchemy-run/alchemy/issues/1842), fixed in beta.85).
+7. **Shims for fixed Alchemy issues go:** the stack no longer resolves `AWSEnvironment` first ([alchemy#1842](https://github.com/alchemy-run/alchemy/issues/1842), fixed in beta.85), and `pnpm stages up` and the README's deploy no longer force a redeploy: the plan now compares a function's code too ([alchemy#1809](https://github.com/alchemy-run/alchemy/issues/1809)), so a changed function is updated (amends ADR-0031).
 
 ## Alternatives
 

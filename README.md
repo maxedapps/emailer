@@ -181,12 +181,6 @@ With a secrets manager, drop `--env-file .env.prod` and prefix the command inste
 
 Do not pass `--detailed`: it prints bound secrets, including `EMAILER_API_TOKEN` and the signing keys. Treat a secret you have printed as exposed and replace it.
 
-After a code change, Alchemy can plan a function as `noop` and keep the old bundle: in beta.80 the plan compares a function's settings, not its code. Redeploy with `--force`, then confirm each function's `CodeSha256` changed:
-
-```sh
-aws lambda get-function-configuration --function-name emailer-<stage>-<api|dispatcher|feedback|unsubscribe|preview> --query CodeSha256
-```
-
 The three Function URLs are public (`authType: NONE`): the API authorizes with the bearer token; the unsubscribe and preview pages authorize with the signed token in their links.
 
 Outputs: `apiUrl`, `unsubscribeUrl`, `previewUrl`, `alertsTopicArn`. Put `apiUrl` in `EMAILER_API_URL`.
