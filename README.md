@@ -38,10 +38,10 @@ Self-hosted marketing email over Amazon SES. Deploy it to your own AWS account, 
 
 ## Requirements
 
-- Node.js **24.19.0** (see `.node-version`) and pnpm **12.3.4**
+- Node.js **24.22.3** (see `.node-version`) and pnpm **12.21.0**
 - An AWS account with **SES production access** in the Region you will deploy to (sandbox can only mail verified addresses and the SES mailbox simulator)
 - A domain you control
-- [Alchemy](https://alchemy.run) **2.0.0-beta.80**, pinned in this repo with Effect **4.0.0**
+- [Alchemy](https://alchemy.run) **2.0.0-beta.87**, pinned in this repo with Effect **4.1.4**
 
 ```sh
 pnpm install --frozen-lockfile

@@ -6,7 +6,7 @@ import {
   StorageUnavailable,
 } from "@emailer/api/Errors";
 import type { SendingPaused } from "@emailer/api/Errors";
-import * as AWS from "alchemy/AWS";
+import * as AWS from "@alchemy.run/aws";
 import { Config, Context, Duration, Effect, Exit, Layer, Option, Schema } from "effect";
 import { RateLimiter } from "effect/persistence";
 

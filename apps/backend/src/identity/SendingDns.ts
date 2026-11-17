@@ -1,8 +1,8 @@
 import * as sesv2 from "@distilled.cloud/aws/sesv2";
 import * as Schemas from "@emailer/api/Schemas";
 import { RemovalPolicy } from "alchemy";
-import * as AWS from "alchemy/AWS";
-import * as Cloudflare from "alchemy/Cloudflare";
+import * as AWS from "@alchemy.run/aws";
+import * as Cloudflare from "@alchemy.run/cloudflare";
 import * as Output from "alchemy/Output";
 import { Config, Data, Effect, Match, Option } from "effect";
 

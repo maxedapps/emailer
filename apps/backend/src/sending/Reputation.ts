@@ -1,4 +1,4 @@
-import * as AWS from "alchemy/AWS";
+import * as AWS from "@alchemy.run/aws";
 import { Effect } from "effect";
 
 import type { Input } from "alchemy";

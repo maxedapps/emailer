@@ -5,7 +5,6 @@ import * as Schemas from "@emailer/api/Schemas";
 import {
   Clock,
   ConfigProvider,
-  Crypto,
   Duration,
   Effect,
   Exit,
@@ -15,6 +14,7 @@ import {
   Predicate,
   Result,
 } from "effect";
+import { Digest, SecureRandom } from "effect/crypto";
 import { TestClock } from "effect/testing";
 
 import { unsubscribeLink } from "../consent/Unsubscribe.ts";
@@ -426,7 +426,13 @@ interface Fixture {
   readonly mailer: MailerDouble;
   readonly guard: GuardDouble;
   readonly layer: Layer.Layer<
-    CampaignWake | AudienceStore | CampaignStore | Mailer | SendGuard | Crypto.Crypto
+    | CampaignWake
+    | AudienceStore
+    | CampaignStore
+    | Mailer
+    | SendGuard
+    | SecureRandom.SecureRandom
+    | Digest.Digest
   >;
 }
 

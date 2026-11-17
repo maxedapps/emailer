@@ -1,6 +1,6 @@
 import type * as dynamodb from "@distilled.cloud/aws/dynamodb";
 import type * as Schemas from "@emailer/api/Schemas";
-import type * as AWS from "alchemy/AWS";
+import type * as AWS from "@alchemy.run/aws";
 import {
   Duration,
   Effect,

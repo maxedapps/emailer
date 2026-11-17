@@ -1,7 +1,8 @@
 import * as Schemas from "@emailer/api/Schemas";
-import * as AWS from "alchemy/AWS";
+import * as AWS from "@alchemy.run/aws";
 import { CampaignNotFound } from "@emailer/api/Errors";
-import { Context, Crypto, Data, Effect, Layer, Schema } from "effect";
+import { Context, Data, Effect, Layer, Schema } from "effect";
+import { SecureRandom } from "effect/crypto";
 
 import { mailboxFeedbackWrites } from "./Addresses.ts";
 import { campaignKey, itemWriter, num, str, tableLogicalId } from "./Items.ts";
@@ -126,7 +127,7 @@ export class FeedbackStore extends Context.Service<FeedbackStore, FeedbackStoreO
   static readonly layer = Layer.effect(FeedbackStore)(
     Effect.gen(function* () {
       const table = yield* dataTable;
-      const crypto = yield* Crypto.Crypto;
+      const random = yield* SecureRandom.SecureRandom;
 
       return FeedbackStore.of(
         feedbackStoreOperations(
@@ -134,7 +135,7 @@ export class FeedbackStore extends Context.Service<FeedbackStore, FeedbackStoreO
             updateItem: yield* AWS.DynamoDB.UpdateItem(table),
             transactWriteItems: yield* AWS.DynamoDB.TransactWriteItems(table),
           },
-          Effect.orDie(crypto.randomUUIDv4),
+          random.uuidV4(),
         ),
       );
     }),

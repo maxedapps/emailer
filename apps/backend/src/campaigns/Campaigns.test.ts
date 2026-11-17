@@ -1,4 +1,4 @@
-import { NodeServices } from "@effect/platform-node";
+import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import * as Errors from "@emailer/api/Errors";
 import type * as Schemas from "@emailer/api/Schemas";
@@ -236,7 +236,7 @@ const fixture = (scenario: Scenario = {}) => {
           recorded.schedules.push({ campaignId: id, runToken, sendAt });
         }),
     }),
-    NodeServices.layer,
+    NodeCrypto.layerSecureRandom,
   );
 
   return { layer, recorded };

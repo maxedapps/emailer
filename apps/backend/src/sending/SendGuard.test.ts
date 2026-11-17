@@ -28,12 +28,13 @@ const account = (
 const described = (
   states: ReadonlyArray<cloudwatch.StateValue>,
 ): cloudwatch.DescribeAlarmsOutput => ({
-  // The SDK's output type makes these three required on every alarm; only the state matters here.
+  // The SDK's output type makes these four required on every alarm; only the state matters here.
   MetricAlarms: states.map((StateValue) => ({
     StateValue,
     Dimensions: [],
     Metrics: [],
     WarmUpConfiguration: { WarmUpPeriodDurationInMinutes: 0 },
+    ActionConfiguration: { AlarmTagsPropagation: { Enabled: false } },
   })),
 });
 

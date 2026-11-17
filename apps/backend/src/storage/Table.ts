@@ -1,5 +1,5 @@
 import { RemovalPolicy, Stack } from "alchemy";
-import * as AWS from "alchemy/AWS";
+import * as AWS from "@alchemy.run/aws";
 import { Effect, Layer } from "effect";
 
 import { listingIndexName, tableLogicalId } from "./Items.ts";

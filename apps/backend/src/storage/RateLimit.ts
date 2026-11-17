@@ -1,5 +1,5 @@
 import type * as dynamodb from "@distilled.cloud/aws/dynamodb";
-import * as AWS from "alchemy/AWS";
+import * as AWS from "@alchemy.run/aws";
 import { Clock, Data, Duration, Effect, Layer, Schema } from "effect";
 import { RateLimiter } from "effect/persistence";
 

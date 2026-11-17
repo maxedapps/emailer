@@ -6,7 +6,8 @@ import {
 } from "@emailer/api/Api";
 import { Unauthorized } from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
-import { Config, Crypto, Data, Effect, Layer, Option, Redacted, Schema } from "effect";
+import { Config, Data, Effect, Layer, Option, Redacted, Schema } from "effect";
+import { Digest } from "effect/crypto";
 
 import { newIdentifier, nowIso } from "../Identifiers.ts";
 import { ApiKeyStore } from "../storage/ApiKeys.ts";
@@ -64,7 +65,7 @@ const decodeScopedKey = Schema.decodeUnknownOption(
 export const subscriptionAuthorization = Layer.effect(SubscriptionAuthorization)(
   Effect.gen(function* () {
     const keys = yield* ApiKeyStore;
-    const crypto = yield* Crypto.Crypto;
+    const digests = yield* Digest.Digest;
 
     return SubscriptionAuthorization.of({
       bearer: Effect.fnUntraced(function* (httpEffect, options) {
@@ -81,7 +82,7 @@ export const subscriptionAuthorization = Layer.effect(SubscriptionAuthorization)
           .pipe(Effect.catchTag("ApiKeyNotFound", () => Effect.fail(new Unauthorized())));
 
         const hash = yield* hashSecret(Redacted.make(secret)).pipe(
-          Effect.provideService(Crypto.Crypto, crypto),
+          Effect.provideService(Digest.Digest, digests),
         );
 
         if (!tokensMatch(stored.secretHash, hash)) {

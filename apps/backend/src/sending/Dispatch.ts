@@ -1,6 +1,6 @@
 import { QueueUnavailable } from "@emailer/api/Errors";
 import { EntityId } from "@emailer/api/Schemas";
-import * as AWS from "alchemy/AWS";
+import * as AWS from "@alchemy.run/aws";
 import { Context, Duration, Effect, Layer, Schema } from "effect";
 
 import { unavailable } from "../Errors.ts";

@@ -1,4 +1,5 @@
-import { Context, Crypto, Effect, Layer } from "effect";
+import { Context, Effect, Layer } from "effect";
+import { SecureRandom } from "effect/crypto";
 
 import { addressReads, addressWrites, optOutWrites } from "./Addresses.ts";
 import { contactOperations } from "./Contacts.ts";
@@ -44,9 +45,9 @@ export class AudienceStore extends Context.Service<AudienceStore, AudienceOperat
   static readonly layer = Layer.effect(AudienceStore)(
     Effect.gen(function* () {
       const operations = yield* allTableOperations;
-      const crypto = yield* Crypto.Crypto;
+      const random = yield* SecureRandom.SecureRandom;
 
-      return AudienceStore.of(audienceOperations(operations, Effect.orDie(crypto.randomUUIDv4)));
+      return AudienceStore.of(audienceOperations(operations, random.uuidV4()));
     }),
   ).pipe(Layer.provide(AllTableOperationsHttp));
 }

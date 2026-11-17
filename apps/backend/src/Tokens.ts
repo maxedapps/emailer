@@ -1,6 +1,8 @@
-import { Crypto, Effect, Option, Redacted, Schema } from "effect";
-import { Base64Url, Hex } from "effect/encoding";
-// Effect exposes no HMAC or constant-time comparison, so these are the platform primitives it would wrap.
+import { Effect, Option, Redacted, Schema } from "effect";
+import { Digest, SecureRandom } from "effect/crypto";
+import { Base64Url } from "effect/encoding";
+// Effect's `Mac` compares tags in a JavaScript loop that is not guaranteed constant-time, so the
+// tokens sign and compare with the platform's own primitives.
 import { createHmac, timingSafeEqual } from "node:crypto";
 
 /**
@@ -100,8 +102,8 @@ export const IssuedSecret = Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]
 
 /** A fresh random secret: 32 bytes as unpadded base64url, 43 characters. */
 export const issueSecret = Effect.gen(function* () {
-  const crypto = yield* Crypto.Crypto;
-  const bytes = yield* Effect.orDie(crypto.randomBytes(secretBytes));
+  const random = yield* SecureRandom.SecureRandom;
+  const bytes = yield* random.randomBytes(secretBytes);
 
   return Redacted.make(Base64Url.encode(bytes));
 });
@@ -110,11 +112,7 @@ export const issueSecret = Effect.gen(function* () {
 export const hashSecret = Effect.fn("Tokens.hashSecret")(function* (
   secret: Redacted.Redacted<string>,
 ) {
-  const crypto = yield* Crypto.Crypto;
+  const digests = yield* Digest.Digest;
 
-  const digest = yield* Effect.orDie(
-    crypto.digest("SHA-256", encoder.encode(Redacted.value(secret))),
-  );
-
-  return Hex.encode(digest);
+  return yield* digests.digestHex(Digest.sha256, encoder.encode(Redacted.value(secret)));
 });

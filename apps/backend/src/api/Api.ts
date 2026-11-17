@@ -1,7 +1,7 @@
 import { NodeCrypto } from "@effect/platform-node";
 import { EmailerApi } from "@emailer/api/Api";
 import * as Schemas from "@emailer/api/Schemas";
-import * as AWS from "alchemy/AWS";
+import * as AWS from "@alchemy.run/aws";
 import { Duration, Effect, Layer, Redacted } from "effect";
 import { HttpRouter, HttpServer, HttpServerResponse } from "effect/http";
 import { HttpApiBuilder } from "effect/http-api";
@@ -199,7 +199,7 @@ const apiLayer = Layer.mergeAll(
   Mailer.layer,
   SendGuard.layer,
   functionServicesLayer,
-).pipe(Layer.provideMerge(NodeCrypto.layer));
+).pipe(Layer.provideMerge(Layer.merge(NodeCrypto.layerSecureRandom, NodeCrypto.layerDigest)));
 
 export default class ApiFunction extends AWS.Lambda.Function<ApiFunction>()(
   "Api",

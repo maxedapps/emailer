@@ -1,11 +1,16 @@
 import { NodeTerminal } from "@effect/platform-node";
-import { Effect, Layer, Stdio, Stream, Terminal } from "effect";
+import { Cause, Effect, Layer, Queue, Stdio, Stream, Terminal } from "effect";
 import { CliError, Prompt } from "effect/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 /** A command refused before any request, with `userMessage` as all it prints. */
 export const refuse = (userMessage: string) =>
   new CliError.UserError({ cause: userMessage, userMessage });
+
+const measure = (): Terminal.Size => ({
+  columns: process.stderr.columns ?? 0,
+  rows: process.stderr.rows ?? 0,
+});
 
 /**
  * Node's terminal — keypresses from stdin, raw mode — with every write and measurement moved to
@@ -20,8 +25,23 @@ export const stderrTerminal = Layer.effect(Terminal.Terminal)(
     return Terminal.make({
       readInput: terminal.readInput,
       readLine: terminal.readLine,
-      columns: Effect.sync(() => process.stderr.columns ?? 0),
-      rows: Effect.sync(() => process.stderr.rows ?? 0),
+      columns: Effect.sync(() => measure().columns),
+      rows: Effect.sync(() => measure().rows),
+      size: Effect.gen(function* () {
+        const sizes = yield* Queue.sliding<Terminal.Size, Cause.Done>(1);
+        const onResize = () => Queue.offerUnsafe(sizes, measure());
+
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            process.stderr.off("resize", onResize);
+            Queue.endUnsafe(sizes);
+          }),
+        );
+        process.stderr.on("resize", onResize);
+        onResize();
+
+        return sizes;
+      }),
       display: (text) => Stream.run(Stream.make(text), stdio.stderr({ endOnDone: false })),
     });
   }),

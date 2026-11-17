@@ -1,5 +1,5 @@
 import { Stack } from "alchemy";
-import * as AWS from "alchemy/AWS";
+import * as AWS from "@alchemy.run/aws";
 import { Config, Effect, Layer, Option } from "effect";
 
 import ApiFunction from "./apps/backend/src/api/Api.ts";
@@ -25,15 +25,9 @@ export default Stack(
   "Emailer",
   {
     providers: AWS.providers(),
-    state: AWS.state(),
+    state: AWS.state({ backend: "s3" }),
   },
   Effect.gen(function* () {
-    // Resolve the AWS environment before any function's init does. Alchemy beta.80 pins every
-    // config read made during a function's init into that function's env, and the Scheduler
-    // binding the API holds is otherwise the first to resolve it under the test harness, which
-    // pins the deployer's credentials: https://github.com/alchemy-run/alchemy/issues/1842
-    yield* AWS.AWSEnvironment.current;
-
     const api = yield* ApiFunction;
 
     const unsubscribe = yield* UnsubscribeFunction;

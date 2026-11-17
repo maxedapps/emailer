@@ -18,10 +18,13 @@
     "test": "vitest run --project unit",
     "test:watch": "vitest --project unit",
     "test:integration": "node --env-file-if-exists=.env.test node_modules/vitest/vitest.mjs run --project integration",
-    "check:imports": "node --input-type=module -e 'await import(\"alchemy\"); await import(\"alchemy/AWS\"); await import(\"alchemy/Cloudflare\"); await import(\"@effect/platform-node/NodeRuntime\")'",
+    "check:imports": "node --input-type=module -e 'await import(\"alchemy\"); await import(\"@alchemy.run/aws\"); await import(\"@alchemy.run/cloudflare\"); await import(\"@effect/platform-node/NodeRuntime\")'",
     "check": "pnpm format:check && pnpm lint && pnpm knip && pnpm typecheck && pnpm test && pnpm check:imports"
   },
   "devDependencies": {
+    "@alchemy.run/aws": "catalog:",
+    "@alchemy.run/cloudflare": "catalog:",
+    "@alchemy.run/test": "catalog:",
     "@effect/platform-node": "catalog:",
     "@effect/tsgo": "catalog:",
     "@effect/vitest": "catalog:",
@@ -40,5 +43,5 @@
   "engines": {
     "node": ">=24.19.0 <25"
   },
-  "packageManager": "pnpm@12.3.4"
+  "packageManager": "pnpm@12.21.0"
 }

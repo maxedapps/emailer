@@ -1,5 +1,5 @@
 import * as dynamodb from "@distilled.cloud/aws/dynamodb";
-import type * as AWS from "alchemy/AWS";
+import type * as AWS from "@alchemy.run/aws";
 import { Data, Duration, Effect, ErrorReporter, Predicate, Result, Schedule, Schema } from "effect";
 
 import { StorageUnavailable } from "@emailer/api/Errors";
@@ -20,21 +20,20 @@ export type StoredItem = dynamodb.AttributeMap | undefined;
 /** What a failed condition means: a typed failure, decided from the stored item if it came back. */
 type Refuse<E> = (current: StoredItem) => Effect.Effect<never, E>;
 
-/**
- * The SDK types a failed condition's item and a cancellation's reasons as `any`, and exports the
- * schemas that type them precisely.
+type CancellationReasons = ReadonlyArray<dynamodb.CancellationReason> | undefined;
+
+/*
+ * The SDK reads a failed condition's item and a cancellation's reasons with the same schemas as
+ * any output, such as `GetItem`'s item, but its error classes type both fields `any`. These restore
+ * the declared types; a record's reader validates each stored attribute, as it does for outputs.
  */
-const fromSdk = <T>(schema: Schema.Schema<T>) =>
-  // SAFETY: the SDK's generated schemas are plain data schemas, which need no services to decode.
-  schema as Schema.Codec<T, unknown>;
+const storedItemOf = (failure: dynamodb.ConditionalCheckFailedException) =>
+  // SAFETY: the SDK declares this field as an `AttributeMap`; only its error class widens it.
+  failure.Item as StoredItem;
 
-const decodeStoredItem = Schema.decodeUnknownEffect(
-  Schema.UndefinedOr(Schema.Record(Schema.String, fromSdk(dynamodb.AttributeValue))),
-);
-
-const decodeReasons = Schema.decodeUnknownEffect(
-  Schema.UndefinedOr(Schema.Array(fromSdk(dynamodb.CancellationReason))),
-);
+const reasonsOf = (failure: dynamodb.TransactionCanceledException) =>
+  // SAFETY: the SDK declares this field as a `CancellationReasonList`; only its error class widens it.
+  failure.CancellationReasons as CancellationReasons;
 
 /** A condition failed that no caller gave a meaning to: it cannot happen, so it is a defect. */
 export class UnexpectedCondition extends Data.TaggedError("UnexpectedCondition")<{
@@ -162,7 +161,7 @@ const writePrimitives = (operations: Pick<TableOperations, "putItem">) => {
     const outcome = yield* operations.putItem(request).pipe(
       Effect.as(Result.succeed(undefined)),
       Effect.catchTag("ConditionalCheckFailedException", (failure) =>
-        decodeStoredItem(failure.Item).pipe(corrupt(operation), Effect.map(Result.fail)),
+        Effect.succeed(Result.fail(storedItemOf(failure))),
       ),
       Effect.timeout(operationTimeout),
       Effect.mapError(storageUnavailable(operation)),
@@ -196,7 +195,7 @@ export const updatePrimitives = (operations: Pick<TableOperations, "updateItem">
     const outcome = yield* operations.updateItem(request).pipe(
       Effect.map((output) => Result.succeed(output.Attributes)),
       Effect.catchTag("ConditionalCheckFailedException", (failure) =>
-        decodeStoredItem(failure.Item).pipe(corrupt(operation), Effect.map(Result.fail)),
+        Effect.succeed(Result.fail(storedItemOf(failure))),
       ),
       Effect.timeout(operationTimeout),
       Effect.mapError(storageUnavailable(operation)),
@@ -416,7 +415,7 @@ const withoutRefusal = <E>({ refused: _refused, ...item }: Action<E>): TransactI
 
 /** A cancellation that only condition failures caused, as opposed to a conflict or a throttle. */
 const onlyConditionsFailed = (
-  reasons: ReadonlyArray<dynamodb.CancellationReason> | undefined,
+  reasons: CancellationReasons,
 ): reasons is ReadonlyArray<dynamodb.CancellationReason> =>
   reasons !== undefined &&
   reasons.some((reason) => reason.Code === conditionalCheckFailed) &&
@@ -462,8 +461,7 @@ export const transactionPrimitives = (
       Effect.retry({ schedule: conflictRetry, while: isConflictCancellation }),
       Effect.as(undefined),
       Effect.catchTag("TransactionCanceledException", (failure) =>
-        decodeReasons(failure.CancellationReasons).pipe(
-          corrupt(operation),
+        Effect.succeed(reasonsOf(failure)).pipe(
           Effect.filterOrFail(onlyConditionsFailed, () => failure),
         ),
       ),

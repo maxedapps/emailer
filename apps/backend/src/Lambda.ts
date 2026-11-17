@@ -1,6 +1,6 @@
 import * as Retry from "@distilled.cloud/aws/Retry";
 import { Stack } from "alchemy";
-import * as AWS from "alchemy/AWS";
+import * as AWS from "@alchemy.run/aws";
 import { Duration, Effect, Layer, Schedule } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/http";
 

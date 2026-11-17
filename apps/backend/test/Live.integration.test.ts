@@ -7,8 +7,8 @@
 // A synchronous guard that must run before any test is collected.
 import { existsSync } from "node:fs";
 
-import * as AWS from "alchemy/AWS";
-import * as Test from "alchemy/Test/Vitest";
+import * as AWS from "@alchemy.run/aws";
+import * as Test from "@alchemy.run/test/Vitest";
 import { Effect } from "effect";
 import { describe } from "vitest";
 
@@ -45,7 +45,7 @@ const stageTimeout = 30 * 60_000;
 
 const { test, beforeAll, afterAll, deploy, destroy } = Test.make({
   providers: AWS.providers(),
-  state: AWS.state(),
+  state: AWS.state({ backend: "s3" }),
   stage,
 });
 

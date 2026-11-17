@@ -1,7 +1,7 @@
 import type * as sesv2 from "@distilled.cloud/aws/sesv2";
 import { describe, expect, it } from "@effect/vitest";
-import * as AWS from "alchemy/AWS";
-import { fromCredentials } from "alchemy/AWS/Credentials";
+import * as AWS from "@alchemy.run/aws";
+import { fromCredentials } from "@alchemy.run/aws/Credentials";
 import { Effect, Fiber, Layer, Logger, Redacted, Schema } from "effect";
 import { TestClock } from "effect/testing";
 import { FetchHttpClient } from "effect/http";
@@ -76,7 +76,10 @@ const awsJson = (status: number, body: string, errorType?: string) =>
   });
 
 const credentials = fromCredentials(
-  { accessKeyId: "AKIAEXAMPLEEXAMPLE00", secretAccessKey: "not-a-real-secret" },
+  {
+    accessKeyId: Redacted.make("AKIAEXAMPLEEXAMPLE00"),
+    secretAccessKey: Redacted.make("not-a-real-secret"),
+  },
   "eu-central-1",
 );
 

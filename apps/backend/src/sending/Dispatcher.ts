@@ -1,6 +1,6 @@
 import { NodeCrypto } from "@effect/platform-node";
-import * as AWS from "alchemy/AWS";
-import { Clock, Duration, Effect, Layer, Stream } from "effect";
+import * as AWS from "@alchemy.run/aws";
+import { Clock, Duration, Effect, Layer } from "effect";
 
 import { UnsubscribeFunction, unsubscribeSecret } from "../consent/Unsubscribe.ts";
 import { functionServicesLayer, lambdaBasics } from "../Lambda.ts";
@@ -43,7 +43,7 @@ const dispatcherLayer = Layer.mergeAll(
   SendGuard.layer,
   CampaignWake.layer,
   functionServicesLayer,
-).pipe(Layer.provideMerge(NodeCrypto.layer));
+).pipe(Layer.provideMerge(Layer.merge(NodeCrypto.layerSecureRandom, NodeCrypto.layerDigest)));
 
 export default class DispatcherFunction extends AWS.Lambda.Function<DispatcherFunction>()(
   "Dispatcher",
@@ -51,20 +51,23 @@ export default class DispatcherFunction extends AWS.Lambda.Function<DispatcherFu
   Effect.gen(function* () {
     const services = yield* Layer.build(dispatcherLayer);
 
-    yield* AWS.SQS.consumeQueueMessages(yield* dispatchQueue, { batchSize: 1 }, (records) =>
-      Stream.runForEach(records, (record) =>
-        Effect.gen(function* () {
-          const message = yield* decodeDispatchMessage(record.body);
-          const now = yield* Clock.currentTimeMillis;
+    yield* AWS.SQS.consumeQueueMessages(yield* dispatchQueue, { batchSize: 1 }, (event) =>
+      Effect.forEach(
+        event.Records,
+        (record) =>
+          Effect.gen(function* () {
+            const message = yield* decodeDispatchMessage(record.body);
+            const now = yield* Clock.currentTimeMillis;
 
-          // Each attempt, retries included, reserves its submission, settlement and pause before
-          // the deadline; the margin covers the claim before an attempt, and the checkpoint and
-          // wake-up a slice that runs out of time still writes.
-          yield* runSlice(
-            message,
-            now + Duration.toMillis(invocationTimeout) - Duration.toMillis(sliceMargin),
-          );
-        }),
+            // Each attempt, retries included, reserves its submission, settlement and pause before
+            // the deadline; the margin covers the claim before an attempt, and the checkpoint and
+            // wake-up a slice that runs out of time still writes.
+            yield* runSlice(
+              message,
+              now + Duration.toMillis(invocationTimeout) - Duration.toMillis(sliceMargin),
+            );
+          }),
+        { discard: true },
       ).pipe(failingInvocation, Effect.provideContext(services)),
     );
 

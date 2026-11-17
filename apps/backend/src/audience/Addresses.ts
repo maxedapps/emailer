@@ -1,7 +1,7 @@
 import type * as sesv2 from "@distilled.cloud/aws/sesv2";
 import { EmailServiceUnavailable } from "@emailer/api/Errors";
 import type * as Schemas from "@emailer/api/Schemas";
-import * as AWS from "alchemy/AWS";
+import * as AWS from "@alchemy.run/aws";
 import { Context, Effect, Layer, Option } from "effect";
 
 import { unavailable } from "../Errors.ts";

@@ -1,6 +1,7 @@
 import { ApiKeyNotFound } from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
-import { Context, Crypto, Effect, Layer, Schema } from "effect";
+import { Context, Effect, Layer, Schema } from "effect";
+import { SecureRandom } from "effect/crypto";
 
 import { itemReader, itemWriter, str, tableLogicalId } from "./Items.ts";
 import { allPrimitives } from "./Primitives.ts";
@@ -96,11 +97,9 @@ export class ApiKeyStore extends Context.Service<ApiKeyStore, ApiKeyOperations>(
   static readonly layer = Layer.effect(ApiKeyStore)(
     Effect.gen(function* () {
       const operations = yield* allTableOperations;
-      const crypto = yield* Crypto.Crypto;
+      const random = yield* SecureRandom.SecureRandom;
 
-      return ApiKeyStore.of(
-        apiKeyOperations(allPrimitives(operations, Effect.orDie(crypto.randomUUIDv4))),
-      );
+      return ApiKeyStore.of(apiKeyOperations(allPrimitives(operations, random.uuidV4())));
     }),
   ).pipe(Layer.provide(AllTableOperationsHttp));
 }

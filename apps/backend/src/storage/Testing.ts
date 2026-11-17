@@ -6,7 +6,7 @@
  * from another test file would re-register its suites.
  */
 import * as dynamodb from "@distilled.cloud/aws/dynamodb";
-import type * as AWS from "alchemy/AWS";
+import type * as AWS from "@alchemy.run/aws";
 import { Cause, Effect, Exit, Predicate, Result } from "effect";
 
 import { allPrimitives } from "./Primitives.ts";

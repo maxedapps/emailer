@@ -1,6 +1,6 @@
 import * as scheduler from "@distilled.cloud/aws/scheduler";
 import { describe, expect, it } from "@effect/vitest";
-import type * as AWS from "alchemy/AWS";
+import type * as AWS from "@alchemy.run/aws";
 import { SchedulerUnavailable } from "@emailer/api/Errors";
 import { Effect, Result } from "effect";
 

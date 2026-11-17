@@ -1,7 +1,7 @@
 import type * as sesv2 from "@distilled.cloud/aws/sesv2";
 import * as Retry from "@distilled.cloud/aws/Retry";
 import * as Schemas from "@emailer/api/Schemas";
-import * as AWS from "alchemy/AWS";
+import * as AWS from "@alchemy.run/aws";
 import { Context, Data, Duration, Effect, Layer } from "effect";
 
 import { describeCause } from "../Errors.ts";

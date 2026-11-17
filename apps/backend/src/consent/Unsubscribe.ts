@@ -1,6 +1,6 @@
 import * as Schemas from "@emailer/api/Schemas";
 import { Random } from "alchemy";
-import * as AWS from "alchemy/AWS";
+import * as AWS from "@alchemy.run/aws";
 import { Config, Effect, Option, Redacted, Result, Schema } from "effect";
 import { Base64Url } from "effect/encoding";
 

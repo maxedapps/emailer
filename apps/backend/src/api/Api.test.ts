@@ -6,7 +6,7 @@ import { makeEmailerClient } from "@emailer/api/Client";
 import type { EmailerClient } from "@emailer/api/Client";
 import * as Errors from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
-import * as AWS from "alchemy/AWS";
+import * as AWS from "@alchemy.run/aws";
 import {
   Clock,
   ConfigProvider,
@@ -1255,15 +1255,13 @@ describe("failure reporting", () => {
     }),
   );
 
-  it.effect("logs an authenticated malformed request once, by its tag alone", () =>
+  it.effect("answers an authenticated malformed request 400 and logs nothing", () =>
     Effect.gen(function* () {
       const { respond, lines } = yield* api();
       const { status } = yield* respond(send("POST", "/contacts", '{"email":"no-at-sign"}'));
 
       expect(status).toBe(400);
-      expect(lines).toHaveLength(1);
-      expect(lines[0]).toContain('"error": "HttpApiSchemaError"');
-      expect(lines[0]).not.toContain("no-at-sign");
+      expect(lines).toEqual([]);
     }),
   );
 

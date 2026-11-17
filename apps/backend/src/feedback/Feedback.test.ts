@@ -1,7 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import { CampaignNotFound, StorageUnavailable } from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
-import type * as AWS from "alchemy/AWS";
+import type * as AWS from "@alchemy.run/aws";
 import { ConfigProvider, Effect, Layer, Logger, References, Result } from "effect";
 import { TestClock } from "effect/testing";
 

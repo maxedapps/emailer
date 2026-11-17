@@ -391,6 +391,14 @@ const scriptedTerminal = (answer: string | undefined, displayed: Array<string>) 
   Terminal.make({
     columns: Effect.succeed(80),
     rows: Effect.succeed(24),
+    size: Effect.gen(function* () {
+      const sizes = yield* Queue.unbounded<Terminal.Size, Cause.Done>();
+
+      yield* Queue.offer(sizes, { columns: 80, rows: 24 });
+      yield* Queue.end(sizes);
+
+      return sizes;
+    }),
     readInput: Effect.gen(function* () {
       const input = yield* Queue.unbounded<Terminal.UserInput, Cause.Done>();
 

@@ -1,7 +1,7 @@
 import { NodeCrypto } from "@effect/platform-node";
 import { Stack } from "alchemy";
-import * as AWS from "alchemy/AWS";
-import { Config, Duration, Effect, Layer, Schema, Stream } from "effect";
+import * as AWS from "@alchemy.run/aws";
+import { Config, Duration, Effect, Layer, Schema } from "effect";
 
 import { classify, decodeEmailEvent } from "./FeedbackClassification.ts";
 import { nowIso } from "../Identifiers.ts";
@@ -71,7 +71,7 @@ const feedbackEvents = AWS.SQS.Queue(
  * `alchemy.run.ts` yields this and the function's constructor does not.
  *
  * `events(...).toQueue(...)` would write the queue's policy against its own ARN output and the
- * rule's, while the rule targets the queue: cycles Alchemy beta.80 cannot create on a fresh stage,
+ * rule's, while the rule targets the queue: cycles Alchemy beta.87 cannot create on a fresh stage,
  * since neither a queue nor a rule can be created ahead of its inputs. Both are named instead, so
  * the policy states both ARNs up front and the queue is created before the rule.
  */
@@ -263,7 +263,7 @@ const feedbackProps = Effect.gen(function* () {
 
 /** Every service an event uses, bound once per instance. */
 const feedbackLayer = Layer.mergeAll(FeedbackStore.layer, functionServicesLayer).pipe(
-  Layer.provideMerge(NodeCrypto.layer),
+  Layer.provideMerge(NodeCrypto.layerSecureRandom),
 );
 
 export default class FeedbackFunction extends AWS.Lambda.Function<FeedbackFunction>()(
@@ -272,11 +272,13 @@ export default class FeedbackFunction extends AWS.Lambda.Function<FeedbackFuncti
   Effect.gen(function* () {
     const services = yield* Layer.build(feedbackLayer);
 
-    yield* AWS.SQS.consumeQueueMessages(yield* feedbackEvents, { batchSize: 1 }, (records) =>
+    yield* AWS.SQS.consumeQueueMessages(yield* feedbackEvents, { batchSize: 1 }, (event) =>
       Effect.gen(function* () {
         const expected = yield* expectedConfigurationSet;
 
-        yield* Stream.runForEach(records, (message) => handleMessage(expected, message.body));
+        yield* Effect.forEach(event.Records, (message) => handleMessage(expected, message.body), {
+          discard: true,
+        });
       }).pipe(failingInvocation, Effect.provideContext(services)),
     );
 

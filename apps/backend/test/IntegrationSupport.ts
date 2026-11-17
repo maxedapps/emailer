@@ -20,7 +20,6 @@ import * as Schemas from "@emailer/api/Schemas";
 import {
   Config,
   Context,
-  Crypto,
   Duration,
   Effect,
   Layer,
@@ -32,6 +31,7 @@ import {
   Scope,
   Stream,
 } from "effect";
+import { SecureRandom } from "effect/crypto";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 
 import { newIdentifier, nowIso } from "../src/Identifiers.ts";
@@ -284,8 +284,8 @@ export const liveStorage = (
 
     // The suite drives every capability against one live table, so it composes all four stores'
     // operations over it rather than any one function's service.
-    const crypto = yield* Crypto.Crypto;
-    const tokens = Effect.orDie(crypto.randomUUIDv4);
+    const random = yield* SecureRandom.SecureRandom;
+    const tokens = random.uuidV4();
     const updates = updatePrimitives(operations);
     const transactions = transactionPrimitives(operations, tokens);
 

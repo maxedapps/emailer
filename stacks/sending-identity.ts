@@ -9,8 +9,8 @@
  * used in a From address.
  */
 import { RemovalPolicy, Stack } from "alchemy";
-import * as AWS from "alchemy/AWS";
-import * as Cloudflare from "alchemy/Cloudflare";
+import * as AWS from "@alchemy.run/aws";
+import * as Cloudflare from "@alchemy.run/cloudflare";
 import * as Output from "alchemy/Output";
 import { Config, Effect, Layer, Option } from "effect";
 
@@ -56,7 +56,7 @@ const sendingIdentity = (emailIdentity: string, mailFromDomain: Input<string>) =
 
 export default Stack(
   sendingIdentityStack,
-  { providers, state: AWS.state() },
+  { providers, state: AWS.state({ backend: "s3" }) },
   Effect.gen(function* () {
     const emailIdentity = yield* Config.String("EMAILER_SENDER_IDENTITY");
     const dns = yield* dnsSettings;

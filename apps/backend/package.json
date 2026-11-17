@@ -4,6 +4,8 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "@alchemy.run/aws": "catalog:",
+    "@alchemy.run/cloudflare": "catalog:",
     "@distilled.cloud/aws": "catalog:",
     "@effect/platform-node": "catalog:",
     "@emailer/api": "workspace:*",

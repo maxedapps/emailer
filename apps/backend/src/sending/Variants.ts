@@ -1,5 +1,6 @@
 import * as Schemas from "@emailer/api/Schemas";
-import { Crypto, Effect } from "effect";
+import { Effect } from "effect";
+import { Digest } from "effect/crypto";
 
 const buckets = 100;
 
@@ -14,8 +15,8 @@ export const bucketOf = Effect.fn("Variants.bucketOf")(function* (
   campaignId: string,
   contactId: string,
 ) {
-  const crypto = yield* Crypto.Crypto;
-  const digest = yield* crypto.digest("SHA-256", utf8.encode(`${campaignId}/${contactId}`));
+  const digests = yield* Digest.Digest;
+  const digest = yield* digests.digest(Digest.sha256, utf8.encode(`${campaignId}/${contactId}`));
 
   return new DataView(digest.buffer, digest.byteOffset, 4).getUint32(0) % buckets;
 });

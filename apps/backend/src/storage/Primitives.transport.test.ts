@@ -1,6 +1,6 @@
-import * as AWS from "alchemy/AWS";
-import { fromCredentials } from "alchemy/AWS/Credentials";
-import { Data, Effect, Layer, Result } from "effect";
+import * as AWS from "@alchemy.run/aws";
+import { fromCredentials } from "@alchemy.run/aws/Credentials";
+import { Data, Effect, Layer, Redacted, Result } from "effect";
 import { FetchHttpClient } from "effect/http";
 import { describe, expect, it } from "@effect/vitest";
 import { StorageUnavailable } from "@emailer/api/Errors";
@@ -89,7 +89,10 @@ const ok = () => json(200, {});
 class Refused extends Data.TaggedError("Refused")<{ readonly current: unknown }> {}
 
 const credentials = fromCredentials(
-  { accessKeyId: "AKIAEXAMPLEEXAMPLE00", secretAccessKey: "not-a-real-secret" },
+  {
+    accessKeyId: Redacted.make("AKIAEXAMPLEEXAMPLE00"),
+    secretAccessKey: Redacted.make("not-a-real-secret"),
+  },
   "eu-central-1",
 );
 
@@ -99,12 +102,9 @@ const bindings = (transport: Transport) => {
     Layer.succeed(FetchHttpClient.Fetch, transport.fetch),
   );
 
-  return Layer.merge(
-    Layer.provide(
-      Layer.merge(AWS.DynamoDB.UpdateItemHttp, AWS.DynamoDB.TransactWriteItemsHttp),
-      Layer.merge(credentials, http),
-    ),
-    Layer.provide(functionServicesLayer, http),
+  // As in a function, each call reads the credentials and the client from the invocation's services.
+  return Layer.merge(AWS.DynamoDB.UpdateItemHttp, AWS.DynamoDB.TransactWriteItemsHttp).pipe(
+    Layer.provideMerge(Layer.merge(credentials, Layer.provide(functionServicesLayer, http))),
   );
 };
 

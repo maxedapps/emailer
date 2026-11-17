@@ -7,9 +7,10 @@ import {
   VariantNotFound,
 } from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
-import * as AWS from "alchemy/AWS";
+import * as AWS from "@alchemy.run/aws";
 import type * as dynamodb from "@distilled.cloud/aws/dynamodb";
-import { Context, Crypto, Data, Effect, Layer, Predicate, Schema } from "effect";
+import { Context, Data, Effect, Layer, Predicate, Schema } from "effect";
+import { SecureRandom } from "effect/crypto";
 
 import { CorruptItem } from "../Errors.ts";
 
@@ -1199,11 +1200,9 @@ export class CampaignStore extends Context.Service<CampaignStore, CampaignStoreO
   static readonly layer = Layer.effect(CampaignStore)(
     Effect.gen(function* () {
       const operations = yield* allTableOperations;
-      const crypto = yield* Crypto.Crypto;
+      const random = yield* SecureRandom.SecureRandom;
 
-      return CampaignStore.of(
-        campaignStoreOperations(operations, Effect.orDie(crypto.randomUUIDv4)),
-      );
+      return CampaignStore.of(campaignStoreOperations(operations, random.uuidV4()));
     }),
   ).pipe(Layer.provide(AllTableOperationsHttp));
 }
