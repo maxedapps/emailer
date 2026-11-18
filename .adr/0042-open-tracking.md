@@ -1,6 +1,6 @@
 # ADR-0042: Open tracking per campaign, copy and recipient
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-11-18
 - Authority: Task 4102. A cost study (artifact `emailer-4102-open-tracking-cost`) priced SES open events through the existing feedback path at about $0.003 per 1,000 opens and $0 idle. Max then decided on 2026-11-18:
   - build open tracking. This is his explicit go for its added running cost under [ADR-0032](0032-low-running-cost-is-a-hard-constraint.md);
@@ -86,3 +86,4 @@ Steady state, us-east-1 on-demand prices, free tiers ignored:
   - four injected opens, one marked a likely bot, gave `campaigns get` 2 unique and 3 total (pro 1/2, default 1/1);
   - `campaigns opens` listed both openers with the earlier of the pro reader's two open times;
   - `campaigns list` carried no opens.
+- Landing gate on the merged result: `pnpm check` (1032 unit tests) and the whole live suite on a fresh stage, all seven groups, 43 tests green.
