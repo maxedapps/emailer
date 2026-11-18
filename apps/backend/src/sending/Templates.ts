@@ -1,9 +1,7 @@
 import { InvalidTemplate } from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
-import { Data, Effect, Option, Predicate, Schema, Struct } from "effect";
+import { Data, Effect, Option, Predicate, Record, Schema, Struct } from "effect";
 import { filters, Liquid, LiquidError } from "liquidjs";
-
-import { escapeHtml } from "./Message.ts";
 
 import type { FilterImplOptions, LiquidOptions, Template } from "liquidjs";
 import type { MessageContent } from "./Message.ts";
@@ -110,7 +108,8 @@ const engine = (language: string, escape: boolean): Liquid => {
     memoryLimit,
   };
 
-  const liquid = new Liquid(escape ? { ...options, outputEscape: escapeHtml } : options);
+  // Liquid's own `escape` takes any output, a missing value or a number included.
+  const liquid = new Liquid(escape ? { ...options, outputEscape: "escape" } : options);
 
   for (const name of refusedTags) {
     liquid.registerTag(name, {
@@ -213,18 +212,16 @@ const parsePart = (liquid: Liquid, part: Schemas.TemplatePart, source: string) =
   });
 
 /**
- * The values a contact offers a template. Its own fields win over a same-named attribute, and a
- * blank value is left out, so it counts as missing: Liquid would treat even "" as present.
+ * The values a contact offers a template. Its own fields take the place of same-named attributes,
+ * even a name it lacks, and a blank value is left out, so it counts as missing: Liquid would treat
+ * even "" as present.
  */
 export const contactValues = (contact: Schemas.Contact | undefined): Record<string, string> =>
   contact === undefined
     ? {}
-    : Object.fromEntries(
-        [
-          ...Object.entries(contact.attributes ?? {}),
-          ["email", contact.email] as const,
-          ...(contact.name === undefined ? [] : [["name", contact.name] as const]),
-        ].filter(([, value]) => value.trim() !== ""),
+    : Record.filter(
+        { ...contact.attributes, email: contact.email, name: contact.name ?? "" },
+        (value) => value.trim() !== "",
       );
 
 const renderPart = (liquid: Liquid, part: CompiledPart, scope: Scope) =>
@@ -294,17 +291,22 @@ export const compileCopy = Effect.fn("Templates.compileCopy")(function* (copy: C
       const renderedText = yield* renderPart(plain, text, scope);
       const renderedHtml = html === undefined ? undefined : yield* renderPart(escaped, html, scope);
 
-      const carries = (body: string, escape: (value: string) => string) =>
-        body.includes(escape(recipient.unsubscribeUrl)) &&
-        body.includes(escape(recipient.postalAddress));
+      // The link and the address as the part's own engine prints them, escaped in the HTML part.
+      const carries = (liquid: Liquid, body: string) =>
+        runLiquid(() =>
+          requiredVariables.every((name) =>
+            // SAFETY: without `keepOutputType`, Liquid joins every output into one string.
+            body.includes(liquid.parseAndRenderSync(`{{ ${name} }}`, scope) as string),
+          ),
+        ).pipe(Effect.mapError(({ message }) => new Unrenderable({ message })));
 
-      if (!carries(renderedText, (value) => value)) {
+      if (!(yield* carries(plain, renderedText))) {
         return yield* new Unrenderable({
           message: "the text renders without the unsubscribe link or the postal address",
         });
       }
 
-      if (renderedHtml !== undefined && !carries(renderedHtml, escapeHtml)) {
+      if (renderedHtml !== undefined && !(yield* carries(escaped, renderedHtml))) {
         return yield* new Unrenderable({
           message: "the HTML renders without the unsubscribe link or the postal address",
         });

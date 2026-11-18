@@ -659,10 +659,10 @@ describe("runSlice", () => {
 
   it.effect("skips a member their copy cannot render for, unclaimed, logging no address", () =>
     Effect.gen(function* () {
-      // A's plan is no date, so A's render fails; C has no plan, so C's renders empty.
+      // A has a plan, so A's address goes through `date`, whose error quotes it; C has none.
       const fix = fixture({
         members: [memberA, memberC],
-        text: `Since {{ contact.plan | date: "%Y" }}${footer}`,
+        text: `{% if contact.plan %}{{ contact.email | date: "%Y" }}{% endif %}${footer}`,
       });
 
       const { attempt, named } = yield* runSliceLogged(fix);

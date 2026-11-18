@@ -189,16 +189,18 @@ export const runSlice = Effect.fn("Dispatching.runSlice")(
         ),
         Effect.map((content) => ({ content })),
         Effect.catchTags({
-          InvalidTemplate: ({ message: reason }) => Effect.succeed({ failure: reason }),
-          Unrenderable: ({ message: reason }) => Effect.succeed({ failure: reason }),
+          InvalidTemplate: ({ _tag }) => Effect.succeed({ failure: _tag }),
+          Unrenderable: ({ _tag }) => Effect.succeed({ failure: _tag }),
         }),
       );
 
+      // The error's message can quote the member's values, so only its kind is logged;
+      // `campaigns check` names the recipient and the reason.
       if ("failure" in rendered) {
         yield* Effect.logWarning("recipient unrenderable", {
           campaignId: message.campaignId,
           variant,
-          reason: rendered.failure,
+          error: rendered.failure,
         });
 
         yield* campaigns.skipRecipient(

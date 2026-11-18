@@ -77,3 +77,9 @@
 ## Open questions
 
 - None.
+
+## Settled findings
+
+- high bug: the HTML engine's `outputEscape` was the string-only `escapeHtml`, so a missing value or a number (`{{ forloop.index }}`) in the HTML part failed every such recipient as `unrenderable` — fixed: Liquid's own `outputEscape: "escape"`; the post-render check prints the link and the address through each part's own engine; `Templates.test.ts` covers a missing value and numbers in HTML.
+- medium security: the dispatcher's `recipient unrenderable` warning logged the Liquid message, which can quote a member's value (an address in an attribute) — fixed: it logs only the campaign, copy and error kind; `campaigns check` names recipient and reason; `Dispatching.test.ts` now fails a render on the member's own address.
+- medium bug: a contact without a name let a `name` attribute fill `contact.name` — fixed: `contactValues` overlays both fields, an absent name as blank, before dropping blanks; tested in `Templates.test.ts`.

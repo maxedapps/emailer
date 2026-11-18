@@ -72,6 +72,21 @@ describe("compileCopy", () => {
     }),
   );
 
+  it.effect("prints a missing value as nothing and a number as text in the HTML part", () =>
+    Effect.gen(function* () {
+      const message = yield* render(
+        {
+          subject: "News",
+          text: `News${footer}`,
+          html: `<p>Hi {{ contact.name }}</p>{% for n in (1..2) %}<i>{{ forloop.index }}</i>{% endfor %}{{ 3 }}${htmlFooter}`,
+        },
+        as(undefined),
+      );
+
+      expect(message.html?.startsWith("<p>Hi </p><i>1</i><i>2</i>3<a href=")).toBe(true);
+    }),
+  );
+
   it.effect("names months in the copy's language", () =>
     Effect.gen(function* () {
       const message = yield* render({ ...copy, language: "de-DE" }, as(contact));
@@ -89,6 +104,19 @@ describe("compileCopy", () => {
 
       expect(message.subject).toBe("ada@example.com");
       expect(message.text.startsWith("Ada <Lovelace>\n")).toBe(true);
+    }),
+  );
+
+  it.effect("falls back for a contact without a name, never to a same-named attribute", () =>
+    Effect.gen(function* () {
+      const { name: _, ...unnamed } = contact;
+
+      const message = yield* render(
+        { subject: "News", text: `Hi {{ contact.name | default: "there" }}${footer}` },
+        as({ ...unnamed, attributes: { name: "Attribute" } }),
+      );
+
+      expect(message.text.startsWith("Hi there\n")).toBe(true);
     }),
   );
 
