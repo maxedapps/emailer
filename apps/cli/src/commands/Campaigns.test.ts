@@ -261,10 +261,10 @@ describe("campaign content", () => {
   );
 
   it.effect(
-    "renders an updated --markdown body under the draft's own subject when --subject is absent",
+    "renders an updated --markdown body under the draft's own subject and language when absent",
     () =>
       Effect.gen(function* () {
-        const service = fakeService({ campaigns: [draft] });
+        const service = fakeService({ campaigns: [{ ...draft, language: "de-DE" }] });
 
         yield* runCli(service, [
           "campaigns",
@@ -277,12 +277,14 @@ describe("campaign content", () => {
         const [change] = service.payloadsOf("campaigns.update");
 
         expect(change).not.toHaveProperty("subject");
+        expect(change).not.toHaveProperty("language");
         expect(change).not.toHaveProperty("filter");
         expect(change).toHaveProperty("text", "Fresh");
         expect(change).toHaveProperty(
           "html",
           expect.stringContaining("<title>Release notes</title>"),
         );
+        expect(change).toHaveProperty("html", expect.stringContaining('<html lang="de-DE"'));
       }),
   );
 });

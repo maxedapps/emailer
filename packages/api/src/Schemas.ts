@@ -181,6 +181,9 @@ export const Language = Schema.String.check(
 
 export type Language = typeof Language.Type;
 
+/** The language of a copy that names none. */
+export const defaultLanguage: Language = "en";
+
 const AttributeKey = Schema.String.check(
   Schema.isNonEmpty(),
   Schema.isMaxLength(maxAttributeKeyLength),

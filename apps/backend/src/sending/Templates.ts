@@ -48,9 +48,6 @@ const renderLimitMillis = 1000;
 
 const memoryLimit = 8 * 1024 * 1024;
 
-/** Months and days in `date` follow the copy's language; times are UTC. */
-const defaultLanguage = "en";
-
 /** A copy is one template: nothing may pull in another. */
 const refusedTags = ["include", "render", "layout"] as const;
 
@@ -96,6 +93,7 @@ const strictDate: FilterHandler = function (
   return liquidDate.call(this, value, ...rest) as string;
 };
 
+/** Months and days in `date` follow the copy's language; times are UTC. */
 const engine = (language: string, escape: boolean): Liquid => {
   const options: LiquidOptions = {
     strictFilters: true,
@@ -240,7 +238,7 @@ export const validateParts = Effect.fn("Templates.validateParts")(function* (par
   readonly text?: string | undefined;
   readonly html?: string | null | undefined;
 }) {
-  const plain = engine(defaultLanguage, false);
+  const plain = engine(Schemas.defaultLanguage, false);
 
   if (parts.subject !== undefined) {
     yield* parsePart(plain, "subject", parts.subject);
@@ -251,7 +249,7 @@ export const validateParts = Effect.fn("Templates.validateParts")(function* (par
   }
 
   if (parts.html !== undefined && parts.html !== null) {
-    yield* parsePart(engine(defaultLanguage, true), "html", parts.html);
+    yield* parsePart(engine(Schemas.defaultLanguage, true), "html", parts.html);
   }
 });
 
@@ -261,7 +259,7 @@ export const validateParts = Effect.fn("Templates.validateParts")(function* (par
  * part lost the unsubscribe link or the postal address on the way.
  */
 export const compileCopy = Effect.fn("Templates.compileCopy")(function* (copy: CopySource) {
-  const language = copy.language ?? defaultLanguage;
+  const language = copy.language ?? Schemas.defaultLanguage;
   const plain = engine(language, false);
   const escaped = engine(language, true);
 

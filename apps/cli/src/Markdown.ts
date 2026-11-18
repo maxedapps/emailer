@@ -41,13 +41,19 @@ const escapeHtml = (value: string): string =>
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
 
+/** What a copy's HTML document is titled and written in: its subject and its language. */
+export interface DocumentHead {
+  readonly title: string;
+  readonly language: string;
+}
+
 /**
  * The page every Markdown campaign shares: a fluid table capped at 600px, with an Outlook-only
  * fixed-width wrapper, on a light page colour. The unsubscribe link and the postal address are the
  * Markdown's own to place (ADR-0041).
  */
-const layout = (title: string, body: string): string => `<!doctype html>
-<html lang="en" xmlns="http://www.w3.org/1999/xhtml" xmlns:o="urn:schemas-microsoft-com:office:office">
+const layout = ({ title, language }: DocumentHead, body: string): string => `<!doctype html>
+<html lang="${escapeHtml(language)}" xmlns="http://www.w3.org/1999/xhtml" xmlns:o="urn:schemas-microsoft-com:office:office">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -337,8 +343,8 @@ const shieldingLiquid = () => {
   };
 };
 
-/** Both parts of a campaign from one Markdown source. The subject titles the HTML document. */
-export const renderMarkdown = (markdown: string, subject: string): RenderedBody => {
+/** Both parts of a copy from one Markdown source, the HTML in a document with the copy's head. */
+export const renderMarkdown = (markdown: string, head: DocumentHead): RenderedBody => {
   const liquid = shieldingLiquid();
   const source = liquid.hide(markdown);
 
@@ -350,7 +356,10 @@ export const renderMarkdown = (markdown: string, subject: string): RenderedBody 
         .trim(),
     ),
     html: liquid.restore(
-      layout(liquid.hide(subject), htmlRenderer.parse(source, { async: false })),
+      layout(
+        { ...head, title: liquid.hide(head.title) },
+        htmlRenderer.parse(source, { async: false }),
+      ),
     ),
   };
 };

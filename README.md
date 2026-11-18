@@ -327,7 +327,7 @@ pnpm emailer campaigns variants set <campaignId> b --subject "Release notes" --m
 - **Attributes count until the member is reached.** A change before the dispatcher gets to a member changes their copy; after that, the copy is fixed.
 - **Compare copies through your site's analytics:** give each copy's links their own `utm_content`. There is no open or click tracking. Each send row, and each bounce or complaint, records the copy's key, and every message carries it as the SES tag `variant`.
 - `campaigns get` shows the variants' rules; `campaigns variants get <campaignId> <key>` shows one variant's content. The preview page shows the default copy and lists every variant with its rule, each linking to its own page. `campaigns test --variant <key>` sends one of them, and `--as <email>` sends the one that contact gets.
-- Each copy has its own `--language` for its dates.
+- Each copy has its own `--language` for its dates, which a Markdown copy's HTML also declares as its `lang`. `campaigns update --markdown` keeps the draft's language unless `--language` changes it.
 - To get a segment attribute onto existing contacts, use `contacts set-attributes --file segments.csv`.
 
 ### Commands
@@ -414,8 +414,8 @@ Each command below is run as `pnpm emailer <command>`. `[…]` marks an optional
   - `uncertain`: SES's answer was lost.
 - **`campaigns preview`:** `{ url, expiresAt }`; with `--as`, `{ copy, subject, text, html? }`.
 - **`campaigns check`:** `{ members, filteredOut, skipped, rendered, failures, fallbacks, oddValues, showOne }`. `skipped` counts `unsubscribed`, `suppressed` and `bouncing`; `rendered` counts per copy; `failures` lists `{ email, copy, message }`; `fallbacks` maps `"<copy>: contact.<field>"` to the addresses it falls back for; `oddValues` lists `{ email, copy, field, problem }`; `showOne` is the command that shows one recipient's copy.
-- **`addresses status` / `unsuppress`:** `{ email, status, optOuts, suppression?, transientBounces, consents, pending, accountSuppression }`.
-  - `status` is the mailbox's: `mailable`, `suppressed` or `bouncing`. `optOuts` lists the lists the address left.
+- **`addresses status` / `unsuppress`:** `{ email, status, optOuts, rejoined, suppression?, transientBounces, consents, pending, accountSuppression }`.
+  - `status` is the mailbox's: `mailable`, `suppressed` or `bouncing`. `optOuts` lists the lists the address left, and `rejoined` the lists it confirmed a double opt-in to since. While `optOuts` has an entry, only the `rejoined` lists' campaigns mail it, whatever `status` says.
   - `consents` holds one record per opt-in: a confirmed double opt-in as `{ listId, source, wording, ip, requestedAt, confirmedAt, confirmIp }`, a single opt-in as `{ listId, source, wording, ip, subscribedAt }`. `pending` holds the sign-ups still waiting for confirmation: `{ listId, requestedAt, expiresAt }`.
 - **`keys create`:** `{ id, name, lists, confirmUrl, createdAt, key }`, without `confirmUrl` for a single opt-in key. `keys list` prints the same without `key`. **`keys revoke`:** `{ id, revoked: true }`.
 - **A failure** goes to stderr as the error the API answered, named by its `_tag`, and the command exits non-zero:

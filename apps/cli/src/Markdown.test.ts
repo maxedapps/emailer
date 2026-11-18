@@ -3,9 +3,13 @@ import { readFileSync } from "node:fs";
 
 import { renderMarkdown, styles } from "./Markdown.ts";
 
-const html = (markdown: string) => renderMarkdown(markdown, "Subject").html;
+import type { DocumentHead } from "./Markdown.ts";
 
-const text = (markdown: string) => renderMarkdown(markdown, "Subject").text;
+const head = (title: string, language = "en"): DocumentHead => ({ title, language });
+
+const html = (markdown: string) => renderMarkdown(markdown, head("Subject")).html;
+
+const text = (markdown: string) => renderMarkdown(markdown, head("Subject")).text;
 
 const newsletter = readFileSync(new URL("../test/newsletter.md", import.meta.url), "utf8");
 
@@ -71,7 +75,7 @@ describe("renderMarkdown html", () => {
   });
 
   it("wraps the body in the light, fixed-width layout titled by the subject", () => {
-    const rendered = renderMarkdown("Hello", 'Deals & "news"').html;
+    const rendered = renderMarkdown("Hello", head('Deals & "news"')).html;
 
     expect(rendered.startsWith('<!doctype html>\n<html lang="en"')).toBe(true);
     expect(rendered).toContain('<meta name="color-scheme" content="light">');
@@ -81,8 +85,14 @@ describe("renderMarkdown html", () => {
     expect(rendered.trimEnd().endsWith("</body>\n</html>")).toBe(true);
   });
 
+  it("declares the copy's language on the document", () => {
+    expect(renderMarkdown("Hallo", head("Neuigkeiten", "de-DE")).html).toContain(
+      '<html lang="de-DE"',
+    );
+  });
+
   it("keeps the reference newsletter far below Gmail's clipping size", () => {
-    expect(Buffer.byteLength(renderMarkdown(newsletter, "News").html)).toBeLessThan(20_000);
+    expect(Buffer.byteLength(renderMarkdown(newsletter, head("News")).html)).toBeLessThan(20_000);
   });
 });
 
@@ -142,7 +152,7 @@ describe("renderMarkdown text", () => {
   });
 
   it("separates blocks by one blank line and carries no Markdown syntax", () => {
-    const rendered = renderMarkdown(newsletter, "News").text;
+    const rendered = renderMarkdown(newsletter, head("News")).text;
 
     expect(rendered).not.toMatch(/\n{3,}/);
     expect(rendered).not.toContain("**");
@@ -173,7 +183,7 @@ describe("renderMarkdown text against its html", () => {
     ],
     ["the reference newsletter", newsletter],
   ])("keeps every link of %s followable, with no markup left", (_, markdown) => {
-    const rendered = renderMarkdown(markdown, "Subject");
+    const rendered = renderMarkdown(markdown, head("Subject"));
 
     const hrefs = Array.from(rendered.html.matchAll(/href="([^"]*)"/g), ([, href = ""]) =>
       href.replaceAll("&amp;", "&"),
@@ -201,7 +211,7 @@ describe("renderMarkdown with Liquid", () => {
   ].join("\n");
 
   it("keeps every tag as written in both parts and in the title", () => {
-    const rendered = renderMarkdown(template, '{{ contact.name | default: "News" }} & more');
+    const rendered = renderMarkdown(template, head('{{ contact.name | default: "News" }} & more'));
 
     for (const tag of [
       '{{ contact.name | default: "there" }}',

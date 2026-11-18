@@ -8,6 +8,8 @@ import { entityPageFlags, idArgument, pageQuery } from "../Flags.ts";
 import { renderMarkdown } from "../Markdown.ts";
 import { openInBrowser, refuse } from "../Terminal.ts";
 
+import type { DocumentHead } from "../Markdown.ts";
+
 /** A campaign body comes from one Markdown file, or from a text file and an optional HTML file. */
 const contentFlags = {
   markdown: Flag.FileText("markdown").pipe(
@@ -65,7 +67,9 @@ const chooseContent = (
 
 /** The copy's language, which names months and days in its dates; absent means English. */
 const languageFlag = Flag.String("language").pipe(
-  Flag.withDescription("The copy's language as a BCP 47 tag, such as de-DE, for its dates"),
+  Flag.withDescription(
+    "The copy's language as a BCP 47 tag, such as de-DE, for its dates and its Markdown's HTML",
+  ),
   Flag.withSchema(Schemas.Language),
   Flag.optional,
 );
@@ -76,17 +80,23 @@ const languageOf = (language: Option.Option<string>) =>
 
 const decodeBody = Schema.decodeUnknownEffect(Schemas.CampaignBody);
 
+/** The head of a copy's Markdown document: its subject, in its language or the default one. */
+const headOf = (subject: string, language: Option.Option<string>): DocumentHead => ({
+  title: subject,
+  language: Option.getOrElse(language, () => Schemas.defaultLanguage),
+});
+
 /**
- * The body to send. Markdown renders here, titled by the subject, and a file's body and rendered
- * Markdown meet the same limits, checked before the request. A refusal names the part and the limit,
- * never the content, which can be a whole file. The subject is only read when a Markdown body needs
- * it.
+ * The body to send. Markdown renders here, in a document with the copy's head, and a file's body
+ * and rendered Markdown meet the same limits, checked before the request. A refusal names the part
+ * and the limit, never the content, which can be a whole file. The head is only read when a Markdown
+ * body needs it.
  */
-const bodyOf = <E>(content: Content, subject: Effect.Effect<string, E>) => {
+const bodyOf = <E>(content: Content, head: Effect.Effect<DocumentHead, E>) => {
   const body: Effect.Effect<unknown, E> =
     content.kind === "body"
       ? Effect.succeed(content.body)
-      : Effect.map(subject, (title) => renderMarkdown(content.markdown, title));
+      : Effect.map(head, (document) => renderMarkdown(content.markdown, document));
 
   return Effect.flatMap(body, (value) =>
     decodeBody(value).pipe(
@@ -126,7 +136,7 @@ const campaignsCreate = Command.make(
     const payload = {
       listId: input.list,
       subject: input.subject,
-      ...(yield* bodyOf(content.value, Effect.succeed(input.subject))),
+      ...(yield* bodyOf(content.value, Effect.succeed(headOf(input.subject, input.language)))),
       ...languageOf(input.language),
     };
 
@@ -214,11 +224,18 @@ const campaignsUpdate = Command.make(
 
           // Content flags replace the whole body, so a text file alone drops an earlier HTML body.
           if (Option.isSome(content)) {
-            const subject = Option.isSome(input.subject)
-              ? Effect.succeed(input.subject.value)
-              : Effect.map(client.campaigns.get({ params: { id: input.id } }), (c) => c.subject);
+            // What the change leaves out, the draft keeps: its subject, its language.
+            const head =
+              Option.isSome(input.subject) && Option.isSome(input.language)
+                ? Effect.succeed(headOf(input.subject.value, input.language))
+                : Effect.map(client.campaigns.get({ params: { id: input.id } }), (draft) =>
+                    headOf(
+                      Option.getOrElse(input.subject, () => draft.subject),
+                      Option.orElse(input.language, () => Option.fromUndefinedOr(draft.language)),
+                    ),
+                  );
 
-            const body = yield* bodyOf(content.value, subject);
+            const body = yield* bodyOf(content.value, head);
 
             change.text = body.text;
             change.html = body.html ?? null;
@@ -301,7 +318,7 @@ const variantsSet = Command.make(
 
     const variant = yield* decodeVariant({
       subject: input.subject,
-      ...(yield* bodyOf(content.value, Effect.succeed(input.subject))),
+      ...(yield* bodyOf(content.value, Effect.succeed(headOf(input.subject, input.language)))),
       ...languageOf(input.language),
       ...rule,
     }).pipe(Effect.mapError((failure) => refuse(`The variant is refused: ${failure.message}`)));
