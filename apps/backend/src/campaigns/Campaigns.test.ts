@@ -41,11 +41,16 @@ const progress: Schemas.CampaignProgress = { accepted: 0, rejected: 0, uncertain
 
 const feedback: Schemas.CampaignFeedback = { bounced: 0, complained: 0 };
 
+/** The two tags every body part carries (ADR-0041). */
+const footer = "\n{{ unsubscribe_url }}\n{{ postal_address }}";
+
+const htmlFooter = '<a href="{{ unsubscribe_url }}">Unsubscribe</a> {{ postal_address }}';
+
 const draftCampaign: Schemas.Campaign = {
   id: campaignId,
   listId,
   subject: "Release notes",
-  text: "Hello there",
+  text: `Hello there${footer}`,
   createdAt: "2026-09-11T10:00:00.000Z",
   submission: { state: "draft" },
 };
@@ -281,7 +286,7 @@ describe("create", () => {
 
       const attempt = yield* runWith(
         fix,
-        Campaigns.create({ listId, subject: "Hi", text: "There" }),
+        Campaigns.create({ listId, subject: "Hi", text: `There${footer}` }),
       );
 
       expect(failureOf(attempt)).toStrictEqual(new Errors.ListNotFound());
@@ -292,12 +297,45 @@ describe("create", () => {
   it.effect("stores a draft carrying the payload's body and filter under a fresh id", () =>
     Effect.gen(function* () {
       const fix = fixture();
-      const payload = { listId, subject: "Hi", text: "There", html: "<p>There</p>", filter: {} };
+
+      const payload = {
+        listId,
+        subject: "Hi {{ contact.name }}",
+        text: `There${footer}`,
+        html: `<p>There</p>${htmlFooter}`,
+        filter: {},
+      };
 
       const created = successOf(yield* runWith(fix, Campaigns.create(payload)));
 
       expect(created).toMatchObject({ ...payload, submission: { state: "draft" } });
       expect(fix.recorded.created).toStrictEqual([created]);
+    }),
+  );
+
+  it.effect("refuses a template before any read or write, naming the part and position", () =>
+    Effect.gen(function* () {
+      const fix = fixture();
+
+      const attempt = yield* runWith(
+        fix,
+        Campaigns.create({
+          listId,
+          subject: "Hi {{ contact.name | shout }}",
+          text: `There${footer}`,
+        }),
+      );
+
+      expect(failureOf(attempt)).toStrictEqual(
+        new Errors.InvalidTemplate({
+          part: "subject",
+          message: "undefined filter: shout",
+          line: 1,
+          column: 4,
+        }),
+      );
+      expect(fix.recorded.calls).toStrictEqual([]);
+      expect(fix.recorded.created).toStrictEqual([]);
     }),
   );
 });
@@ -387,6 +425,21 @@ describe("update", () => {
     }),
   );
 
+  it.effect("refuses an edited body without the unsubscribe link, writing nothing", () =>
+    Effect.gen(function* () {
+      const fix = fixture();
+      const attempt = yield* runWith(fix, Campaigns.update(campaignId, { text: "Hi" }));
+
+      expect(failureOf(attempt)).toStrictEqual(
+        new Errors.InvalidTemplate({
+          part: "text",
+          message: "the text part must carry {{ unsubscribe_url }}",
+        }),
+      );
+      expect(fix.recorded.drafts).toStrictEqual([]);
+    }),
+  );
+
   it.effect("moves the draft to another list only when that list exists", () =>
     Effect.gen(function* () {
       const missing = fixture();
@@ -420,7 +473,7 @@ describe("variants", () => {
   it.effect("sets and removes one variant, answering the campaign after each", () =>
     Effect.gen(function* () {
       const fix = fixture();
-      const half = { percent: 50, subject: "Half", text: "Split" };
+      const half = { percent: 50, subject: "Half", text: `Split${footer}` };
 
       const set = yield* runWith(fix, Campaigns.setVariant(campaignId, "half", half));
       const removed = yield* runWith(fix, Campaigns.removeVariant(campaignId, "half"));
@@ -431,6 +484,30 @@ describe("variants", () => {
       ]);
       expect(successOf(set)).toStrictEqual(draftCampaign);
       expect(successOf(removed)).toStrictEqual(draftCampaign);
+    }),
+  );
+
+  it.effect("refuses a variant whose HTML lacks the postal address, writing nothing", () =>
+    Effect.gen(function* () {
+      const fix = fixture();
+
+      const attempt = yield* runWith(
+        fix,
+        Campaigns.setVariant(campaignId, "half", {
+          percent: 50,
+          subject: "Half",
+          text: `Split${footer}`,
+          html: '<a href="{{ unsubscribe_url }}">Unsubscribe</a>',
+        }),
+      );
+
+      expect(failureOf(attempt)).toStrictEqual(
+        new Errors.InvalidTemplate({
+          part: "html",
+          message: "the html part must carry {{ postal_address }}",
+        }),
+      );
+      expect(fix.recorded.variantEdits).toStrictEqual([]);
     }),
   );
 });

@@ -1,6 +1,13 @@
 import { ErrorReporter, Schema } from "effect";
 
-import { CampaignState, NormalizedEmailAddress, PauseReason, Timestamp } from "./Schemas.ts";
+import {
+  CampaignState,
+  CopyKey,
+  NormalizedEmailAddress,
+  PauseReason,
+  TemplatePart,
+  Timestamp,
+} from "./Schemas.ts";
 
 /**
  * Every error the API answers with. Each failure has its own class, so an endpoint declares exactly
@@ -163,11 +170,37 @@ export class ConfirmationRecentlySent extends Schema.TaggedError<
   }
 }
 
-/** The test list has more members than a test send may reach. */
-export class TestAudienceTooLarge extends Schema.TaggedError<
-  TestAudienceTooLarge,
+/**
+ * A copy's template cannot be saved: a syntax error, an unknown filter, tag or variable, or a body
+ * part without the unsubscribe link or the postal address. `line` and `column` point into `part`
+ * when the problem has a place.
+ */
+export class InvalidTemplate extends Schema.TaggedError<
+  InvalidTemplate,
   { readonly brand: unique symbol }
->()("TestAudienceTooLarge", { limit: Schema.Int }, { httpApiStatus: 409 }) {
+>()(
+  "InvalidTemplate",
+  {
+    part: TemplatePart,
+    message: Schema.String,
+    line: Schema.optionalKey(Schema.Int),
+    column: Schema.optionalKey(Schema.Int),
+  },
+  { httpApiStatus: 422 },
+) {
+  override get [ErrorReporter.ignore]() {
+    return true;
+  }
+}
+
+/**
+ * A copy could not be rendered for the contact: a value its template cannot use, such as a date it
+ * cannot read, or a render that lost the unsubscribe link or the postal address.
+ */
+export class RenderFailed extends Schema.TaggedError<
+  RenderFailed,
+  { readonly brand: unique symbol }
+>()("RenderFailed", { copy: CopyKey, message: Schema.String }, { httpApiStatus: 422 }) {
   override get [ErrorReporter.ignore]() {
     return true;
   }

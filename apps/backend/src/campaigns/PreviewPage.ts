@@ -5,8 +5,14 @@ import { HttpRouter, HttpServerResponse } from "effect/http";
 import { functionServicesLayer, lambdaBasics } from "../Lambda.ts";
 import { respondingToFailures } from "../Reporting.ts";
 import { compose, escapeHtml, senderSettings } from "../sending/Message.ts";
+import { compileCopy } from "../sending/Templates.ts";
 import { CampaignReader } from "../storage/Campaigns.ts";
-import { describeDefault, describeRule, variantContent } from "./Copies.ts";
+import {
+  describeDefault,
+  describeRule,
+  placeholderUnsubscribeUrl,
+  variantContent,
+} from "./Copies.ts";
 import {
   maxPreviewTokenLength,
   PreviewFunction,
@@ -15,17 +21,13 @@ import {
   verifyPreviewToken,
 } from "./Previews.ts";
 
-import type { MessageContent } from "../sending/Message.ts";
+import type { CopySource } from "../sending/Templates.ts";
 
 const invocationTimeout = Duration.seconds(10);
 
 const overviewRoute = "/previews/:token";
 
 const copyRoute = "/previews/:token/:key";
-
-/** Stands in for the per-recipient unsubscribe link, which only a real send can mint. */
-export const placeholderUnsubscribeUrl =
-  "https://unsubscribe.invalid/each-recipient-gets-their-own-link";
 
 /**
  * The page may carry an operator's HTML, so it runs no script at all: the document is sandboxed
@@ -117,23 +119,50 @@ const linkedCampaign = (token: string) =>
     return verifyPreviewToken(signingKey, token, Math.floor(now / 1000));
   });
 
-/** One copy composed exactly as a send composes it, placeholder unsubscribe link aside. */
-const copySection = (
+const copyHeader = (settings: PreviewSender, key: string, rule: string, subject: string) =>
+  `<header><dl>
+<dt>Copy</dt><dd>${escapeHtml(key)}, for ${escapeHtml(rule)}</dd>
+<dt>From</dt><dd>${escapeHtml(displayedFrom(settings))}</dd>
+<dt>Subject</dt><dd>${escapeHtml(subject)}</dd>
+</dl></header>`;
+
+const unrenderable = (
   settings: PreviewSender,
   key: string,
   rule: string,
-  content: MessageContent,
-): string => {
-  const message = compose(content, placeholderUnsubscribeUrl, settings.postalAddress);
+  copy: CopySource,
+  reason: string,
+) => `${copyHeader(settings, key, rule, copy.subject)}
+<section><h2>Cannot render without contact values</h2><p>${escapeHtml(reason)}</p></section>`;
 
-  return `<header><dl>
-<dt>Copy</dt><dd>${escapeHtml(key)}, for ${escapeHtml(rule)}</dd>
-<dt>From</dt><dd>${escapeHtml(displayedFrom(settings))}</dd>
-<dt>Subject</dt><dd>${escapeHtml(message.subject)}</dd>
-</dl></header>
+/**
+ * One copy rendered and composed exactly as a send does it, for a recipient with no contact
+ * values, so every fallback shows; the unsubscribe link is a placeholder. A copy that cannot be
+ * rendered so shows why instead.
+ */
+const copySection = (settings: PreviewSender, key: string, rule: string, copy: CopySource) =>
+  compileCopy(copy).pipe(
+    Effect.flatMap((compiled) =>
+      compiled.render({
+        contact: undefined,
+        unsubscribeUrl: placeholderUnsubscribeUrl,
+        postalAddress: settings.postalAddress,
+      }),
+    ),
+    Effect.map((content) => {
+      const message = compose(content, placeholderUnsubscribeUrl);
+
+      return `${copyHeader(settings, key, rule, message.subject)}
 <section><h2>HTML</h2>${htmlPart(message.html)}</section>
 <section><h2>Plain text</h2><pre>${escapeHtml(message.text)}</pre></section>`;
-};
+    }),
+    Effect.catchTags({
+      InvalidTemplate: ({ message }) =>
+        Effect.succeed(unrenderable(settings, key, rule, copy, message)),
+      Unrenderable: ({ message }) =>
+        Effect.succeed(unrenderable(settings, key, rule, copy, message)),
+    }),
+  );
 
 const copyPath = (token: string, key: string) => `/previews/${token}/${encodeURIComponent(key)}`;
 
@@ -170,13 +199,14 @@ ${routes
   .join("\n")}
 </ul></section></nav>`;
 
-      const own = copySection(settings, Schemas.defaultCopy, describeDefault(routes), {
+      const own = yield* copySection(settings, Schemas.defaultCopy, describeDefault(routes), {
         subject: campaign.subject,
         text: campaign.text,
         html: campaign.html,
+        language: campaign.language,
       });
 
-      return respond(200, document(`Preview: ${campaign.subject}`, `${variants}\n${own}`));
+      return respond(200, document("Campaign preview", `${variants}\n${own}`));
     }).pipe(
       // A campaign deleted since the link was signed.
       Effect.catchTag("CampaignNotFound", () => Effect.succeed(notFound)),
@@ -200,14 +230,14 @@ const showCopy = (settings: PreviewSender) =>
       const variant = yield* reader.getVariant(campaignId.value, key);
       const back = `<nav><section><a href="${escapeHtml(`/previews/${token}`)}">All copies</a></section></nav>`;
 
-      const copy = copySection(
+      const copy = yield* copySection(
         settings,
         variant.key,
         describeRule(variant),
         variantContent(variant),
       );
 
-      return respond(200, document(`Preview: ${variant.subject}`, `${back}\n${copy}`));
+      return respond(200, document(`Variant preview: ${variant.key}`, `${back}\n${copy}`));
     }).pipe(
       // A campaign deleted, or a variant removed, since the link was followed.
       Effect.catchTags({

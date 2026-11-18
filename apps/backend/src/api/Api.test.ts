@@ -71,11 +71,14 @@ const contact: Schemas.Contact = { id: contactId, email, createdAt };
 
 const list: Schemas.ContactList = { id: listId, name: "Readers", createdAt };
 
+/** The two tags every body part carries (ADR-0041). */
+const footer = "\n{{ unsubscribe_url }}\n{{ postal_address }}";
+
 const campaign: Schemas.Campaign = {
   id: campaignId,
   listId,
   subject: "Release notes",
-  text: "Hello",
+  text: `Hello${footer}`,
   createdAt,
   submission: { state: "draft" },
 };
@@ -109,6 +112,7 @@ const record = {
   email,
   status: "mailable" as const,
   optOuts: [],
+  rejoined: [],
   transientBounces: [],
   consents: [],
   pending: [],
@@ -178,6 +182,7 @@ const servicesFor = (stubs: Stubs) =>
           "8f14e45fceea167a5a36dedd4bea2543a1b2c3d4e5f60718293a4b5c6d7e8f90",
         EMAILER_PREVIEW_URL: "https://preview.example/",
         EMAILER_PREVIEW_SECRET: previewKey,
+        EMAILER_POSTAL_ADDRESS: "Example Street 1, 12345 Example City",
       }),
     ),
     NodeCrypto.layer,
@@ -460,7 +465,12 @@ describe("campaigns", () => {
 
       const created = yield* call((client) =>
         client.campaigns.create({
-          payload: { listId, subject: "Release notes", text: "Hello", filter: { plan: "pro" } },
+          payload: {
+            listId,
+            subject: "Release notes",
+            text: campaign.text,
+            filter: { plan: "pro" },
+          },
         }),
       );
 
@@ -521,7 +531,7 @@ describe("campaigns", () => {
   it.effect("sets, reads and removes one variant under its path's key", () =>
     Effect.gen(function* () {
       const calls: Array<ReadonlyArray<unknown>> = [];
-      const half = { percent: 50, subject: "Half", text: "Split copy" };
+      const half = { percent: 50, subject: "Half", text: `Split copy${footer}` };
 
       const { call } = yield* api({
         campaigns: {
@@ -563,7 +573,7 @@ describe("campaigns", () => {
         send(
           "PUT",
           `/campaigns/${campaignId}/variants/half`,
-          '{"percent":50,"subject":"Half","text":"Split copy"}',
+          JSON.stringify({ percent: 50, subject: "Half", text: `Split copy${footer}` }),
         ),
       );
 
@@ -1096,18 +1106,11 @@ describe("public errors", () => {
       },
     },
     {
-      error: "TestAudienceTooLarge",
-      status: 409,
-      request: () => send("POST", `/campaigns/${campaignId}/test`, `{"listId":"${listId}"}`),
-      stubs: {
-        audience: {
-          listMembers: () => Effect.succeed({ items: [contact], nextCursor: contactId }),
-        },
-        campaigns: {
-          getSummary: () => Effect.succeed(campaign),
-          getBody: () => Effect.succeed({ text: campaign.text }),
-        },
-      },
+      error: "InvalidTemplate",
+      status: 422,
+      request: () =>
+        send("POST", "/campaigns", JSON.stringify({ listId, subject: "News", text: "No link" })),
+      stubs: {},
     },
     {
       error: "SendingPaused",

@@ -189,6 +189,8 @@ export const subscriptionsSuite = (test: LiveTest) => {
 
         expect((yield* storage.addressRecord(probe)).optOuts).toStrictEqual([list.id]);
         expect(yield* storage.addressStatus(probe, list.id)).toBe("unsubscribed");
+        // ADR-0041: leaving one list keeps every list away.
+        expect(yield* storage.addressStatus(probe, other.id)).toBe("unsubscribed");
 
         expect(yield* Effect.flip(site.subscriptions.subscribe({ payload: signUp }))).toStrictEqual(
           new Errors.AddressOptedOut({ email: probe }),

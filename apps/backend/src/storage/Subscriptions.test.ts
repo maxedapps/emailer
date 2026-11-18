@@ -171,6 +171,8 @@ const suppression = {
   },
 };
 
+const otherListId = "0195f0a0-1111-4222-8333-44444444209e";
+
 describe("subscriptionState", () => {
   it.effect.each([
     ["nothing recorded", [], SubscriptionState.NotSubscribed()],
@@ -186,9 +188,19 @@ describe("subscriptionState", () => {
       [addressItem({ optOuts: { SS: [listId] } })],
       SubscriptionState.OptedOut(),
     ],
+    // ADR-0041: leaving any list keeps every list away, until a confirmed sign-up rejoins it.
     [
       "a member who left another list",
-      [addressItem({ optOuts: { SS: [contactId] } }), reservation, membership],
+      [addressItem({ optOuts: { SS: [otherListId] } }), reservation, membership],
+      SubscriptionState.OptedOut(),
+    ],
+    [
+      "a member who left another list and rejoined this one",
+      [
+        addressItem({ optOuts: { SS: [otherListId] }, rejoined: { SS: [listId] } }),
+        reservation,
+        membership,
+      ],
       SubscriptionState.Subscribed(),
     ],
     [
@@ -207,8 +219,6 @@ describe("subscriptionState", () => {
 });
 
 const newContactId = "0195f0a0-1111-4222-8333-44444444c0de";
-
-const otherListId = "0195f0a0-1111-4222-8333-44444444209e";
 
 const confirmedAt = "2026-09-25T10:30:00.000Z";
 
@@ -328,44 +338,46 @@ describe("confirmSubscription", () => {
       }),
   );
 
-  it.effect("joins the contact holding the address, and lifts only this list's opt-out", () =>
-    Effect.gen(function* () {
-      const table = holding(
-        [pendingItem, list, reservation, addressItem({ optOuts: { SS: [listId, otherListId] } })],
-        [succeeded],
-      );
+  it.effect(
+    "joins the contact holding the address, and rejoins only this list, keeping the opt-outs",
+    () =>
+      Effect.gen(function* () {
+        const table = holding(
+          [pendingItem, list, reservation, addressItem({ optOuts: { SS: [listId, otherListId] } })],
+          [succeeded],
+        );
 
-      yield* confirming(table);
+        yield* confirming(table);
 
-      expect(table.transactionRequests[0]?.TransactItems).toStrictEqual([
-        pendingDelete,
-        {
-          ConditionCheck: {
-            Table: tableLogicalId,
-            Key: { pk: { S: `CONTACT#${contactId}` }, sk: { S: "META" } },
-            ConditionExpression: "attribute_exists(pk)",
+        expect(table.transactionRequests[0]?.TransactItems).toStrictEqual([
+          pendingDelete,
+          {
+            ConditionCheck: {
+              Table: tableLogicalId,
+              Key: { pk: { S: `CONTACT#${contactId}` }, sk: { S: "META" } },
+              ConditionExpression: "attribute_exists(pk)",
+            },
           },
-        },
-        {
-          ConditionCheck: {
-            Table: tableLogicalId,
-            Key: { pk: { S: `EMAIL#${email}` }, sk: { S: "META" } },
-            ConditionExpression: "contactId = :holder",
-            ExpressionAttributeValues: { ":holder": { S: contactId } },
+          {
+            ConditionCheck: {
+              Table: tableLogicalId,
+              Key: { pk: { S: `EMAIL#${email}` }, sk: { S: "META" } },
+              ConditionExpression: "contactId = :holder",
+              ExpressionAttributeValues: { ":holder": { S: contactId } },
+            },
           },
-        },
-        ...joins(contactId),
-        consentPut,
-        {
-          Update: {
-            Table: tableLogicalId,
-            Key: { pk: { S: addressPk }, sk: { S: "ADDRESS" } },
-            UpdateExpression: "DELETE optOuts :list",
-            ExpressionAttributeValues: { ":list": { SS: [listId] } },
+          ...joins(contactId),
+          consentPut,
+          {
+            Update: {
+              Table: tableLogicalId,
+              Key: { pk: { S: addressPk }, sk: { S: "ADDRESS" } },
+              UpdateExpression: "ADD rejoined :list",
+              ExpressionAttributeValues: { ":list": { SS: [listId] } },
+            },
           },
-        },
-      ]);
-    }),
+        ]);
+      }),
   );
 
   it.effect.each([

@@ -9,7 +9,6 @@ import {
   Exit,
   FileSystem,
   Layer,
-  Option,
   PlatformError,
   Queue,
   Redacted,
@@ -69,6 +68,8 @@ interface Seed {
   readonly removeFailures?: ReadonlyArray<Errors.CampaignStateConflict>;
   /** Errors `lists import` answers with, one per call, before it succeeds. */
   readonly importFailures?: ReadonlyArray<Errors.StorageUnavailable>;
+  /** The pages `campaigns check` answers with, one per call. */
+  readonly checkPages?: ReadonlyArray<Schemas.CheckPage>;
 }
 
 /** One request the service received: which endpoint, and what it carried. */
@@ -93,6 +94,7 @@ export const fakeService = (seed: Seed = {}) => {
   const members = seed.members ?? [];
   const removeFailures = [...(seed.removeFailures ?? [])];
   const importFailures = [...(seed.importFailures ?? [])];
+  const checkPages = [...(seed.checkPages ?? [])];
   let imported = 0;
 
   const receive = (endpoint: string, request: Omit<Received, "endpoint"> = {}) =>
@@ -285,15 +287,27 @@ export const fakeService = (seed: Seed = {}) => {
       test: (request) =>
         receive("campaigns.test", { params: request.params, payload: request.payload }).pipe(
           Effect.as({
-            recipients: ("to" in request.payload
-              ? request.payload.to
-              : members.map((member) => member.email)
-            ).map((email, index) => ({
+            recipients: request.payload.to.map((email, index) => ({
               email,
               outcome: "accepted" as const,
               messageId: `message-${index + 1}`,
             })),
           }),
+        ),
+      render: (request) =>
+        receive("campaigns.render", { params: request.params, payload: request.payload }).pipe(
+          Effect.as({
+            copy: request.payload.variant ?? Schemas.defaultCopy,
+            subject: "Release notes",
+            text: `Hi ${request.payload.as}`,
+            html: `<p>Hi ${request.payload.as}</p>`,
+          }),
+        ),
+      check: (request) =>
+        receive("campaigns.check", { params: request.params, payload: request.payload }).pipe(
+          Effect.andThen(
+            Effect.suspend(() => found(checkPages.shift(), new Errors.CampaignNotFound())),
+          ),
         ),
       send: (request) =>
         receive("campaigns.send", { params: request.params }).pipe(
@@ -323,6 +337,7 @@ export const fakeService = (seed: Seed = {}) => {
             email: request.query.email,
             status: "suppressed" as const,
             optOuts: [listId],
+            rejoined: [],
             suppression: { reason: "bounce" as const, suppressedAt: createdAt },
             transientBounces: [],
             consents: [],
@@ -336,6 +351,7 @@ export const fakeService = (seed: Seed = {}) => {
             email: request.payload.email,
             status: "mailable" as const,
             optOuts: [],
+            rejoined: [],
             transientBounces: [],
             consents: [],
             pending: [],
@@ -384,56 +400,41 @@ export const fakeService = (seed: Seed = {}) => {
 export type FakeService = ReturnType<typeof fakeService>;
 
 /**
- * A terminal that answers a prompt with `answer`, one key press, or with nothing at all, as a
- * closed stdin does. What a prompt displays is collected rather than written anywhere.
+ * A terminal whose stdin is closed, as a script's is, so no command can wait on a key press; what it
+ * would display goes nowhere.
  */
-const scriptedTerminal = (answer: string | undefined, displayed: Array<string>) =>
-  Terminal.make({
-    columns: Effect.succeed(80),
-    rows: Effect.succeed(24),
-    size: Effect.gen(function* () {
-      const sizes = yield* Queue.unbounded<Terminal.Size, Cause.Done>();
+const closedTerminal = Terminal.make({
+  columns: Effect.succeed(80),
+  rows: Effect.succeed(24),
+  size: Effect.gen(function* () {
+    const sizes = yield* Queue.unbounded<Terminal.Size, Cause.Done>();
 
-      yield* Queue.offer(sizes, { columns: 80, rows: 24 });
-      yield* Queue.end(sizes);
+    yield* Queue.offer(sizes, { columns: 80, rows: 24 });
+    yield* Queue.end(sizes);
 
-      return sizes;
-    }),
-    readInput: Effect.gen(function* () {
-      const input = yield* Queue.unbounded<Terminal.UserInput, Cause.Done>();
+    return sizes;
+  }),
+  readInput: Effect.gen(function* () {
+    const input = yield* Queue.unbounded<Terminal.UserInput, Cause.Done>();
 
-      if (answer !== undefined) {
-        yield* Queue.offer(input, {
-          input: Option.some(answer),
-          key: { name: answer, ctrl: false, meta: false, shift: false },
-        });
-      }
+    yield* Queue.end(input);
 
-      yield* Queue.end(input);
-
-      return input;
-    }),
-    readLine: Effect.fail(new Terminal.QuitError()),
-    display: (text) =>
-      Effect.sync(() => {
-        displayed.push(text);
-      }),
-  });
+    return input;
+  }),
+  readLine: Effect.fail(new Terminal.QuitError()),
+  display: () => Effect.void,
+});
 
 interface CliRun {
   readonly exit: Exit.Exit<void, unknown>;
   readonly stdout: string;
   readonly stderr: string;
-  /** What prompts displayed, which the real CLI writes to stderr. */
-  readonly prompted: string;
 }
 
 interface CliOptions {
   readonly credential?: string;
   /** Configuration besides the service's URL and the credential. */
   readonly env?: Readonly<Record<string, string>>;
-  /** The key a prompt is answered with; without one, stdin is closed. */
-  readonly answer?: string;
 }
 
 /**
@@ -452,11 +453,9 @@ export const runCli = (
 
     yield* Effect.addFinalizer(() => Effect.promise(dispose));
 
-    const displayed: Array<string> = [];
-
     const exit = yield* Command.runWith(emailer, { version: "0.0.0" })(args).pipe(
       reporting,
-      Effect.provideService(Terminal.Terminal, scriptedTerminal(options.answer, displayed)),
+      Effect.provideService(Terminal.Terminal, closedTerminal),
       Effect.provide(NodeServices.layer),
       Effect.provideService(FetchHttpClient.Fetch, (input, init) =>
         handler(new Request(input, init)),
@@ -476,7 +475,6 @@ export const runCli = (
       exit,
       stdout: (yield* TestConsole.logLines).join("\n"),
       stderr: (yield* TestConsole.errorLines).join("\n"),
-      prompted: displayed.join(""),
     };
 
     return run;
@@ -512,14 +510,14 @@ const main = fileURLToPath(new URL("../src/main.ts", import.meta.url));
 export const runProcess = (
   baseUrl: string,
   args: ReadonlyArray<string>,
-  options: { readonly env?: Readonly<Record<string, string>>; readonly stdin?: string } = {},
+  options: { readonly env?: Readonly<Record<string, string>> } = {},
 ): Effect.Effect<ProcessResult, PlatformError.PlatformError> =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
     const command = ChildProcess.make("node", [main, ...args], {
       extendEnv: true,
-      stdin: Stream.encodeText(Stream.make(options.stdin ?? "")),
+      stdin: Stream.encodeText(Stream.make("")),
     }).pipe(
       ChildProcess.setEnv({ EMAILER_API_URL: baseUrl, EMAILER_API_TOKEN: token, ...options.env }),
     );

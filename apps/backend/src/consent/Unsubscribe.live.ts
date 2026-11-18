@@ -20,6 +20,7 @@ import {
   sendToSimulatorList,
   simulator,
   submitted,
+  textFooter,
   uniqueAddress,
   unsubscribeSettings,
   type LiveTest,
@@ -52,7 +53,7 @@ export const unsubscribeSuite = (test: LiveTest) => {
           payload: {
             listId: list.id,
             subject: `Emailer unsubscribe ${runId}`,
-            text: "This message carries the one-click unsubscribe headers and footer.",
+            text: `This message carries the one-click unsubscribe headers and its own link.${textFooter}`,
           },
         });
 
@@ -104,7 +105,7 @@ export const unsubscribeSuite = (test: LiveTest) => {
           payload: {
             listId: list.id,
             subject: `Emailer unsubscribe skipped ${runId}`,
-            text: "This recipient must be skipped.",
+            text: `This recipient must be skipped.${textFooter}`,
           },
         });
 

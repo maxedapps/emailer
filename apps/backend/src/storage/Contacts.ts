@@ -55,8 +55,11 @@ export const readContact = itemReader(Schemas.Contact);
 
 const readContactRecord = itemReader(ContactRecord);
 
+/** A contact as stored, with the revision its next update asserts. */
+export type ContactRecord = typeof ContactRecord.Type;
+
 /** The contact without its revision, as the contract answers it. */
-const contractOf = ({ revision: _revision, ...contact }: typeof ContactRecord.Type) => contact;
+const contractOf = ({ revision: _revision, ...contact }: ContactRecord) => contact;
 
 /**
  * The condition an update asserts on the contact it read: the same revision, or none yet on a
@@ -170,10 +173,59 @@ const mergeAttributes = (
   return Effect.succeed(count === 0 ? undefined : merged);
 };
 
+/**
+ * The stored contacts with these identifiers, strongly consistent, by identifier. A contact deleted
+ * since its identifier was read is simply absent.
+ */
+export const readContactRecords = Effect.fnUntraced(function* (
+  primitives: Pick<BatchPrimitives, "readItems">,
+  operation: string,
+  contactIds: ReadonlyArray<string>,
+) {
+  const records = new Map<string, ContactRecord>();
+
+  for (const item of yield* primitives.readItems(operation, contactIds.map(contactKey))) {
+    const record = yield* readContactRecord(operation, item);
+
+    records.set(record.id, record);
+  }
+
+  return records;
+});
+
+/**
+ * One write that sets a stored contact's name, when one is given, and merges an attribute patch
+ * into it, at the next revision of the contact as read: a contact changed since is a lost race.
+ */
+export const contactUpdate = Effect.fnUntraced(function* (
+  record: ContactRecord,
+  name: string | undefined,
+  patch: Schemas.AttributePatch | undefined,
+) {
+  const { revision, ...current } = record;
+
+  const next = contactOf(
+    current.id,
+    current.email,
+    name ?? current.name,
+    patch === undefined ? current.attributes : yield* mergeAttributes(current, patch),
+    current.createdAt,
+  );
+
+  return {
+    Put: {
+      Table: tableLogicalId,
+      Item: yield* contactItem(next, (revision ?? 0) + 1),
+      ...sameRevision(revision),
+    },
+    refused: () => new ContactChanged(),
+  } satisfies Action<ContactChanged>;
+});
+
 export const contactOperations = (
   primitives: ReadPrimitives & PagePrimitives & BatchPrimitives & TransactionPrimitives,
 ) => {
-  const { readEntityPage, readItem, readItems, transact } = primitives;
+  const { readEntityPage, readItem, transact } = primitives;
 
   /**
    * The contact and its address reservation. The contact's condition could only fail if a freshly
@@ -330,8 +382,8 @@ export const contactOperations = (
   }, retryLostRace);
 
   /**
-   * Merges each patch into the contact holding its address, in one transaction of whole-contact
-   * writes, each at the next revision of the contact just read. An address no contact holds is
+   * Sets each name given and merges each attribute patch into the contact holding its address, in
+   * one transaction of whole-contact writes, each at the next revision of the contact just read. An address no contact holds is
    * reported, not refused: an attribute file often names people who never joined. A contact that
    * moved, went or changed since the reads is a lost race, retried from fresh reads.
    */
@@ -344,19 +396,15 @@ export const contactOperations = (
       entries.map((entry) => entry.email),
     );
 
-    const held = entries.flatMap((entry) => {
-      const contactId = holders.get(Schemas.mailboxKey(entry.email));
+    const stored = yield* readContactRecords(
+      primitives,
+      "setAttributes",
+      entries.flatMap((entry) => {
+        const contactId = holders.get(Schemas.mailboxKey(entry.email));
 
-      return contactId === undefined ? [] : [contactId];
-    });
-
-    const stored = new Map<string, typeof ContactRecord.Type>();
-
-    for (const item of yield* readItems("setAttributes", held.map(contactKey))) {
-      const record = yield* readContactRecord("setAttributes", item);
-
-      stored.set(record.id, record);
-    }
+        return contactId === undefined ? [] : [contactId];
+      }),
+    );
 
     const actions: Array<Action<ContactChanged>> = [];
     const contacts: Array<Schemas.SetAttributesResult["contacts"][number]> = [];
@@ -379,25 +427,7 @@ export const contactOperations = (
         return yield* new ContactChanged();
       }
 
-      const { revision, ...current } = record;
-
-      const next = contactOf(
-        current.id,
-        current.email,
-        current.name,
-        yield* mergeAttributes(current, entry.attributes),
-        current.createdAt,
-      );
-
-      actions.push({
-        Put: {
-          Table: tableLogicalId,
-          Item: yield* contactItem(next, (revision ?? 0) + 1),
-          ...sameRevision(revision),
-        },
-        refused: () => new ContactChanged(),
-      });
-
+      actions.push(yield* contactUpdate(record, entry.name, entry.attributes));
       contacts.push({ email: entry.email, outcome: "updated", contactId });
     }
 

@@ -5,7 +5,9 @@ import { unsubscribeLink } from "../consent/Unsubscribe.ts";
 import { newIdentifier, nowIso } from "../Identifiers.ts";
 import { CampaignWake } from "./Dispatch.ts";
 import { accepted, failureOutcomes, Mail, Mailer, submissionTimeout } from "./Mailer.ts";
+import { postalAddress } from "./Message.ts";
 import { SendGuard } from "./SendGuard.ts";
+import { compileCopy } from "./Templates.ts";
 import { chooseVariant, matchesAttributes } from "./Variants.ts";
 import { AudienceStore } from "../storage/Audience.ts";
 import { CampaignStore } from "../storage/Campaigns.ts";
@@ -116,27 +118,19 @@ export const runSlice = Effect.fn("Dispatching.runSlice")(
       return;
     }
 
-    // The rules are read once per slice, and a copy the first time a member of the slice gets it:
-    // a copy nobody here gets is never read. Copies only change in a draft, so they hold all run.
+    // The rules are read once per slice, and a copy is read and compiled the first time a member of
+    // the slice gets it: a copy nobody here gets is never read. Copies only change in a draft, so
+    // they hold all run.
     const { routes } = yield* campaigns.getRoutes(message.campaignId);
+    const postal = yield* postalAddress;
 
     const copies = yield* Cache.make({
       capacity: Schemas.maxVariants + 1,
       lookup: (key: Schemas.CopyKey) =>
-        key === Schemas.defaultCopy
-          ? Effect.map(campaigns.getBody(message.campaignId), (body): MessageContent => ({
-              subject,
-              text: body.text,
-              html: body.html,
-            }))
-          : Effect.map(
-              campaigns.getVariantContent(message.campaignId, key),
-              (body): MessageContent => ({
-                subject: body.subject,
-                text: body.text,
-                html: body.html,
-              }),
-            ),
+        (key === Schemas.defaultCopy
+          ? Effect.map(campaigns.getBody(message.campaignId), (body) => ({ subject, ...body }))
+          : campaigns.getVariantContent(message.campaignId, key)
+        ).pipe(Effect.flatMap(compileCopy)),
     });
 
     // ExclusiveStartKey of the last member this slice finished (skip, settle, or
@@ -182,7 +176,44 @@ export const runSlice = Effect.fn("Dispatching.runSlice")(
       const variant =
         (yield* chooseVariant(message.campaignId, member, routes))?.key ?? Schemas.defaultCopy;
 
-      const content = yield* Cache.get(copies, variant);
+      // Minted before the claim: a claimed row is only ever settled by a submission, so a link that
+      // cannot be minted must stop the slice while the member is still unclaimed.
+      const unsubscribeUrl = yield* unsubscribeLink({ mailbox: member.email, listId }).pipe(
+        Effect.orDie,
+      );
+
+      // Rendered before the claim too, so a copy this member's values break is an ordinary skip.
+      const rendered = yield* Cache.get(copies, variant).pipe(
+        Effect.flatMap((copy) =>
+          copy.render({ contact: member, unsubscribeUrl, postalAddress: postal }),
+        ),
+        Effect.map((content) => ({ content })),
+        Effect.catchTags({
+          InvalidTemplate: ({ message: reason }) => Effect.succeed({ failure: reason }),
+          Unrenderable: ({ message: reason }) => Effect.succeed({ failure: reason }),
+        }),
+      );
+
+      if ("failure" in rendered) {
+        yield* Effect.logWarning("recipient unrenderable", {
+          campaignId: message.campaignId,
+          variant,
+          reason: rendered.failure,
+        });
+
+        yield* campaigns.skipRecipient(
+          message.campaignId,
+          message.runToken,
+          member.id,
+          member.email,
+          "unrenderable",
+          now,
+        );
+
+        lastProcessed = member.id;
+        continue;
+      }
+
       const delay = yield* guards.slot(guard.limit);
 
       if (!(yield* fitsBefore(deadline, delay))) {
@@ -194,12 +225,6 @@ export const runSlice = Effect.fn("Dispatching.runSlice")(
 
         return;
       }
-
-      // Minted before the claim: a claimed row is only ever settled by a submission, so a link that
-      // cannot be minted must stop the slice while the member is still unclaimed.
-      const unsubscribeUrl = yield* unsubscribeLink({ mailbox: member.email, listId }).pipe(
-        Effect.orDie,
-      );
 
       const sendId = yield* newIdentifier;
 
@@ -220,7 +245,7 @@ export const runSlice = Effect.fn("Dispatching.runSlice")(
 
       const submitted = yield* submitClaimed({
         recipient: member.email,
-        content,
+        content: rendered.content,
         unsubscribeUrl,
         campaignId: message.campaignId,
         sendId,

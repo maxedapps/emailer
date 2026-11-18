@@ -1,6 +1,6 @@
 # What's new in September
 
-Hi there,
+Hi {{ contact.name | default: "there" }},
 
 This month we shipped **three big updates** and a handful of _smaller_ fixes. Here is the short version, with links if you want the details.
 
@@ -41,3 +41,5 @@ const greet = (name: string): string => `Hello, ${name}!`;
 Thanks for reading. Reply to this email if you have questions — I read every message.
 
 The Example team
+
+[Unsubscribe]({{ unsubscribe_url }}) · {{ postal_address }}

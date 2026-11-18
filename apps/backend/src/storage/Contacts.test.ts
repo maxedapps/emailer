@@ -652,6 +652,27 @@ describe("setAttributes", () => {
       }),
   );
 
+  it.effect("sets the name an entry gives, keeping the attributes it leaves alone", () =>
+    Effect.gen(function* () {
+      const table = scriptedTable({
+        batchGetItem: [batch(reservationItem), batch(withAttributes)],
+        transactWriteItems: [succeeded],
+      });
+
+      yield* operationsFor(table).setAttributes([{ email, name: "Samantha" }]);
+
+      expect(table.transactionRequests[0]?.TransactItems).toStrictEqual([
+        {
+          Put: {
+            Table: tableLogicalId,
+            Item: rewritten({ name: { S: "Samantha" }, attributes: withAttributes.attributes }),
+            ...atRevision3,
+          },
+        },
+      ]);
+    }),
+  );
+
   it.effect("writes nothing when no contact holds any of the addresses", () =>
     Effect.gen(function* () {
       const { table, run } = merge({ batchGetItem: [batch(), batch()] });

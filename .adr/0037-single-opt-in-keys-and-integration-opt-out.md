@@ -5,6 +5,7 @@
 - Authority: On 2026-10-19 the user decided that a site's waitlist stays single opt-in, and asked for the emailer to support single and double opt-in side by side, plus an endpoint through which a site opts an address out of a list, so the unsubscribe links in mail the site sent itself keep working.
 - Amends [ADR-0027](0027-signup-api-scoped-keys-and-double-opt-in.md): decision 3 (double opt-in only) and the scoped key's shape in decision 2.
 - Plan: [0037-single-opt-in-keys-and-integration-opt-out.plan.md](0037-single-opt-in-keys-and-integration-opt-out.plan.md)
+- Amended by [ADR-0041](0041-personalized-templates.md): `POST /subscriptions/opt-out` keeps the address from every list's campaigns, as a campaign's unsubscribe link does.
 
 ## Context
 

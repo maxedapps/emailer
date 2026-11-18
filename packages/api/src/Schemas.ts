@@ -143,6 +143,44 @@ export const CampaignHtml = Schema.String.check(Schema.isNonEmpty(), utf8ByteCei
 
 export type CampaignHtml = typeof CampaignHtml.Type;
 
+/** The parts of a copy, each a template rendered per recipient. */
+export const TemplatePart = Schema.Literals(["subject", "text", "html"]);
+
+export type TemplatePart = typeof TemplatePart.Type;
+
+const maxLanguageLength = 35;
+
+const canonicalLanguage = (tag: string): string | undefined => {
+  try {
+    return Intl.getCanonicalLocales(tag)[0];
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * A copy's language as a BCP 47 tag, such as `en` or `de-DE`, which names months and days in its
+ * dates. It is stored in canonical case; absent means English.
+ */
+export const Language = Schema.String.check(
+  Schema.isMaxLength(maxLanguageLength),
+  Schema.makeFilter((tag: string) =>
+    canonicalLanguage(tag) === undefined
+      ? "Expected a BCP 47 language tag, such as en or de-DE"
+      : undefined,
+  ),
+).pipe(
+  Schema.decodeTo(
+    Schema.String,
+    SchemaTransformation.transform({
+      decode: (tag: string) => canonicalLanguage(tag) ?? tag,
+      encode: (tag: string) => tag,
+    }),
+  ),
+);
+
+export type Language = typeof Language.Type;
+
 const AttributeKey = Schema.String.check(
   Schema.isNonEmpty(),
   Schema.isMaxLength(maxAttributeKeyLength),
@@ -291,6 +329,7 @@ export type CampaignSummary = typeof CampaignSummary.Type;
 export const CampaignBody = Schema.Struct({
   text: CampaignText,
   html: Schema.optionalKey(CampaignHtml),
+  language: Schema.optionalKey(Language),
 });
 
 export type CampaignBody = typeof CampaignBody.Type;
@@ -367,6 +406,7 @@ const variantContent = {
   subject: CampaignSubject,
   text: CampaignText,
   html: Schema.optionalKey(CampaignHtml),
+  language: Schema.optionalKey(Language),
 };
 
 /** A variant as set: its rule and content, under the key its path names. */
@@ -425,7 +465,10 @@ export const MailboxStatus = Schema.Literals(["mailable", "suppressed", "bouncin
 
 export type MailboxStatus = typeof MailboxStatus.Type;
 
-/** Whether a mailbox takes mail from one list: `unsubscribed` means it opted out of that list. */
+/**
+ * Whether a mailbox takes mail from one list: `unsubscribed` means it opted out of some list and has
+ * not confirmed this one since (ADR-0041).
+ */
 export const AddressStatus = Schema.Literals([
   "mailable",
   "unsubscribed",
@@ -435,7 +478,16 @@ export const AddressStatus = Schema.Literals([
 
 export type AddressStatus = typeof AddressStatus.Type;
 
-export const SkipReason = AddressStatus.pick(["unsubscribed", "suppressed", "bouncing"]);
+/** Why an address takes no mail from a list. */
+export const UnmailableStatus = AddressStatus.pick(["unsubscribed", "suppressed", "bouncing"]);
+
+export type UnmailableStatus = typeof UnmailableStatus.Type;
+
+/**
+ * Why a campaign recipient got no message: the address takes no mail from the list, or their copy
+ * could not be rendered for them.
+ */
+export const SkipReason = Schema.Literals([...UnmailableStatus.literals, "unrenderable"]);
 
 export type SkipReason = typeof SkipReason.Type;
 
@@ -492,12 +544,15 @@ export type PendingConfirmation = typeof PendingConfirmation.Type;
 
 /**
  * Account-list presence is always reported: `null` means SES has no entry. `optOuts` names the
- * lists the address left; the local suppression is an optional key because it may not exist.
+ * lists the address left, and `rejoined` the lists it confirmed by double opt-in since its latest
+ * opt-out: while it has an opt-out, only those lists may mail it (ADR-0041). The local suppression
+ * is an optional key because it may not exist.
  */
 export const AddressRecord = Schema.Struct({
   email: ListedEmailAddress,
   status: MailboxStatus,
   optOuts: Schema.Array(EntityId),
+  rejoined: Schema.Array(EntityId),
   suppression: Schema.optionalKey(
     Schema.Struct({
       reason: SuppressionReason,
@@ -539,6 +594,7 @@ export const CreateCampaignPayload = Schema.Struct({
   subject: CampaignSubject,
   text: CampaignText,
   html: Schema.optionalKey(CampaignHtml),
+  language: Schema.optionalKey(Language),
   /** AND of attribute equalities; absent or `{}` means the whole list. */
   filter: Schema.optionalKey(ContactAttributes),
 });
@@ -565,14 +621,15 @@ export type UpdateContactPayload = typeof UpdateContactPayload.Type;
 
 /**
  * A draft edit of the campaign's own copy and settings, with `UpdateContactPayload`'s convention:
- * absent leaves a field alone, and null removes an optional one — the HTML body, or the filter so
- * the campaign goes to the whole list. Variants are set and removed one at a time.
+ * absent leaves a field alone, and null removes an optional one — the HTML body, the language so
+ * dates are English, or the filter so the campaign goes to the whole list. Variants are set and removed one at a time.
  */
 export const UpdateCampaignPayload = Schema.Struct({
   listId: Schema.optionalKey(EntityId),
   subject: Schema.optionalKey(CampaignSubject),
   text: Schema.optionalKey(CampaignText),
   html: Schema.optionalKey(Schema.NullOr(CampaignHtml)),
+  language: Schema.optionalKey(Schema.NullOr(Language)),
   filter: Schema.optionalKey(Schema.NullOr(ContactAttributes)),
 });
 
@@ -658,8 +715,12 @@ export const ImportContactsResult = Schema.Struct({
 
 export type ImportContactsResult = typeof ImportContactsResult.Type;
 
-/** A patch for the attributes of the contact holding an address. */
-export const AttributeUpdate = Schema.Struct({ email: EmailAddress, attributes: AttributePatch });
+/** A new name and an attribute patch for the contact holding an address; absent changes nothing. */
+export const AttributeUpdate = Schema.Struct({
+  email: EmailAddress,
+  name: Schema.optionalKey(EntityName),
+  attributes: Schema.optionalKey(AttributePatch),
+});
 
 const attributeUpdates = Schema.Array(AttributeUpdate).check(Schema.isNonEmpty());
 
@@ -691,21 +752,40 @@ export const SetAttributesResult = Schema.Struct({
 
 export type SetAttributesResult = typeof SetAttributesResult.Type;
 
-/** Which copy a test sends; the campaign's own when absent. */
-const testedCopy = { variant: Schema.optionalKey(CopyKey) };
+/**
+ * Who a copy is rendered for: the contact holding `as`, and the copy named by `variant`, or else
+ * the copy the campaign's rules choose for that contact.
+ */
+const renderedAs = { as: EmailAddress, variant: Schema.optional(CopyKey) };
 
-/** Explicit addresses, each at most once, or one list whose every member is a recipient. */
-export const TestSendPayload = Schema.Union([
-  Schema.Struct({
-    to: Schema.Array(EmailAddress).check(
-      Schema.isNonEmpty(),
-      Schema.isMaxLength(maxTestRecipients),
-      Schema.makeFilter(distinctMailboxes),
-    ),
-    ...testedCopy,
-  }),
-  Schema.Struct({ listId: EntityId, ...testedCopy }),
-]);
+/** A copy rendered for one contact, as they would get it. */
+export const RenderPayload = Schema.Struct(renderedAs);
+
+export type RenderPayload = typeof RenderPayload.Type;
+
+export const RenderedCopy = Schema.Struct({
+  copy: CopyKey,
+  subject: Schema.String,
+  text: Schema.String,
+  html: Schema.optional(Schema.String),
+});
+
+export type RenderedCopy = typeof RenderedCopy.Type;
+
+/**
+ * A test goes only to the addresses named here, each at most once. It is rendered as the contact
+ * holding `as`, or with no contact, so every fallback shows; `variant` picks the copy, else the
+ * campaign's own (or, with `as`, the one its rules choose).
+ */
+export const TestSendPayload = Schema.Struct({
+  to: Schema.Array(EmailAddress).check(
+    Schema.isNonEmpty(),
+    Schema.isMaxLength(maxTestRecipients),
+    Schema.makeFilter(distinctMailboxes),
+  ),
+  as: Schema.optional(EmailAddress),
+  variant: Schema.optional(CopyKey),
+});
 
 export type TestSendPayload = typeof TestSendPayload.Type;
 
@@ -718,7 +798,7 @@ export const TestSendOutcome = Schema.Union([
   Schema.Struct({
     email: NormalizedEmailAddress,
     outcome: Schema.Literal("skipped"),
-    reason: SkipReason,
+    reason: UnmailableStatus,
   }),
   Schema.Struct({
     email: NormalizedEmailAddress,
@@ -730,7 +810,7 @@ export const TestSendOutcome = Schema.Union([
 
 export type TestSendOutcome = typeof TestSendOutcome.Type;
 
-/** One entry per recipient, in the order they were given or listed. */
+/** One entry per recipient, in the order they were given. */
 export const TestSendResult = Schema.Struct({ recipients: Schema.Array(TestSendOutcome) });
 
 export type TestSendResult = typeof TestSendResult.Type;
@@ -828,6 +908,53 @@ export const Subscribed = Schema.TaggedStruct("Subscribed", { listId: EntityId }
 export const OptOutPayload = Schema.Struct({ listId: EntityId, email: EmailAddress });
 
 export type OptOutPayload = typeof OptOutPayload.Type;
+
+/** Where a campaign check continues: after the member it last read. */
+export const CheckPayload = Schema.Struct({ cursor: Schema.optional(EntityId) });
+
+export type CheckPayload = typeof CheckPayload.Type;
+
+/** What a check found about one recipient's render. */
+export const CheckFinding = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("failure"),
+    email: NormalizedEmailAddress,
+    copy: CopyKey,
+    message: Schema.String,
+  }),
+  /** A contact field the copy uses is missing or blank, so its fallback shows. */
+  Schema.Struct({
+    kind: Schema.Literal("fallback"),
+    email: NormalizedEmailAddress,
+    copy: CopyKey,
+    field: Schema.String,
+  }),
+  /** A contact field the copy uses holds a value that renders oddly. */
+  Schema.Struct({
+    kind: Schema.Literal("odd-value"),
+    email: NormalizedEmailAddress,
+    copy: CopyKey,
+    field: Schema.String,
+    problem: Schema.Literals(["surrounding-whitespace", "line-break"]),
+  }),
+]);
+
+export type CheckFinding = typeof CheckFinding.Type;
+
+/**
+ * One page of a campaign check: how many members it read, how many the filter left out, how many
+ * it would skip and why, how many it rendered per copy, and what it found. `nextCursor` continues.
+ */
+export const CheckPage = Schema.Struct({
+  members: Schema.Int,
+  filteredOut: Schema.Int,
+  skipped: Schema.Record(UnmailableStatus, Schema.Int),
+  rendered: Schema.Record(CopyKey, Schema.Int),
+  findings: Schema.Array(CheckFinding),
+  nextCursor: Schema.optional(EntityId),
+});
+
+export type CheckPage = typeof CheckPage.Type;
 
 /** A short-lived public link to a campaign's rendered preview. */
 export const PreviewLink = Schema.Struct({ url: Schema.String, expiresAt: Timestamp });

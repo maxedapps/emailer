@@ -63,19 +63,34 @@ const memberC: Schemas.Contact = {
 
 const subject = "Release notes";
 
-const text = "Hello there";
+const postalAddress = "Example Street 1, 12345 Example City";
+
+/** The two tags every body part carries (ADR-0041). */
+const footer = "\n{{ unsubscribe_url }}\n{{ postal_address }}";
+
+const text = `Hello{% if contact.plan %} {{ contact.plan }} member{% endif %}${footer}`;
+
+const html =
+  '<p>Hello {{ contact.plan | default: "there" }}</p><a href="{{ unsubscribe_url }}">Unsubscribe</a> {{ postal_address }}';
 
 const defaultGuard: SendAllowance = { limit: 8 };
 
 const sliceTimeout = Duration.minutes(5);
 
-const unsubscribeEnv = {
+const dispatchEnv = {
   EMAILER_UNSUBSCRIBE_URL: "https://unsubscribe.example.com/",
   EMAILER_UNSUBSCRIBE_SECRET: "8f14e45fceea167a5a36dedd4bea2543a1b2c3d4e5f60718293a4b5c6d7e8f90",
+  EMAILER_POSTAL_ADDRESS: postalAddress,
 };
 
 const configurationOf = (env: Readonly<Record<string, string>>) =>
   Layer.succeed(ConfigProvider.ConfigProvider)(ConfigProvider.fromEnvRecord(env));
+
+/** The unsubscribe link a member's message carries. */
+const linkOf = (member: Schemas.Contact) =>
+  unsubscribeLink({ mailbox: member.email, listId }).pipe(
+    Effect.provide(configurationOf(dispatchEnv)),
+  );
 
 interface RecipientRow {
   readonly sendId?: string;
@@ -99,6 +114,7 @@ interface World {
   readonly beginOutcome: "running" | "stale";
   readonly checkpointOutcome: "updated" | "condition-failed";
   cursor: string | undefined;
+  readonly text: string;
   readonly html: string | undefined;
   readonly variants: ReadonlyArray<Schemas.Variant>;
   /** Copies whose read takes this long: the clock moves on while they are read. */
@@ -188,7 +204,9 @@ const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> 
         Effect.gen(function* () {
           yield* readCopy(world, Schemas.defaultCopy);
 
-          return world.html === undefined ? { text } : { text, html: world.html };
+          return world.html === undefined
+            ? { text: world.text }
+            : { text: world.text, html: world.html };
         }),
       getVariantContent: (_id, key) =>
         Effect.gen(function* () {
@@ -404,6 +422,7 @@ interface Scenario {
   readonly nextCursor?: string;
   readonly cursor?: string;
   readonly filter?: Schemas.ContactAttributes;
+  readonly text?: string;
   readonly html?: string | undefined;
   readonly variants?: ReadonlyArray<Schemas.Variant>;
   readonly slowCopies?: ReadonlyArray<readonly [key: string, took: Duration.Duration]>;
@@ -442,6 +461,7 @@ const fixture = (scenario: Scenario = {}): Fixture => {
     beginOutcome: scenario.beginOutcome ?? "running",
     checkpointOutcome: scenario.checkpointOutcome ?? "updated",
     cursor: scenario.cursor,
+    text: scenario.text ?? text,
     html: scenario.html,
     variants: scenario.variants ?? [],
     slowCopies: new Map(scenario.slowCopies ?? []),
@@ -491,7 +511,7 @@ const fixture = (scenario: Scenario = {}): Fixture => {
       mailer.layer,
       guard.layer,
       NodeCrypto.layer,
-      configurationOf(scenario.env ?? unsubscribeEnv),
+      configurationOf(scenario.env ?? dispatchEnv),
     ),
   };
 };
@@ -581,21 +601,21 @@ describe("runSlice", () => {
         expect(fix.wake.messages).toStrictEqual([{ campaignId, runToken }]);
         expect(fix.world.completed).toBe(0);
 
-        // Each send goes out as the campaign, under the send id of the row it claimed, with the
-        // recipient's own unsubscribe link.
+        // Each send goes out as the campaign, under the send id of the row it claimed, rendered for
+        // the recipient with their own unsubscribe link.
         const campaignMail = (member: Schemas.Contact) =>
-          Effect.map(
-            unsubscribeLink({ mailbox: member.email, listId }).pipe(
-              Effect.provide(configurationOf(unsubscribeEnv)),
-            ),
-            (unsubscribeUrl) =>
-              Mail.Campaign({
-                content: { subject, text, html: undefined },
-                unsubscribeUrl,
-                campaignId,
-                sendId: fix.world.rows.get(member.id)?.sendId ?? "",
-                variant: Schemas.defaultCopy,
-              }),
+          Effect.map(linkOf(member), (unsubscribeUrl) =>
+            Mail.Campaign({
+              content: {
+                subject,
+                text: `Hello pro member\n${unsubscribeUrl}\n${postalAddress}`,
+                html: undefined,
+              },
+              unsubscribeUrl,
+              campaignId,
+              sendId: fix.world.rows.get(member.id)?.sendId ?? "",
+              variant: Schemas.defaultCopy,
+            }),
           );
 
         expect(fix.mailer.sent.map((message) => message.mail)).toStrictEqual([
@@ -605,16 +625,58 @@ describe("runSlice", () => {
       }),
   );
 
-  it.effect.each([
-    { parts: "no html", html: undefined },
-    { parts: "html", html: "<p>Hello there</p>" },
-  ])("hands the mailer the subject and the stored body when the campaign has $parts", ({ html }) =>
+  it.effect("renders the HTML part per member, escaping only there", () =>
     Effect.gen(function* () {
-      const fix = fixture({ html });
+      const fix = fixture({ members: [memberA, memberC], html });
 
       successOf(yield* runSliceNow(fix));
 
-      expect(fix.mailer.sent).toMatchObject([{ mail: { content: { subject, text, html } } }]);
+      const htmlOf = (member: Schemas.Contact, plan: string) =>
+        Effect.map(
+          linkOf(member),
+          (url) =>
+            `<p>Hello ${plan}</p><a href="${url.replaceAll("&", "&amp;")}">Unsubscribe</a> ${postalAddress}`,
+        );
+
+      expect(fix.mailer.sent).toMatchObject([
+        {
+          recipient: memberA.email,
+          mail: { content: { subject, html: yield* htmlOf(memberA, "pro") } },
+        },
+        {
+          recipient: memberC.email,
+          mail: {
+            content: {
+              subject,
+              text: `Hello\n${yield* linkOf(memberC)}\n${postalAddress}`,
+              html: yield* htmlOf(memberC, "there"),
+            },
+          },
+        },
+      ]);
+    }),
+  );
+
+  it.effect("skips a member their copy cannot render for, unclaimed, logging no address", () =>
+    Effect.gen(function* () {
+      // A's plan is no date, so A's render fails; C has no plan, so C's renders empty.
+      const fix = fixture({
+        members: [memberA, memberC],
+        text: `Since {{ contact.plan | date: "%Y" }}${footer}`,
+      });
+
+      const { attempt, named } = yield* runSliceLogged(fix);
+
+      successOf(attempt);
+      expect(fix.world.skips).toStrictEqual([{ contactId: memberA.id, reason: "unrenderable" }]);
+      expect(fix.world.claims).toStrictEqual([memberC.id]);
+      expect(fix.mailer.sent.map((message) => message.recipient)).toStrictEqual([memberC.email]);
+
+      const warnings = named("recipient unrenderable");
+
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]?.level).toBe("Warn");
+      expect(JSON.stringify(warnings[0]?.message)).not.toContain(memberA.email);
     }),
   );
 
@@ -653,15 +715,15 @@ describe("runSlice", () => {
       key: "berlin",
       when: { city: "Berlin" },
       subject: "Hallo Berlin",
-      text: "Berlin copy",
+      text: `Berlin copy${footer}`,
     };
 
     const half: Schemas.Variant = {
       key: "half",
       percent: 50,
       subject: "Half",
-      text: "Split copy",
-      html: "<p>Split copy</p>",
+      text: `Split copy${footer}`,
+      html: `<p>Split copy</p>${footer}`,
     };
 
     const campaignMailOf = (fix: Fixture, recipient: string) =>
@@ -675,11 +737,33 @@ describe("runSlice", () => {
 
           successOf(yield* runSliceNow(fix));
 
-          const contents = new Map<string, MessageContent>([
-            [berlin.key, { subject: berlin.subject, text: berlin.text, html: undefined }],
-            [half.key, { subject: half.subject, text: half.text, html: half.html }],
-            [Schemas.defaultCopy, { subject, text, html: undefined }],
-          ]);
+          const contentsFor = (member: Schemas.Contact) =>
+            Effect.map(linkOf(member), (url) => {
+              const rendered = `\n${url}\n${postalAddress}`;
+
+              return new Map<string, MessageContent>([
+                [
+                  berlin.key,
+                  { subject: "Hallo Berlin", text: `Berlin copy${rendered}`, html: undefined },
+                ],
+                [
+                  half.key,
+                  {
+                    subject: "Half",
+                    text: `Split copy${rendered}`,
+                    html: `<p>Split copy</p>\n${url.replaceAll("&", "&amp;")}\n${postalAddress}`,
+                  },
+                ],
+                [
+                  Schemas.defaultCopy,
+                  {
+                    subject,
+                    text: `Hello${member.attributes?.["plan"] === undefined ? "" : " pro member"}${rendered}`,
+                    html: undefined,
+                  },
+                ],
+              ]);
+            });
 
           // A lives in Berlin, so targeting decides; B and C fall to the split by their bucket.
           const expected = new Map([[memberA.id, "berlin"]]);
@@ -700,7 +784,7 @@ describe("runSlice", () => {
             expect(mail?._tag === "Campaign" ? mail.variant : undefined).toBe(variant);
 
             expect(mail?._tag === "Campaign" ? mail.content : undefined).toStrictEqual(
-              contents.get(variant ?? ""),
+              (yield* contentsFor(member)).get(variant ?? ""),
             );
           }
         }),
@@ -870,7 +954,10 @@ describe("runSlice", () => {
   it.effect("claims no recipient when the unsubscribe link cannot be minted", () =>
     Effect.gen(function* () {
       const fix = fixture({
-        env: { EMAILER_UNSUBSCRIBE_SECRET: unsubscribeEnv.EMAILER_UNSUBSCRIBE_SECRET },
+        env: {
+          EMAILER_UNSUBSCRIBE_SECRET: dispatchEnv.EMAILER_UNSUBSCRIBE_SECRET,
+          EMAILER_POSTAL_ADDRESS: postalAddress,
+        },
       });
 
       const now = yield* Clock.currentTimeMillis;

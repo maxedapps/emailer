@@ -1,7 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect } from "effect";
 
-import { decodeCsvContacts } from "./CsvContacts.ts";
+import { decodeCsvAttributes, decodeCsvContacts } from "./CsvContacts.ts";
 
 const failureOf = (text: string) =>
   Effect.map(Effect.flip(decodeCsvContacts(text)), (error) => error.message);
@@ -74,6 +74,23 @@ describe("reading a CSV export as an import file", () => {
       expect(yield* failureOf("email\nAda@example.com\nada@EXAMPLE.com\n")).toContain(
         "Expected each address to appear at most once",
       );
+    }),
+  );
+});
+
+describe("decodeCsvAttributes", () => {
+  it.effect("reads the name column as the contact's name and leaves blank cells out", () =>
+    Effect.gen(function* () {
+      expect(
+        yield* decodeCsvAttributes(
+          "Email,Name,member since\nada@example.com,Ada,2024-03-15\nbob@example.com,,\n",
+        ),
+      ).toStrictEqual({
+        contacts: [
+          { email: "ada@example.com", name: "Ada", attributes: { "member since": "2024-03-15" } },
+          { email: "bob@example.com" },
+        ],
+      });
     }),
   );
 });

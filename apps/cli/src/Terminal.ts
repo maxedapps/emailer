@@ -1,6 +1,6 @@
 import { NodeTerminal } from "@effect/platform-node";
 import { Cause, Effect, Layer, Queue, Stdio, Stream, Terminal } from "effect";
-import { CliError, Prompt } from "effect/cli";
+import { CliError } from "effect/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 /** A command refused before any request, with `userMessage` as all it prints. */
@@ -46,22 +46,6 @@ export const stderrTerminal = Layer.effect(Terminal.Terminal)(
     });
   }),
 );
-
-/**
- * A yes/no question on stderr. Without an answer — stdin closed by a script or a pipe, or the
- * prompt aborted — the command stops and says how to proceed without asking.
- */
-export const confirm = (message: string) =>
-  Prompt.Confirm({ message }).pipe(
-    Effect.catchTag("QuitError", (cause) =>
-      Effect.fail(
-        new CliError.UserError({
-          cause,
-          userMessage: "No answer was given; pass --yes to proceed without the question",
-        }),
-      ),
-    ),
-  );
 
 const opener = process.platform === "darwin" ? "open" : "xdg-open";
 

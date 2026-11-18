@@ -16,6 +16,7 @@ catalog:
   csv-parse: 7.0.3
   effect: 4.1.4
   knip: 6.45.1
+  liquidjs: 10.30.1
   marked: 18.2.0
   oxfmt: 0.79.0
   oxlint: 1.93.0

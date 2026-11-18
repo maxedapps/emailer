@@ -22,6 +22,7 @@
   - [ADR-0007](0007-immutable-recipient-unsubscribe-links.md): the token's payload also names the list.
 - Plan: [0027-signup-api-scoped-keys-and-double-opt-in.plan.md](0027-signup-api-scoped-keys-and-double-opt-in.plan.md)
 - Amended by [ADR-0037](0037-single-opt-in-keys-and-integration-opt-out.md): a key created without a confirm URL is single opt-in, and every key may opt an address out of its lists through `POST /subscriptions/opt-out`.
+- Amended by [ADR-0041](0041-personalized-templates.md): an opt-out is still recorded per list in `optOuts` but keeps the address from every list; a confirmed sign-up adds its list to `rejoined`, which lifts it for that list alone until the next opt-out.
 
 ## Context
 

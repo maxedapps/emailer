@@ -13,6 +13,7 @@ import {
   addressKey,
   consentKey,
   pendingKey,
+  optedOutOf,
   readAddressState,
   readPending,
   writeConsent,
@@ -89,7 +90,7 @@ export const subscriptionOperations = (
 
   /**
    * The address item and the reservation are read together; the membership only if a contact holds
-   * the address. An address that left the list is opted out of it, whatever its membership.
+   * the address. An address opted out of the list stays so, whatever its membership.
    */
   const subscriptionState = Effect.fn("Storage.subscriptionState")(function* (
     listId: string,
@@ -107,7 +108,7 @@ export const subscriptionOperations = (
       return SubscriptionState.Undeliverable({ reason: address.mailbox });
     }
 
-    if (address.optOuts.includes(listId)) {
+    if (optedOutOf(address, listId)) {
       return SubscriptionState.OptedOut();
     }
 
@@ -182,7 +183,15 @@ export const subscriptionOperations = (
     holders: ReadonlyMap<string, string>,
     consent: Schemas.ConsentRecord,
   ) {
-    const joined = yield* joinActions(consent.listId, [candidate], holders, candidate.createdAt);
+    // A sign-up leaves an existing contact's name and attributes as they are: anyone can type an
+    // address into a form, and only the operator's import or edit changes what a contact holds.
+    const joined = yield* joinActions(
+      consent.listId,
+      [candidate],
+      holders,
+      new Map(),
+      candidate.createdAt,
+    );
 
     return [
       ...joined.actions,
@@ -289,13 +298,14 @@ export const subscriptionOperations = (
       confirmedAt,
     );
 
-    const liftOptOut: Array<Action<never>> = address.optOuts.includes(listId)
+    // The opt-outs stay as evidence; the confirmed list alone is let back in.
+    const rejoin: Array<Action<never>> = optedOutOf(address, listId)
       ? [
           {
             Update: {
               Table: tableLogicalId,
               Key: addressKey(email),
-              UpdateExpression: "DELETE optOuts :list",
+              UpdateExpression: "ADD rejoined :list",
               ExpressionAttributeValues: { ":list": strSet([listId]) },
             },
           },
@@ -321,7 +331,7 @@ export const subscriptionOperations = (
         confirmedAt,
         confirmIp: confirmation.confirmIp,
       })),
-      ...liftOptOut,
+      ...rejoin,
     ];
 
     yield* transact("confirmSubscription", actions);

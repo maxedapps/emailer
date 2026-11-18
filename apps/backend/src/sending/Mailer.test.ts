@@ -16,7 +16,6 @@ import {
   submissionTimeout,
   SubmissionUncertain,
 } from "./Mailer.ts";
-import { footerFor, htmlFooterFor } from "./Message.ts";
 
 import type { MessageContent } from "./Message.ts";
 
@@ -153,7 +152,7 @@ const acceptedBody = JSON.stringify({ MessageId: "0100018f-deadbeef" });
 const parseJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
 
 const textPart = {
-  Data: `Hallo\n\nZeile zwei — ende${footerFor(unsubscribeUrl, postalAddress)}`,
+  Data: "Hallo\n\nZeile zwei — ende",
   Charset: "UTF-8",
 };
 
@@ -197,26 +196,24 @@ describe("makeSend", () => {
       }),
   );
 
-  it.effect(
-    "submits HTML with the footer before the closing body tag, the text footer, and the same headers",
-    () =>
-      Effect.gen(function* () {
-        const transport = transportReplying(() => awsJson(200, acceptedBody));
-        const html = "<html><body><p>Hallo</p></body></html>";
+  it.effect("submits the HTML part as rendered, beside the text part, with the same headers", () =>
+    Effect.gen(function* () {
+      const transport = transportReplying(() => awsJson(200, acceptedBody));
+      const html = "<html><body><p>Hallo</p></body></html>";
 
-        expect(yield* sending(transport, campaignMail({ ...content, html }))).toBe(
-          "0100018f-deadbeef",
-        );
-        expect(yield* parseJson(transport.sent[0]?.body ?? "{}")).toStrictEqual(
-          campaignRequest({
-            Text: textPart,
-            Html: {
-              Data: `<html><body><p>Hallo</p>${htmlFooterFor(unsubscribeUrl, postalAddress)}</body></html>`,
-              Charset: "UTF-8",
-            },
-          }),
-        );
-      }),
+      expect(yield* sending(transport, campaignMail({ ...content, html }))).toBe(
+        "0100018f-deadbeef",
+      );
+      expect(yield* parseJson(transport.sent[0]?.body ?? "{}")).toStrictEqual(
+        campaignRequest({
+          Text: textPart,
+          Html: {
+            Data: html,
+            Charset: "UTF-8",
+          },
+        }),
+      );
+    }),
   );
 
   it.effect("sends a test with the same content and headers but no message tags", () =>

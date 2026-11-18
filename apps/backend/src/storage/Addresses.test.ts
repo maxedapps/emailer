@@ -157,7 +157,7 @@ describe("optOut", () => {
         {
           Key: key,
           UpdateExpression:
-            "SET v = if_not_exists(v, :v), email = if_not_exists(email, :email) ADD optOuts :list",
+            "SET v = if_not_exists(v, :v), email = if_not_exists(email, :email) ADD optOuts :list REMOVE rejoined",
           ExpressionAttributeValues: { ...stampValues, ":list": { SS: [listId] } },
         },
       ]);
@@ -188,12 +188,22 @@ describe("addressStatus", () => {
     }),
   );
 
-  it.effect("reports an address that left another list as mailable on this one", () =>
-    Effect.gen(function* () {
-      const table = holding(stored(optedOut));
+  // ADR-0041: leaving one list keeps every list away, until a confirmed sign-up rejoins one.
+  it.effect(
+    "reports an address that left another list as unsubscribed, unless it rejoined this one",
+    () =>
+      Effect.gen(function* () {
+        const left = operationsFor(holding(stored(optedOut)));
 
-      expect(yield* operationsFor(table).addressStatus(email, otherListId)).toBe("mailable");
-    }),
+        expect(yield* left.addressStatus(email, otherListId)).toBe("unsubscribed");
+
+        // The table answers one read each.
+        const rejoined = () =>
+          operationsFor(holding(stored({ ...optedOut, rejoined: { SS: [otherListId] } })));
+
+        expect(yield* rejoined().addressStatus(email, otherListId)).toBe("mailable");
+        expect(yield* rejoined().addressStatus(email, listId)).toBe("unsubscribed");
+      }),
   );
 
   it.effect("reports a mailbox nothing was ever recorded for as mailable", () =>
@@ -339,6 +349,7 @@ describe("addressRecord", () => {
           email: "User@Example.com",
           status: "suppressed",
           optOuts: [listId],
+          rejoined: [],
           suppression: { reason: "bounce", suppressedAt: createdAt, bounceSubType: "General" },
           transientBounces: occurrences,
           consents: [consent, directConsent],
@@ -365,6 +376,7 @@ describe("addressRecord", () => {
         email,
         status: "mailable",
         optOuts: [],
+        rejoined: [],
         transientBounces: [],
         consents: [],
         pending: [],

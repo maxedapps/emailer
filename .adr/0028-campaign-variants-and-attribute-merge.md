@@ -22,6 +22,7 @@
   - [ADR-0025](0025-fast-large-imports.md): import stays create-only, and a separate batched endpoint merges attributes.
 - Plan: [0028-campaign-variants-and-attribute-merge.plan.md](0028-campaign-variants-and-attribute-merge.plan.md)
 - Amended by [ADR-0029](0029-fifty-variants-edited-one-at-a-time.md): up to 50 variants, each copy edited and read on its own; the rules move from `BODY` to their own `ROUTES` item, and the preview shows one copy per page.
+- Amended by [ADR-0041](0041-personalized-templates.md): an import into an existing contact sets the name it brings and merges its attributes under the contact's revision, and `set-attributes` accepts a `name` column.
 
 ## Context
 

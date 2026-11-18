@@ -4,9 +4,9 @@ import * as Schemas from "@emailer/api/Schemas";
 import { Clock, ConfigProvider, Effect, Layer, Option, Redacted } from "effect";
 import { HttpEffect } from "effect/http";
 
-import { footerFor } from "../sending/Message.ts";
 import { CampaignReader } from "../storage/Campaigns.ts";
-import { makePreviewHandler, placeholderUnsubscribeUrl } from "./PreviewPage.ts";
+import { placeholderUnsubscribeUrl } from "./Copies.ts";
+import { makePreviewHandler } from "./PreviewPage.ts";
 import { mintPreviewToken } from "./Previews.ts";
 
 const baseUrl = "http://preview.test";
@@ -21,12 +21,17 @@ const settings = {
   postalAddress: "Example GmbH, Example Street 1, 12345 Example City",
 };
 
+const footer = "\n{{ unsubscribe_url }}\n{{ postal_address }}";
+
+/** The footer as the text part renders it with no contact. */
+const renderedFooter = `\n${placeholderUnsubscribeUrl}\n${settings.postalAddress}`;
+
 const campaign: Schemas.Campaign = {
   id: campaignId,
   listId: "0195f0a0-1111-4222-8333-44444444109e",
-  subject: `Deals & "news" <b>`,
-  text: "Hello <there>",
-  html: "<html><head><title>x</title></head><body><p>Hello &amp; welcome</p></body></html>",
+  subject: `Deals & "news" <b>{% if contact.name %} for {{ contact.name }}{% endif %}`,
+  text: `Hello {{ contact.name | default: "<there>" }}${footer}`,
+  html: `<html><head><title>x</title></head><body><p>Hello &amp; welcome</p><a href="{{ unsubscribe_url }}">Unsubscribe</a> {{ postal_address }}</body></html>`,
   createdAt: "2026-09-11T10:00:00.000Z",
   submission: { state: "draft" },
 };
@@ -101,10 +106,15 @@ const berlin: Schemas.Variant = {
   key: "berlin",
   when: { city: "Berlin" },
   subject: "Hallo Berlin",
-  text: "Berlin",
+  text: `Berlin${footer}`,
 };
 
-const half: Schemas.Variant = { key: "half", percent: 50, subject: "Half & half", text: "Split" };
+const half: Schemas.Variant = {
+  key: "half",
+  percent: 50,
+  subject: "Half & half",
+  text: `Split${footer}`,
+};
 
 const withVariants: Schemas.Campaign = {
   ...campaign,
@@ -132,21 +142,21 @@ describe("GET /previews/:token", () => {
     }),
   );
 
-  it.live("shows From, the escaped subject, the HTML in a sandboxed srcdoc and the text part", () =>
-    Effect.gen(function* () {
-      const { body } = yield* pageFor(campaign, yield* tokenFor(campaignId));
+  it.live(
+    "shows From, and the copy rendered with every fallback: the escaped subject, the HTML in a sandboxed srcdoc and the text part",
+    () =>
+      Effect.gen(function* () {
+        const { body } = yield* pageFor(campaign, yield* tokenFor(campaignId));
 
-      expect(body).toContain("<dd>news@example.com</dd>");
-      expect(body).toContain("<dd>Deals &amp; &quot;news&quot; &lt;b&gt;</dd>");
-      expect(body).not.toContain("<b>");
-      expect(body).toContain(
-        '<iframe title="HTML part" sandbox="allow-popups allow-popups-to-escape-sandbox" srcdoc="&lt;html&gt;&lt;head&gt;&lt;base target=&quot;_blank&quot;&gt;',
-      );
-      expect(body).toContain("&lt;p&gt;Hello &amp;amp; welcome&lt;/p&gt;");
-      expect(body).toContain(
-        `<pre>Hello &lt;there&gt;${footerFor(placeholderUnsubscribeUrl, settings.postalAddress)}</pre>`,
-      );
-    }),
+        expect(body).toContain("<dd>news@example.com</dd>");
+        expect(body).toContain("<dd>Deals &amp; &quot;news&quot; &lt;b&gt;</dd>");
+        expect(body).not.toContain("<b>");
+        expect(body).toContain(
+          '<iframe title="HTML part" sandbox="allow-popups allow-popups-to-escape-sandbox" srcdoc="&lt;html&gt;&lt;head&gt;&lt;base target=&quot;_blank&quot;&gt;',
+        );
+        expect(body).toContain("&lt;p&gt;Hello &amp;amp; welcome&lt;/p&gt;");
+        expect(body).toContain(`<pre>Hello &lt;there&gt;${renderedFooter}</pre>`);
+      }),
   );
 
   it.live("shows the sender's name as a mail client would, not encoded", () =>
@@ -160,7 +170,7 @@ describe("GET /previews/:token", () => {
     }),
   );
 
-  it.live("composes the footer with the placeholder link, never a real one", () =>
+  it.live("renders the unsubscribe link as the placeholder, never a real one", () =>
     Effect.gen(function* () {
       const { body } = yield* pageFor(campaign, yield* tokenFor(campaignId));
 
@@ -176,6 +186,22 @@ describe("GET /previews/:token", () => {
 
       expect(body).not.toContain("<iframe");
       expect(body).toContain("This campaign has no HTML part");
+    }),
+  );
+
+  it.live("shows why a copy cannot render without contact values", () =>
+    Effect.gen(function* () {
+      const { response, body } = yield* pageFor(
+        { ...campaign, subject: "{{ contact.name }}" },
+        yield* tokenFor(campaignId),
+      );
+
+      expect(response.status).toBe(200);
+      expect(body).toContain("<dd>{{ contact.name }}</dd>");
+      expect(body).toContain(
+        "<p>the subject renders empty, longer than 200 characters or over several lines</p>",
+      );
+      expect(body).not.toContain("<iframe");
     }),
   );
 
@@ -214,9 +240,7 @@ describe("GET /previews/:token", () => {
       expect(body).toContain(`<a href="/previews/${token}">All copies</a>`);
       expect(body).toContain("<dd>half, for 50% of everyone no targeted variant takes</dd>");
       expect(body).toContain("<dd>Half &amp; half</dd>");
-      expect(body).toContain(
-        `<pre>Split${footerFor(placeholderUnsubscribeUrl, settings.postalAddress)}</pre>`,
-      );
+      expect(body).toContain(`<pre>Split${renderedFooter}</pre>`);
       expect(body).not.toContain("Hello &lt;there&gt;");
       expect(reads).toStrictEqual([`${campaignId} half`]);
     }),

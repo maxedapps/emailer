@@ -4,6 +4,7 @@ import { DateTime, Effect } from "effect";
 
 import { newIdentifier, nowIso } from "../Identifiers.ts";
 import { CampaignWake } from "../sending/Dispatch.ts";
+import { validateParts } from "../sending/Templates.ts";
 import { CampaignSchedule } from "./CampaignSchedule.ts";
 import { AudienceStore } from "../storage/Audience.ts";
 import { CampaignStore } from "../storage/Campaigns.ts";
@@ -15,6 +16,8 @@ export const create = Effect.fn("Campaigns.create")(function* (
 ) {
   const audience = yield* AudienceStore;
   const campaigns = yield* CampaignStore;
+
+  yield* validateParts(payload);
 
   // Read only to answer NotFound for a list that does not exist.
   yield* audience.getList(payload.listId);
@@ -30,7 +33,7 @@ export const create = Effect.fn("Campaigns.create")(function* (
 });
 
 /**
- * Edits a draft's own copy and settings: absent fields keep their value, and null removes the HTML
+ * Edits a draft's own copy and settings, each given part validated as a template first: absent fields keep their value, and null removes the HTML
  * body or the filter. Only while it is still a draft; a campaign that left draft or was deleted
  * meanwhile is refused, as found.
  */
@@ -40,6 +43,8 @@ export const update = Effect.fn("Campaigns.update")(function* (
 ) {
   const audience = yield* AudienceStore;
   const campaigns = yield* CampaignStore;
+
+  yield* validateParts(change);
 
   // Read only to answer NotFound for a list that does not exist.
   if (change.listId !== undefined) {
@@ -59,6 +64,7 @@ export const setVariant = Effect.fn("Campaigns.setVariant")(function* (
 ) {
   const campaigns = yield* CampaignStore;
 
+  yield* validateParts(variant);
   yield* campaigns.setVariant(campaignId, key, variant);
 
   return yield* campaigns.getCampaign(campaignId);

@@ -10,7 +10,6 @@ import {
   fakeService,
   listId,
   parseJson,
-  readers,
   runCli,
   tempFile,
   textBody,
@@ -289,131 +288,169 @@ describe("campaign content", () => {
 });
 
 describe("campaigns test", () => {
-  const withReaders = (members: ReadonlyArray<Schemas.Contact>) =>
-    fakeService({ campaigns: [draft], lists: [readers], members });
+  it.effect(
+    "sends a test to every --to address, as the --as contact, and prints each outcome",
+    () =>
+      Effect.gen(function* () {
+        const service = fakeService({ campaigns: [draft] });
 
-  const three = [member(1), member(2), member(3)];
+        const run = yield* runCli(service, [
+          "campaigns",
+          "test",
+          campaignId,
+          "--to",
+          "a@example.com",
+          "--to",
+          "b@example.com",
+          "--as",
+          "ada@example.com",
+        ]);
 
-  it.effect("sends a test to every --to address and prints each outcome", () =>
-    Effect.gen(function* () {
-      const service = withReaders(three);
-
-      const run = yield* runCli(service, [
-        "campaigns",
-        "test",
-        campaignId,
-        "--to",
-        "a@example.com",
-        "--to",
-        "b@example.com",
-      ]);
-
-      expect(service.payloadsOf("campaigns.test")).toStrictEqual([
-        { to: ["a@example.com", "b@example.com"] },
-      ]);
-      expect(yield* parseJson(run.stdout)).toStrictEqual({
-        recipients: [
-          { email: "a@example.com", outcome: "accepted", messageId: "message-1" },
-          { email: "b@example.com", outcome: "accepted", messageId: "message-2" },
-        ],
-      });
-    }),
+        expect(service.payloadsOf("campaigns.test")).toStrictEqual([
+          { to: ["a@example.com", "b@example.com"], as: "ada@example.com", variant: undefined },
+        ]);
+        expect(yield* parseJson(run.stdout)).toStrictEqual({
+          recipients: [
+            { email: "a@example.com", outcome: "accepted", messageId: "message-1" },
+            { email: "b@example.com", outcome: "accepted", messageId: "message-2" },
+          ],
+        });
+      }),
   );
 
-  it.effect.each([[["--to", "a@example.com", "--list", listId]], [[]]] as const)(
-    "refuses %j before any request",
+  it.effect.each([[[]], [["--list", listId]]] as const)(
+    "refuses %j before any request: a test goes only to addresses named with --to",
     ([args]) =>
       Effect.gen(function* () {
-        const service = withReaders(three);
+        const service = fakeService({ campaigns: [draft] });
 
         const run = yield* runCli(service, ["campaigns", "test", campaignId, ...args]);
 
         expect(Exit.isFailure(run.exit)).toBe(true);
-        expect(run.stdout).toBe("");
-        expect(run.stderr).toContain("Pass --to (repeatable) or --list");
         expect(service.received).toStrictEqual([]);
       }),
   );
+});
 
-  it.effect("asks before sending to a list, and sends once the answer is yes", () =>
+describe("campaigns preview --as", () => {
+  it.effect("prints the copy the contact gets, for the variant --variant names", () =>
     Effect.gen(function* () {
-      const service = withReaders(three);
-
-      const run = yield* runCli(service, ["campaigns", "test", campaignId, "--list", listId], {
-        answer: "y",
-      });
-
-      expect(run.prompted).toContain('Send a test of "Release notes" to 3 members of "Readers"?');
-      expect(service.payloadsOf("campaigns.test")).toStrictEqual([{ listId }]);
-      expect(yield* parseJson(run.stdout)).toHaveProperty("recipients.2.email", "r3@example.com");
-    }),
-  );
-
-  it.effect("sends nothing and prints nothing when the answer is no", () =>
-    Effect.gen(function* () {
-      const service = withReaders(three);
-
-      const run = yield* runCli(service, ["campaigns", "test", campaignId, "--list", listId], {
-        answer: "n",
-      });
-
-      expect(Exit.isSuccess(run.exit)).toBe(true);
-      expect(run.stdout).toBe("");
-      expect(service.payloadsOf("campaigns.test")).toHaveLength(0);
-    }),
-  );
-
-  it.effect("stops with a --yes hint when stdin closes without an answer", () =>
-    Effect.gen(function* () {
-      const service = withReaders(three);
-
-      const run = yield* runCli(service, ["campaigns", "test", campaignId, "--list", listId]);
-
-      expect(Exit.isFailure(run.exit)).toBe(true);
-      expect(run.stdout).toBe("");
-      expect(run.stderr).toContain("pass --yes");
-      expect(service.payloadsOf("campaigns.test")).toHaveLength(0);
-    }),
-  );
-
-  it.effect("sends to a list without asking under --yes", () =>
-    Effect.gen(function* () {
-      const service = withReaders(three);
+      const service = fakeService({ campaigns: [draft] });
 
       const run = yield* runCli(service, [
         "campaigns",
-        "test",
+        "preview",
         campaignId,
-        "--list",
-        listId,
-        "--yes",
+        "--as",
+        "ada@example.com",
+        "--variant",
+        "half",
       ]);
 
-      expect(run.prompted).toBe("");
-      expect(service.payloadsOf("campaigns.test")).toStrictEqual([{ listId }]);
+      expect(service.received).toStrictEqual([
+        {
+          endpoint: "campaigns.render",
+          params: { id: campaignId },
+          payload: { as: "ada@example.com", variant: "half" },
+        },
+      ]);
+      expect(yield* parseJson(run.stdout)).toStrictEqual({
+        copy: "half",
+        subject: "Release notes",
+        text: "Hi ada@example.com",
+        html: "<p>Hi ada@example.com</p>",
+      });
     }),
   );
 
-  it.effect.each([
-    ["asking", [], "y"],
-    ["--yes", ["--yes"], undefined],
-  ] as const)(
-    "refuses a list of more than twenty members before sending, under %s",
-    ([_label, flags, answer]) =>
-      Effect.gen(function* () {
-        const service = withReaders(Array.from({ length: 21 }, (_, n) => member(n)));
+  it.effect("refuses --variant without --as before any request", () =>
+    Effect.gen(function* () {
+      const service = fakeService({ campaigns: [draft] });
 
-        const run = yield* runCli(
-          service,
-          ["campaigns", "test", campaignId, "--list", listId, ...flags],
-          answer === undefined ? {} : { answer },
-        );
+      const run = yield* runCli(service, ["campaigns", "preview", campaignId, "--variant", "half"]);
 
-        expect(Exit.isFailure(run.exit)).toBe(true);
-        expect(run.stderr).toContain('"Readers" has more than 20 members');
-        expect(run.prompted).toBe("");
-        expect(service.payloadsOf("campaigns.test")).toHaveLength(0);
-      }),
+      expect(Exit.isFailure(run.exit)).toBe(true);
+      expect(run.stderr).toContain("--variant needs --as");
+      expect(service.received).toStrictEqual([]);
+    }),
+  );
+});
+
+describe("campaigns check", () => {
+  const page = (
+    findings: ReadonlyArray<Schemas.CheckFinding>,
+    nextCursor?: string,
+  ): Schemas.CheckPage => ({
+    members: 2,
+    filteredOut: 1,
+    skipped: { unsubscribed: 1, suppressed: 0, bouncing: 0 },
+    rendered: { default: 1 },
+    findings,
+    nextCursor,
+  });
+
+  it.effect("reads every page and prints the totals with findings grouped", () =>
+    Effect.gen(function* () {
+      const cursor = member(2).id;
+
+      const service = fakeService({
+        campaigns: [draft],
+        checkPages: [
+          page(
+            [
+              { kind: "fallback", email: "r1@example.com", copy: "default", field: "name" },
+              {
+                kind: "odd-value",
+                email: "r1@example.com",
+                copy: "default",
+                field: "city",
+                problem: "surrounding-whitespace",
+              },
+            ],
+            cursor,
+          ),
+          page([
+            { kind: "fallback", email: "r3@example.com", copy: "default", field: "name" },
+            {
+              kind: "failure",
+              email: "r4@example.com",
+              copy: "default",
+              message: 'date: cannot read "soon" as a date',
+            },
+          ]),
+        ],
+      });
+
+      const run = yield* runCli(service, ["campaigns", "check", campaignId]);
+
+      expect(service.payloadsOf("campaigns.check")).toStrictEqual([
+        { cursor: undefined },
+        { cursor },
+      ]);
+      expect(yield* parseJson(run.stdout)).toStrictEqual({
+        members: 4,
+        filteredOut: 2,
+        skipped: { unsubscribed: 2, suppressed: 0, bouncing: 0 },
+        rendered: { default: 2 },
+        failures: [
+          {
+            email: "r4@example.com",
+            copy: "default",
+            message: 'date: cannot read "soon" as a date',
+          },
+        ],
+        fallbacks: { "default: contact.name": ["r1@example.com", "r3@example.com"] },
+        oddValues: [
+          {
+            email: "r1@example.com",
+            copy: "default",
+            field: "city",
+            problem: "surrounding-whitespace",
+          },
+        ],
+        showOne: `emailer campaigns preview ${campaignId} --as <email>`,
+      });
+    }),
   );
 });
 
@@ -519,7 +556,7 @@ describe("campaigns variants", () => {
       ]);
 
       expect(service.payloadsOf("campaigns.test")).toStrictEqual([
-        { to: ["me@example.com"], variant: "half" },
+        { to: ["me@example.com"], as: undefined, variant: "half" },
       ]);
     }),
   );

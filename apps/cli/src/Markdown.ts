@@ -43,7 +43,8 @@ const escapeHtml = (value: string): string =>
 
 /**
  * The page every Markdown campaign shares: a fluid table capped at 600px, with an Outlook-only
- * fixed-width wrapper, on a light page colour the backend's footer repeats.
+ * fixed-width wrapper, on a light page colour. The unsubscribe link and the postal address are the
+ * Markdown's own to place (ADR-0041).
  */
 const layout = (title: string, body: string): string => `<!doctype html>
 <html lang="en" xmlns="http://www.w3.org/1999/xhtml" xmlns:o="urn:schemas-microsoft-com:office:office">
@@ -315,11 +316,41 @@ interface RenderedBody {
   readonly html: string;
 }
 
+/** A Liquid output or tag, `{{ … }}` or `{% … %}`, which the backend renders per recipient. */
+const liquidTag = /\{\{[\s\S]*?\}\}|\{%[\s\S]*?%\}/g;
+
+/**
+ * Markdown would read a Liquid tag as text: escape its quotes, take its `|` for a table cell or
+ * its `*` for emphasis. Each tag stands in as a plain word for the renderers, which leave it as
+ * it is, and returns whole afterwards, so the backend gets the template as written (ADR-0041).
+ */
+const shieldingLiquid = () => {
+  const nonce = crypto.randomUUID().replaceAll("-", "");
+  const placeholder = new RegExp(`liquid${nonce}t(\\d+)e`, "g");
+  const tags: Array<string> = [];
+
+  return {
+    hide: (source: string) =>
+      source.replaceAll(liquidTag, (tag) => `liquid${nonce}t${tags.push(tag) - 1}e`),
+    restore: (rendered: string) =>
+      rendered.replaceAll(placeholder, (_, index: string) => tags[Number(index)] ?? ""),
+  };
+};
+
 /** Both parts of a campaign from one Markdown source. The subject titles the HTML document. */
-export const renderMarkdown = (markdown: string, subject: string): RenderedBody => ({
-  text: textRenderer
-    .parse(markdown, { async: false })
-    .replaceAll(/\n{3,}/g, "\n\n")
-    .trim(),
-  html: layout(subject, htmlRenderer.parse(markdown, { async: false })),
-});
+export const renderMarkdown = (markdown: string, subject: string): RenderedBody => {
+  const liquid = shieldingLiquid();
+  const source = liquid.hide(markdown);
+
+  return {
+    text: liquid.restore(
+      textRenderer
+        .parse(source, { async: false })
+        .replaceAll(/\n{3,}/g, "\n\n")
+        .trim(),
+    ),
+    html: liquid.restore(
+      layout(liquid.hide(subject), htmlRenderer.parse(source, { async: false })),
+    ),
+  };
+};

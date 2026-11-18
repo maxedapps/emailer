@@ -1,16 +1,11 @@
 import { describe, expect, it } from "@effect/vitest";
-import type * as Schemas from "@emailer/api/Schemas";
 import { Effect } from "effect";
 
 import {
   campaignId,
-  createdAt,
   draft,
   fakeService,
-  listId,
   otherToken,
-  parseJson,
-  readers,
   runProcess,
   withServer,
 } from "../test/CliHarness.ts";
@@ -96,28 +91,6 @@ describe("the emailer executable", { timeout: 60_000 }, () => {
       expect(service.payloadsOf("campaigns.schedule")).toStrictEqual([
         { sendAt: "2026-09-20T09:00:00.000Z" },
       ]);
-    }),
-  );
-
-  it.live("asks on stderr before sending a test to a list, keeping stdout for the result", () =>
-    Effect.gen(function* () {
-      const members: ReadonlyArray<Schemas.Contact> = [
-        { id: "0195f0a0-1111-4222-8333-4444444c0001", email: "r1@example.com", createdAt },
-      ];
-
-      const service = fakeService({ campaigns: [draft], lists: [readers], members });
-
-      const result = yield* withServer(service, (baseUrl) =>
-        runProcess(baseUrl, ["campaigns", "test", campaignId, "--list", listId], { stdin: "y" }),
-      );
-
-      expect(result.exitCode).toBe(0);
-      expect(result.stderr).toContain('Send a test of "Release notes" to 1 members of "Readers"?');
-      expect(result.stdout).not.toContain("Send a test");
-      expect(yield* parseJson(result.stdout)).toHaveProperty(
-        "recipients.0.email",
-        "r1@example.com",
-      );
     }),
   );
 });

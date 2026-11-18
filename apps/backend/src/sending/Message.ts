@@ -4,10 +4,7 @@ import { Base64 } from "effect/encoding";
 
 import { confirmationLifetime } from "../storage/Subscriptions.ts";
 
-/**
- * What a message says before it is addressed to anyone: a campaign's stored draft, or a test copy
- * of one.
- */
+/** What a message says: a campaign's copy rendered for one recipient, or a test copy of one. */
 export interface MessageContent {
   readonly subject: string;
   readonly text: string;
@@ -19,7 +16,7 @@ interface MessageHeader {
   readonly value: string;
 }
 
-/** The message one recipient receives: the content plus its footer and unsubscribe headers. */
+/** The message one recipient receives: the content plus its headers. */
 export interface ComposedMessage extends MessageContent {
   readonly headers: ReadonlyArray<MessageHeader>;
 }
@@ -34,10 +31,16 @@ export const belongsToIdentity = (sender: string, identity: string): boolean => 
   return domain === identity || domain.endsWith(`.${identity}`);
 };
 
-const postalAddress = Config.schema(
+const postalAddressConfig = Config.schema(
   Schema.Trim.check(Schema.isNonEmpty()),
   "EMAILER_POSTAL_ADDRESS",
 );
+
+/**
+ * The postal address every campaign and test message carries through its templates. A missing one
+ * is a deployment defect rather than a per-message failure.
+ */
+export const postalAddress = Effect.orDie(postalAddressConfig);
 
 /**
  * The name recipients see beside the From address. Quotes, backslashes and control characters are
@@ -57,7 +60,7 @@ const senderName = Config.option(
 );
 
 /**
- * The From address, its optional display name and the postal address every footer carries. A
+ * The From address, its optional display name and the postal address every message carries. A
  * sender outside the verified identity, an invalid name or an empty postal address is a deployment
  * defect rather than a per-message failure.
  */
@@ -66,7 +69,7 @@ export const senderSettings = Effect.gen(function* () {
     identity: Config.String("EMAILER_SENDER_IDENTITY"),
     sender: Config.schema(Schemas.EmailAddress, "EMAILER_FROM_EMAIL"),
     senderName,
-    postalAddress,
+    postalAddress: postalAddressConfig,
   });
 
   const identity = raw.identity.trim().toLowerCase();
@@ -93,9 +96,6 @@ export const fromHeader = (sender: string, name: Option.Option<string>): string 
         : `=?UTF-8?B?${Base64.encode(name)}?= <${sender}>`,
   });
 
-export const footerFor = (unsubscribeUrl: string, postal: string): string =>
-  `\n\n---\nUnsubscribe from these emails: ${unsubscribeUrl}\n\n${postal}`;
-
 export const escapeHtml = (value: string): string =>
   value
     .replaceAll("&", "&amp;")
@@ -105,53 +105,11 @@ export const escapeHtml = (value: string): string =>
     .replaceAll("'", "&#39;");
 
 /**
- * A block that styles itself, so it reads the same under the CLI's Markdown layout and under
- * hand-written HTML. Its background repeats the layout's page colour, which makes it continue the
- * layout's outer band instead of starting a new one.
+ * Adds the unsubscribe headers to a rendered message. Its templates already placed the link and the
+ * postal address (ADR-0041), so the content goes out as rendered.
  */
-export const htmlFooterFor = (unsubscribeUrl: string, postal: string): string =>
-  [
-    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f4f4f5;">`,
-    `<tr><td align="center" style="padding:0 12px 24px;">`,
-    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;">`,
-    `<tr><td align="center" style="padding:0 24px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:12px;line-height:1.5;color:#6b7280;">`,
-    `<p style="margin:0 0 8px;"><a href="${escapeHtml(unsubscribeUrl)}" style="color:#6b7280;text-decoration:underline;">Unsubscribe from these emails</a></p>`,
-    `<p style="margin:0;">${escapeHtml(postal)}</p>`,
-    `</td></tr>`,
-    `</table>`,
-    `</td></tr>`,
-    `</table>`,
-  ].join("\n");
-
-// Matches on the original string, so the index is an original index even when a character such
-// as `İ` would change length under `toLowerCase()`.
-const bodyClose = /<\/body>/gi;
-
-const withHtmlFooter = (html: string, footer: string): string => {
-  let index = -1;
-
-  for (const match of html.matchAll(bodyClose)) {
-    index = match.index;
-  }
-
-  return index === -1 ? `${html}${footer}` : `${html.slice(0, index)}${footer}${html.slice(index)}`;
-};
-
-/**
- * The one place a message gets its footer and unsubscribe headers. Sends, test sends and previews
- * all compose through here, so a preview shows exactly what a recipient receives.
- */
-export const compose = (
-  content: MessageContent,
-  unsubscribeUrl: string,
-  postal: string,
-): ComposedMessage => ({
-  subject: content.subject,
-  text: `${content.text}${footerFor(unsubscribeUrl, postal)}`,
-  html:
-    content.html === undefined
-      ? undefined
-      : withHtmlFooter(content.html, htmlFooterFor(unsubscribeUrl, postal)),
+export const compose = (content: MessageContent, unsubscribeUrl: string): ComposedMessage => ({
+  ...content,
   headers: [
     { name: "List-Unsubscribe", value: `<${unsubscribeUrl}>` },
     { name: "List-Unsubscribe-Post", value: "List-Unsubscribe=One-Click" },

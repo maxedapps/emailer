@@ -1,4 +1,4 @@
-import { SendingPaused, TestAudienceTooLarge } from "@emailer/api/Errors";
+import { SendingPaused } from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
 import { Effect } from "effect";
 
@@ -7,31 +7,21 @@ import { accepted, failureOutcomes, Mail, Mailer } from "../sending/Mailer.ts";
 import { SendGuard } from "../sending/SendGuard.ts";
 import { AudienceStore } from "../storage/Audience.ts";
 import { CampaignStore } from "../storage/Campaigns.ts";
-import { copyContent } from "./Copies.ts";
+import { chooseCopy } from "./Copies.ts";
+
+import type { MessageContent } from "../sending/Message.ts";
 
 /**
- * A list's members, if a test may reach them all. One member past the limit is requested, and a
- * second page is what decides: members whose contact is gone are dropped from a page, so its item
- * count alone could hide the twenty-first.
- */
-const listRecipients = Effect.fn("TestSends.listRecipients")(function* (listId: string) {
-  const audience = yield* AudienceStore;
-  const page = yield* audience.listMembers(listId, Schemas.maxTestRecipients + 1, undefined);
-
-  if (page.nextCursor !== undefined) {
-    return yield* new TestAudienceTooLarge({ limit: Schemas.maxTestRecipients });
-  }
-
-  return page.items.map((member) => member.email);
-});
-
-/**
- * Sends a `[Test]` of one of a campaign's copies — its own, unless the payload names a variant — to
- * a few addresses, now, and reports each outcome. It shares everything account-wide with a campaign
- * run — the guard, the daily budget and the pacing slot — and touches nothing of the campaign's:
- * no send rows, no counters, and no message tags, so the feedback a test draws suppresses an
- * address without reaching the campaign's breaker. Each recipient gets one attempt; the operator
- * repeats a test rather than the API retrying it. Only the copy it sends is read.
+ * Sends a `[Test]` of one of a campaign's copies to the few addresses named, now, and reports each
+ * outcome. It renders as the contact `as` names, or as no contact, and goes only to the addresses
+ * named: never to a contact's or a list's. Every copy is rendered before the first is sent, so a
+ * copy that fails to render sends nothing.
+ *
+ * It shares everything account-wide with a campaign run — the guard, the daily budget and the
+ * pacing slot — and touches nothing of the campaign's: no send rows, no counters, and no message
+ * tags, so the feedback a test draws suppresses an address without reaching the campaign's
+ * breaker. Each recipient gets one attempt; the operator repeats a test rather than the API
+ * retrying it. Only the copy it sends is read.
  */
 export const sendTest = Effect.fn("TestSends.sendTest")(function* (
   campaignId: string,
@@ -42,26 +32,25 @@ export const sendTest = Effect.fn("TestSends.sendTest")(function* (
   const guard = yield* SendGuard;
   const mailer = yield* Mailer;
   const campaign = yield* campaigns.getSummary(campaignId);
-  const copy = yield* copyContent(campaign, payload.variant ?? Schemas.defaultCopy);
-
-  const recipients = "to" in payload ? payload.to : yield* listRecipients(payload.listId);
+  const copy = yield* chooseCopy(campaign, payload.as, payload.variant);
   const allowance = yield* guard.current;
 
   if (allowance.refusal !== undefined) {
     return yield* new SendingPaused({ reason: allowance.refusal });
   }
 
-  const content = { ...copy, subject: `[Test] ${copy.subject}` };
+  const prepared: Array<
+    | { readonly email: string; readonly content: MessageContent; readonly unsubscribeUrl: string }
+    | { readonly email: string; readonly skipped: Schemas.UnmailableStatus }
+  > = [];
 
-  const outcomes: Array<Schemas.TestSendOutcome> = [];
-
-  for (const email of recipients) {
-    // The campaign's list, not the one a test may be sent to: the copy stands in for the
-    // campaign's mail, and its unsubscribe link must work as the campaign's would.
+  for (const email of payload.to) {
+    // The campaign's list: the copy stands in for the campaign's mail, and its unsubscribe link
+    // works as the campaign's would, for the test address, never for the contact it renders as.
     const status = yield* audience.addressStatus(email, campaign.listId);
 
     if (status !== "mailable") {
-      outcomes.push({ email, outcome: "skipped", reason: status });
+      prepared.push({ email, skipped: status });
       continue;
     }
 
@@ -70,15 +59,35 @@ export const sendTest = Effect.fn("TestSends.sendTest")(function* (
       listId: campaign.listId,
     }).pipe(Effect.orDie);
 
+    const content = yield* copy.render(unsubscribeUrl);
+
+    prepared.push({
+      email,
+      content: { ...content, subject: `[Test] ${content.subject}` },
+      unsubscribeUrl,
+    });
+  }
+
+  const outcomes: Array<Schemas.TestSendOutcome> = [];
+
+  for (const recipient of prepared) {
+    if ("skipped" in recipient) {
+      outcomes.push({ email: recipient.email, outcome: "skipped", reason: recipient.skipped });
+      continue;
+    }
+
     const delay = yield* guard.slot(allowance.limit);
 
     yield* Effect.sleep(delay);
 
     const outcome = yield* mailer
-      .send(email, Mail.Test({ content, unsubscribeUrl }))
+      .send(
+        recipient.email,
+        Mail.Test({ content: recipient.content, unsubscribeUrl: recipient.unsubscribeUrl }),
+      )
       .pipe(Effect.map(accepted), Effect.catchTags(failureOutcomes));
 
-    outcomes.push({ email, ...outcome });
+    outcomes.push({ email: recipient.email, ...outcome });
   }
 
   return { recipients: outcomes } satisfies Schemas.TestSendResult;

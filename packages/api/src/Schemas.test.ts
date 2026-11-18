@@ -383,9 +383,16 @@ describe("imports", () => {
 describe("TestSendPayload", () => {
   const decode = Schema.decodeUnknownResult(Schemas.TestSendPayload);
 
-  it("admits explicit addresses or one list", () => {
+  it("admits named addresses, rendered as no contact or as one", () => {
     expect(Result.isSuccess(decode({ to: ["a@example.com", "b@example.com"] }))).toBe(true);
-    expect(Result.isSuccess(decode({ listId: "0195f0a0-1111-4222-8333-44444444109e" }))).toBe(true);
+    expect(
+      Result.isSuccess(decode({ to: ["a@example.com"], as: "ada@example.com", variant: "half" })),
+    ).toBe(true);
+  });
+
+  // Test sends never go to a list's members (ADR-0041).
+  it("refuses a list in place of addresses", () => {
+    expect(Result.isFailure(decode({ listId: "0195f0a0-1111-4222-8333-44444444109e" }))).toBe(true);
   });
 
   it("refuses one mailbox named twice, in any case", () => {
@@ -405,7 +412,8 @@ describe("public error statuses", () => {
     [Errors.ContactChanged, 409],
     [Errors.SendAtNotInFuture, 409],
     [Errors.CampaignStateConflict, 409],
-    [Errors.TestAudienceTooLarge, 409],
+    [Errors.InvalidTemplate, 422],
+    [Errors.RenderFailed, 422],
     [Errors.VariantNotFound, 404],
     [Errors.DraftChanged, 409],
     [Errors.TooManyVariants, 422],

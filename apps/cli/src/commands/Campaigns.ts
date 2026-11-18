@@ -1,11 +1,12 @@
 import * as Schemas from "@emailer/api/Schemas";
-import { DateTime, Effect, Option, Schema } from "effect";
+import { DateTime, Effect, FileSystem, Option, Record, Schema, Stream } from "effect";
 import { Argument, CliError, Command, Flag } from "effect/cli";
+import { pathToFileURL } from "node:url";
 
 import { report, withClient } from "../Client.ts";
 import { entityPageFlags, idArgument, pageQuery } from "../Flags.ts";
 import { renderMarkdown } from "../Markdown.ts";
-import { confirm, openInBrowser, refuse } from "../Terminal.ts";
+import { openInBrowser, refuse } from "../Terminal.ts";
 
 /** A campaign body comes from one Markdown file, or from a text file and an optional HTML file. */
 const contentFlags = {
@@ -62,6 +63,17 @@ const chooseContent = (
   });
 };
 
+/** The copy's language, which names months and days in its dates; absent means English. */
+const languageFlag = Flag.String("language").pipe(
+  Flag.withDescription("The copy's language as a BCP 47 tag, such as de-DE, for its dates"),
+  Flag.withSchema(Schemas.Language),
+  Flag.optional,
+);
+
+/** The field a set language adds to a payload, or nothing. */
+const languageOf = (language: Option.Option<string>) =>
+  Option.isSome(language) ? { language: language.value } : {};
+
 const decodeBody = Schema.decodeUnknownEffect(Schemas.CampaignBody);
 
 /**
@@ -95,6 +107,7 @@ const campaignsCreate = Command.make(
       Flag.withSchema(Schemas.CampaignSubject),
     ),
     ...contentFlags,
+    language: languageFlag,
     filter: Flag.KeyValuePair("filter").pipe(
       Flag.withDescription(
         "Send only to members whose attributes equal every key=value given; repeat the flag per entry",
@@ -114,6 +127,7 @@ const campaignsCreate = Command.make(
       listId: input.list,
       subject: input.subject,
       ...(yield* bodyOf(content.value, Effect.succeed(input.subject))),
+      ...languageOf(input.language),
     };
 
     yield* report(
@@ -152,6 +166,7 @@ interface CampaignChange {
   subject?: string;
   text?: string;
   html?: string | null;
+  language?: string;
   filter?: Schemas.ContactAttributes | null;
 }
 
@@ -170,6 +185,7 @@ const campaignsUpdate = Command.make(
       Flag.optional,
     ),
     ...contentFlags,
+    language: languageFlag,
     filter: Flag.KeyValuePair("filter").pipe(
       Flag.withDescription("Replace the filter, as repeated key=value pairs"),
       Flag.withSchema(Schemas.ContactAttributes),
@@ -206,6 +222,10 @@ const campaignsUpdate = Command.make(
 
             change.text = body.text;
             change.html = body.html ?? null;
+          }
+
+          if (Option.isSome(input.language)) {
+            change.language = input.language.value;
           }
 
           if (input.clearFilter) {
@@ -252,6 +272,7 @@ const variantsSet = Command.make(
       Flag.withSchema(Schemas.CampaignSubject),
     ),
     ...contentFlags,
+    language: languageFlag,
     when: Flag.KeyValuePair("when").pipe(
       Flag.withDescription(
         "Send it to members whose attributes equal every key=value given; repeat per entry",
@@ -281,6 +302,7 @@ const variantsSet = Command.make(
     const variant = yield* decodeVariant({
       subject: input.subject,
       ...(yield* bodyOf(content.value, Effect.succeed(input.subject))),
+      ...languageOf(input.language),
       ...rule,
     }).pipe(Effect.mapError((failure) => refuse(`The variant is refused: ${failure.message}`)));
 
@@ -352,6 +374,22 @@ const campaignsDelete = Command.make(
   }),
 ).pipe(Command.withDescription("Delete a draft campaign"));
 
+/** Whom a preview or test renders the copy for, and which copy. */
+const renderFlags = {
+  as: Flag.String("as").pipe(
+    Flag.withDescription(
+      "Render as the contact with this address; without it, every contact value falls back",
+    ),
+    Flag.withSchema(Schemas.EmailAddress),
+    Flag.optional,
+  ),
+  variant: Flag.String("variant").pipe(
+    Flag.withDescription("Render this variant's copy instead of the one the rules choose"),
+    Flag.withSchema(Schemas.CopyKey),
+    Flag.optional,
+  ),
+};
+
 const campaignsTest = Command.make(
   "test",
   {
@@ -361,117 +399,185 @@ const campaignsTest = Command.make(
         `An address to send the test to; repeat for up to ${Schemas.maxTestRecipients}`,
       ),
       Flag.withSchema(Schemas.EmailAddress),
-      Flag.between(0, Schemas.maxTestRecipients),
+      Flag.between(1, Schemas.maxTestRecipients),
     ),
-    list: Flag.String("list").pipe(
-      Flag.withDescription("Send the test to every member of this list, after confirming how many"),
-      Flag.withSchema(Schemas.EntityId),
-      Flag.optional,
-    ),
-    yes: Flag.Boolean("yes").pipe(
-      Flag.withDescription("Send to --list without asking first"),
-      Flag.withDefault(false),
-    ),
-    variant: Flag.String("variant").pipe(
-      Flag.withDescription("Send this variant's copy instead of the campaign's own"),
-      Flag.withSchema(Schemas.CopyKey),
-      Flag.optional,
-    ),
+    ...renderFlags,
   },
   Effect.fn(function* (input) {
-    if (input.to.length > 0 === Option.isSome(input.list)) {
-      return yield* refuse("Pass --to (repeatable) or --list, one of the two");
-    }
-
-    if (Option.isSome(input.list)) {
-      const listId = input.list.value;
-
-      // Its own request, so the time the operator takes to answer is not charged to the send's.
-      const audience = yield* withClient((client) =>
-        Effect.all({
-          campaign: client.campaigns.get({ params: { id: input.id } }),
-          list: client.lists.get({ params: { id: listId } }),
-          members: client.lists.listMembers({
-            params: { listId },
-            query: { limit: Schemas.maxTestRecipients + 1 },
-          }),
-        }),
-      );
-
-      if (audience.members.nextCursor !== undefined) {
-        return yield* refuse(
-          `"${audience.list.name}" has more than ${Schemas.maxTestRecipients} members; a test reaches at most that many`,
-        );
-      }
-
-      const confirmed =
-        input.yes ||
-        (yield* confirm(
-          `Send a test of "${audience.campaign.subject}" to ${audience.members.items.length} members of "${audience.list.name}"?`,
-        ));
-
-      if (!confirmed) {
-        return;
-      }
-    }
-
-    const params = { id: input.id };
-    const copy = Option.isSome(input.variant) ? { variant: input.variant.value } : {};
-
     yield* report(
       yield* withClient((client) =>
-        Option.isSome(input.list)
-          ? client.campaigns.test({ params, payload: { listId: input.list.value, ...copy } })
-          : client.campaigns.test({ params, payload: { to: input.to, ...copy } }),
+        client.campaigns.test({
+          params: { id: input.id },
+          payload: {
+            to: input.to,
+            as: Option.getOrUndefined(input.as),
+            variant: Option.getOrUndefined(input.variant),
+          },
+        }),
       ),
     );
   }),
 ).pipe(
   Command.withDescription(
-    "Send a [Test] copy of a campaign now and report each recipient's outcome",
+    "Send a [Test] copy of a campaign now to the addresses named, and report each one's outcome",
   ),
   Command.withExamples([
     {
       command:
         "emailer campaigns test 0195f0a0-1111-4222-8333-4444444ca409 --to me@example.com --to colleague@example.com",
-      description: "Send a test to two addresses",
+      description: "Send a test to two addresses, with every contact value falling back",
     },
     {
       command:
-        "emailer campaigns test 0195f0a0-1111-4222-8333-4444444ca409 --list 0195f0a0-1111-4222-8333-44444444109e",
-      description: "Send a test to a small list, after confirming how many members it reaches",
+        "emailer campaigns test 0195f0a0-1111-4222-8333-4444444ca409 --to me@example.com --as ada@example.com",
+      description: "Send yourself the copy the contact ada@example.com would get",
     },
   ]),
 );
+
+/** A rendered HTML part as a local file, so a browser can open it. */
+const writeHtml = Effect.fn("writeHtml")(function* (html: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* fs.makeTempFile({ prefix: "emailer-render-", suffix: ".html" });
+
+  yield* fs.writeFileString(path, html);
+
+  return pathToFileURL(path).href;
+});
 
 const campaignsPreview = Command.make(
   "preview",
   {
     id: idArgument("id"),
+    ...renderFlags,
     open: Flag.Boolean("open").pipe(
-      Flag.withDescription("Also open the link in this machine's browser"),
+      Flag.withDescription("Also open the link, or with --as the rendered HTML, in the browser"),
       Flag.withDefault(false),
     ),
   },
   Effect.fn(function* (input) {
-    const link = yield* withClient((client) =>
-      client.campaigns.preview({ params: { id: input.id } }),
+    if (Option.isNone(input.as)) {
+      if (Option.isSome(input.variant)) {
+        return yield* refuse("--variant needs --as; the preview link shows every copy");
+      }
+
+      const link = yield* withClient((client) =>
+        client.campaigns.preview({ params: { id: input.id } }),
+      );
+
+      yield* report(link);
+
+      if (input.open) {
+        yield* openInBrowser(link.url);
+      }
+
+      return;
+    }
+
+    const as = input.as.value;
+
+    const rendered = yield* withClient((client) =>
+      client.campaigns.render({
+        params: { id: input.id },
+        payload: { as, variant: Option.getOrUndefined(input.variant) },
+      }),
     );
 
-    yield* report(link);
+    yield* report(rendered);
 
-    if (input.open) {
-      yield* openInBrowser(link.url);
+    if (input.open && rendered.html !== undefined) {
+      yield* openInBrowser(yield* writeHtml(rendered.html));
     }
   }),
 ).pipe(
   Command.withDescription(
-    "Create a 24-hour public link to the campaign as recipients will see it; it follows later edits",
+    "Create a 24-hour public link to every copy with its fallbacks, or print the copy one contact gets",
   ),
   Command.withExamples([
     {
       command: "emailer campaigns preview 0195f0a0-1111-4222-8333-4444444ca409 --open",
       description: "Print a preview link and open it in the local browser",
+    },
+    {
+      command:
+        "emailer campaigns preview 0195f0a0-1111-4222-8333-4444444ca409 --as ada@example.com --open",
+      description: "Print the copy ada@example.com would get and open its HTML",
+    },
+  ]),
+);
+
+/** Every page of a check, added up, with its findings grouped the way they are fixed. */
+const summarize = (campaignId: string, pages: ReadonlyArray<Schemas.CheckPage>) => {
+  const add = (left: number, right: number) => left + right;
+
+  const noSkips: Record<Schemas.UnmailableStatus, number> = {
+    unsubscribed: 0,
+    suppressed: 0,
+    bouncing: 0,
+  };
+
+  const noRenders: Record<Schemas.CopyKey, number> = {};
+
+  const findings = pages.flatMap((page) => page.findings);
+
+  const fallbacks: Record<string, Array<string>> = {};
+
+  for (const finding of findings) {
+    if (finding.kind === "fallback") {
+      (fallbacks[`${finding.copy}: contact.${finding.field}`] ??= []).push(finding.email);
+    }
+  }
+
+  return {
+    members: pages.reduce((sum, page) => sum + page.members, 0),
+    filteredOut: pages.reduce((sum, page) => sum + page.filteredOut, 0),
+    skipped: pages.reduce((sum, page) => Record.union(sum, page.skipped, add), noSkips),
+    rendered: pages.reduce((sum, page) => Record.union(sum, page.rendered, add), noRenders),
+    failures: findings.flatMap((finding) =>
+      finding.kind === "failure"
+        ? [{ email: finding.email, copy: finding.copy, message: finding.message }]
+        : [],
+    ),
+    fallbacks,
+    oddValues: findings.flatMap((finding) =>
+      finding.kind === "odd-value"
+        ? [
+            {
+              email: finding.email,
+              copy: finding.copy,
+              field: finding.field,
+              problem: finding.problem,
+            },
+          ]
+        : [],
+    ),
+    showOne: `emailer campaigns preview ${campaignId} --as <email>`,
+  };
+};
+
+const campaignsCheck = Command.make(
+  "check",
+  { id: idArgument("id") },
+  Effect.fn(function* (input) {
+    const pages = yield* withClient((client) =>
+      Stream.paginate(undefined, (cursor: string | undefined) =>
+        client.campaigns
+          .check({ params: { id: input.id }, payload: { cursor } })
+          .pipe(Effect.map((page) => [[page], Option.fromUndefinedOr(page.nextCursor)] as const)),
+      ).pipe(Stream.runCollect),
+    );
+
+    yield* report(summarize(input.id, pages));
+  }),
+).pipe(
+  Command.withDescription(
+    "Render the campaign for every member of its list without sending, and list what would go wrong or fall back",
+  ),
+  Command.withExamples([
+    {
+      command: "emailer campaigns check 0195f0a0-1111-4222-8333-4444444ca409",
+      description:
+        "Count who gets which copy and who is skipped, and name failed renders, fallbacks and odd values",
     },
   ]),
 );
@@ -619,6 +725,7 @@ export const campaigns = Command.make("campaigns").pipe(
     campaignsDelete,
     campaignsTest,
     campaignsPreview,
+    campaignsCheck,
     campaignsGet,
     campaignsSend,
     campaignsResume,

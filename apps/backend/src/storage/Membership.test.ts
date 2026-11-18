@@ -648,6 +648,64 @@ describe("importContacts", () => {
     }),
   );
 
+  it.effect(
+    "gives an existing contact the name the import brings and merges its attributes, at its next revision",
+    () =>
+      Effect.gen(function* () {
+        const stored = {
+          pk: { S: `CONTACT#${otherContactId}` },
+          sk: { S: "META" },
+          gsi1pk: { S: "contact" },
+          gsi1sk: { S: `${createdAt}#${otherContactId}` },
+          v: { N: "1" },
+          id: { S: otherContactId },
+          email: { S: "sam@example.com" },
+          name: { S: "Sam" },
+          attributes: { M: { plan: { S: "pro" } } },
+          createdAt: { S: createdAt },
+          revision: { N: "3" },
+        };
+
+        const { table, run } = importInto(
+          {
+            batchGetItem: [
+              Effect.succeed({
+                Responses: {
+                  [physicalName]: [reservationFor("sam@example.com", otherContactId)],
+                },
+              }),
+              Effect.succeed({ Responses: { [physicalName]: [stored] } }),
+            ],
+            transactWriteItems: [succeeded],
+          },
+          [
+            {
+              ...candidate(contactId, "sam@example.com"),
+              name: "Samantha",
+              attributes: { city: "Berlin" },
+            },
+          ],
+        );
+
+        expect(yield* run).toStrictEqual({
+          contacts: [{ email: "sam@example.com", contactId: otherContactId, member: true }],
+        });
+        expect(table.transactionRequests[0]?.TransactItems[0]).toStrictEqual({
+          Put: {
+            Table: tableLogicalId,
+            Item: {
+              ...stored,
+              name: { S: "Samantha" },
+              attributes: { M: { plan: { S: "pro" }, city: { S: "Berlin" } } },
+              revision: { N: "4" },
+            },
+            ConditionExpression: "revision = :revision",
+            ExpressionAttributeValues: { ":revision": { N: "3" } },
+          },
+        });
+      }),
+  );
+
   it.effect("stays inside the transaction action limit at a full batch", () =>
     Effect.gen(function* () {
       const candidates = Array.from({ length: Schemas.maxBatchEntries }, (_, index) =>

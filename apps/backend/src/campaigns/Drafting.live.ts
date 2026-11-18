@@ -1,5 +1,6 @@
 import { makeEmailerClient } from "@emailer/api/Client";
 import * as Errors from "@emailer/api/Errors";
+import * as Schemas from "@emailer/api/Schemas";
 import { Effect, Result } from "effect";
 import { describe, expect } from "vitest";
 
@@ -11,10 +12,12 @@ import {
   configuration,
   contactFor,
   fetchPage,
+  htmlFooter,
   liveStorage,
   sendRows,
   simulator,
   testToSimulators,
+  textFooter,
   type LiveTest,
 } from "../../test/IntegrationSupport.ts";
 
@@ -33,22 +36,22 @@ export const draftingSuite = (test: LiveTest) => {
         const list = yield* client.lists.create({ payload: { name: `drafting-${runId}` } });
 
         const campaign = yield* client.campaigns.create({
-          payload: { listId: list.id, subject: `Draft ${runId}`, text: "First text" },
+          payload: { listId: list.id, subject: `Draft ${runId}`, text: `First text${textFooter}` },
         });
 
         const filtered = yield* client.campaigns.update({
           params: { id: campaign.id },
           payload: {
             subject: `Edited ${runId}`,
-            html: "<p>Now with HTML</p>",
+            html: `<p>Now with HTML</p>${htmlFooter}`,
             filter: { plan: "pro" },
           },
         });
 
         expect(filtered).toMatchObject({
           subject: `Edited ${runId}`,
-          text: "First text",
-          html: "<p>Now with HTML</p>",
+          text: `First text${textFooter}`,
+          html: `<p>Now with HTML</p>${htmlFooter}`,
           filter: { plan: "pro" },
         });
         expect((yield* campaignMeta(campaign.id))["filter"]).toStrictEqual({
@@ -57,7 +60,7 @@ export const draftingSuite = (test: LiveTest) => {
 
         const cleared = yield* client.campaigns.update({
           params: { id: campaign.id },
-          payload: { text: "Second text", html: null, filter: null },
+          payload: { text: `Second text${textFooter}`, html: null, filter: null },
         });
 
         expect(cleared).not.toHaveProperty("html");
@@ -85,7 +88,7 @@ export const draftingSuite = (test: LiveTest) => {
         const list = yield* client.lists.create({ payload: { name: `scheduled-${runId}` } });
 
         const campaign = yield* client.campaigns.create({
-          payload: { listId: list.id, subject: `Scheduled ${runId}`, text: "Later" },
+          payload: { listId: list.id, subject: `Scheduled ${runId}`, text: `Later${textFooter}` },
         });
 
         yield* client.campaigns.schedule({
@@ -124,8 +127,8 @@ export const draftingSuite = (test: LiveTest) => {
           payload: {
             listId: list.id,
             subject: `Preview ${runId}`,
-            text: "Plain part",
-            html: "<p>First HTML part</p>",
+            text: `Plain part${textFooter}`,
+            html: `<p>First HTML part</p>${htmlFooter}`,
           },
         });
 
@@ -133,7 +136,7 @@ export const draftingSuite = (test: LiveTest) => {
 
         yield* client.campaigns.update({
           params: { id: campaign.id },
-          payload: { html: "<p>Edited HTML part</p>" },
+          payload: { html: `<p>Edited HTML part</p>${htmlFooter}` },
         });
 
         const page = yield* fetchPage(link.url);
@@ -162,47 +165,67 @@ export const draftingSuite = (test: LiveTest) => {
 
   describe("test sends", () => {
     test(
-      "sends [Test] copies to explicit and listed addresses without touching the campaign",
+      "sends [Test] copies only to the addresses named, as no contact or as one, without touching the campaign",
       Effect.gen(function* () {
         const settings = yield* configuration;
         const client = yield* makeEmailerClient(settings.apiUrl, settings.token);
         const storage = yield* liveStorage(settings.tableName);
         const runId = yield* newIdentifier;
-        const listed = [simulator("success", runId, 2), simulator("success", runId, 3)];
+        const [named, unnamed] = [simulator("success", runId, 2), simulator("success", runId, 3)];
         const list = yield* client.lists.create({ payload: { name: `tests-${runId}` } });
+        const ada = yield* client.contacts.create({ payload: { email: named, name: "Ada" } });
 
-        for (const address of listed) {
-          const contactId = yield* contactFor(storage, address);
-
+        for (const contactId of [ada.id, yield* contactFor(storage, unnamed)]) {
           yield* client.lists.addContact({ params: { listId: list.id, contactId } });
         }
 
         const campaign = yield* client.campaigns.create({
-          payload: { listId: list.id, subject: `Tested ${runId}`, text: "A test copy." },
+          payload: {
+            listId: list.id,
+            subject: `Tested ${runId}`,
+            text: `Hi {{ contact.name | default: "there" }}${textFooter}`,
+          },
         });
 
-        const explicit = yield* testToSimulators(client, campaign.id, {
-          to: [simulator("success", runId, 0), simulator("success", runId, 1)],
+        const to = [simulator("success", runId, 0), simulator("success", runId, 1)];
+        const plain = yield* testToSimulators(client, campaign.id, { to });
+
+        const asAda = yield* testToSimulators(client, campaign.id, {
+          to: to.slice(0, 1),
+          as: named,
         });
 
-        const fromList = yield* testToSimulators(client, campaign.id, { listId: list.id });
+        const outcomes = (result: Schemas.TestSendResult) =>
+          result.recipients.map(({ email, outcome }) => [email, outcome]);
 
-        for (const result of [explicit, fromList]) {
-          expect(result.recipients.map((entry) => entry.outcome)).toStrictEqual([
-            "accepted",
-            "accepted",
-          ]);
-        }
+        expect(outcomes(plain)).toStrictEqual(to.map((email) => [email, "accepted"]));
+        expect(outcomes(asAda)).toStrictEqual([[to[0], "accepted"]]);
+        expect(
+          yield* Effect.flip(
+            testToSimulators(client, campaign.id, { to, as: simulator("success", runId, 9) }),
+          ),
+        ).toStrictEqual(new Errors.ContactNotFound());
 
-        // Members come back in key order, which random contact ids make independent of `listed`.
-        const members = yield* client.lists.listMembers({
-          params: { listId: list.id },
-          query: {},
+        // What a member gets, and what every member gets, without sending anything.
+        const rendered = yield* client.campaigns.render({
+          params: { id: campaign.id },
+          payload: { as: named },
         });
 
-        expect(fromList.recipients.map((entry) => entry.email)).toStrictEqual(
-          members.items.map((member) => member.email),
-        );
+        expect(rendered).toMatchObject({ copy: Schemas.defaultCopy, subject: `Tested ${runId}` });
+        expect(rendered.text.startsWith("Hi Ada\n")).toBe(true);
+
+        const check = yield* client.campaigns.check({ params: { id: campaign.id }, payload: {} });
+
+        expect(check).toStrictEqual({
+          members: 2,
+          filteredOut: 0,
+          skipped: { unsubscribed: 0, suppressed: 0, bouncing: 0 },
+          rendered: { [Schemas.defaultCopy]: 2 },
+          findings: [
+            { kind: "fallback", email: unnamed, copy: Schemas.defaultCopy, field: "name" },
+          ],
+        });
 
         const meta = yield* campaignMeta(campaign.id);
 
@@ -228,7 +251,11 @@ export const draftingSuite = (test: LiveTest) => {
         const list = yield* client.lists.create({ payload: { name: `test-bounce-${runId}` } });
 
         const campaign = yield* client.campaigns.create({
-          payload: { listId: list.id, subject: `Test bounce ${runId}`, text: "Bounces." },
+          payload: {
+            listId: list.id,
+            subject: `Test bounce ${runId}`,
+            text: `Bounces.${textFooter}`,
+          },
         });
 
         const result = yield* testToSimulators(client, campaign.id, { to: [bounce] });

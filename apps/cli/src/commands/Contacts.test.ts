@@ -195,16 +195,16 @@ describe("contacts set-attributes", () => {
       }),
   );
 
-  it.effect("refuses a name column before any request", () =>
+  it.effect("sends a name column as each contact's name", () =>
     Effect.gen(function* () {
       const service = fakeService();
-      const file = yield* tempFile("csv", "email,name,segment\nada@example.com,Ada,a\n");
+      const file = yield* tempFile("csv", "email,Name,segment\nada@example.com,Ada,a\n");
 
-      const run = yield* runCli(service, ["contacts", "set-attributes", "--file", file]);
+      yield* runCli(service, ["contacts", "set-attributes", "--file", file]);
 
-      expect(Exit.isFailure(run.exit)).toBe(true);
-      expect(run.stderr).toContain("name column");
-      expect(service.received).toStrictEqual([]);
+      expect(service.payloadsOf("contacts.setAttributes")).toStrictEqual([
+        { contacts: [{ email: "ada@example.com", name: "Ada", attributes: { segment: "a" } }] },
+      ]);
     }),
   );
 });

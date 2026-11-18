@@ -11,6 +11,8 @@ import * as Contacts from "../audience/Contacts.ts";
 import * as Lists from "../audience/Lists.ts";
 import { CampaignSchedule } from "../campaigns/CampaignSchedule.ts";
 import * as Campaigns from "../campaigns/Campaigns.ts";
+import { checkPage } from "../campaigns/Checks.ts";
+import { renderAs } from "../campaigns/Copies.ts";
 import { PreviewFunction, previewLink, previewSecret } from "../campaigns/Previews.ts";
 import { sendTest } from "../campaigns/TestSends.ts";
 import * as Subscriptions from "../consent/Subscriptions.ts";
@@ -85,6 +87,8 @@ const campaignsHandlers = HttpApiBuilder.group(EmailerApi, "campaigns", (handler
         Campaigns.setVariant(request.params.id, request.params.key, request.payload),
       removeVariant: (request) => Campaigns.removeVariant(request.params.id, request.params.key),
       test: (request) => sendTest(request.params.id, request.payload),
+      render: (request) => renderAs(request.params.id, request.payload),
+      check: (request) => checkPage(request.params.id, request.payload),
       // The campaign's control item is enough to know it exists; its body is not read.
       preview: (request) =>
         campaigns

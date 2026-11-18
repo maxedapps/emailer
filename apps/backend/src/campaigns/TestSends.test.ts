@@ -1,3 +1,4 @@
+import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import * as Errors from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
@@ -27,24 +28,48 @@ const campaignId = "0195f0a0-1111-4222-8333-4444444ca409";
 
 const listId = "0195f0a0-1111-4222-8333-44444444109e";
 
-const otherListId = "0195f0a0-1111-4222-8333-44444444209e";
+const postalAddress = "Example Street 1, 12345 Example City";
+
+const footer = "\n{{ unsubscribe_url }}\n{{ postal_address }}";
+
+const html =
+  '<p>Hi {{ contact.name | default: "there" }}</p><a href="{{ unsubscribe_url }}">Unsubscribe</a> {{ postal_address }}';
 
 const campaign: Schemas.Campaign = {
   id: campaignId,
   listId,
   subject: "Release notes",
-  text: "Hello there",
-  html: "<p>Hello there</p>",
+  text: `Hi{% if contact.name %} {{ contact.name }}{% endif %}${footer}`,
+  html,
   createdAt: "2026-09-11T10:00:00.000Z",
   submission: { state: "draft" },
-  variants: [{ key: "half", percent: 50 }],
+  variants: [{ key: "berlin", when: { city: "Berlin" } }],
 };
 
-const half: Schemas.Variant = {
-  key: "half",
-  percent: 50,
-  subject: "Half notes",
-  text: "Split copy",
+const berlin: Schemas.Variant = {
+  key: "berlin",
+  when: { city: "Berlin" },
+  subject: "Berlin notes",
+  text: `Hallo {{ contact.name }}, since {{ contact.since | date: "%B %Y" }}${footer}`,
+  language: "de-DE",
+};
+
+/** The contact a test renders as: the Berlin rule picks their copy. */
+const ada: Schemas.Contact = {
+  id: "0195f0a0-1111-4222-8333-44444444c001",
+  email: "ada@example.com",
+  name: "Ada",
+  attributes: { city: "Berlin", since: "2024-03-15" },
+  createdAt: "2026-09-11T09:00:00.000Z",
+};
+
+/** Lives in Berlin too, but their date cannot be read. */
+const bob: Schemas.Contact = {
+  id: "0195f0a0-1111-4222-8333-44444444c002",
+  email: "bob@example.com",
+  name: "Bob",
+  attributes: { city: "Berlin", since: "some day" },
+  createdAt: "2026-09-11T09:00:00.000Z",
 };
 
 const healthy: SendAllowance = { limit: 3 };
@@ -53,14 +78,12 @@ const configuration = Layer.succeed(ConfigProvider.ConfigProvider)(
   ConfigProvider.fromEnvRecord({
     EMAILER_UNSUBSCRIBE_URL: "https://unsubscribe.example.com/",
     EMAILER_UNSUBSCRIBE_SECRET: "8f14e45fceea167a5a36dedd4bea2543a1b2c3d4e5f60718293a4b5c6d7e8f90",
+    EMAILER_POSTAL_ADDRESS: postalAddress,
   }),
 );
 
-const member = (n: number): Schemas.Contact => ({
-  id: `0195f0a0-1111-4222-8333-4444444c${String(n).padStart(4, "0")}`,
-  email: `member${n}@example.com`,
-  createdAt: "2026-09-11T09:00:00.000Z",
-});
+const linkFor = (mailbox: string) =>
+  unsubscribeLink({ mailbox, listId }).pipe(Effect.provide(configuration));
 
 interface Scenario {
   readonly allowance?: SendAllowance;
@@ -68,9 +91,6 @@ interface Scenario {
   readonly optOuts?: ReadonlyArray<readonly [email: string, listId: string]>;
   /** How SES answers each send in turn: an error, or acceptance once they run out. */
   readonly failures?: ReadonlyArray<SendError>;
-  readonly members?: ReadonlyArray<Schemas.Contact>;
-  readonly nextCursor?: string;
-  readonly listMissing?: boolean;
   /** How long each pacing slot asks the sender to wait. */
   readonly slotDelay?: Duration.Duration;
 }
@@ -84,7 +104,6 @@ const fixture = (scenario: Scenario = {}) => {
   const sent: Array<Sent> = [];
   const sentAt: Array<number> = [];
   const slots: Array<number> = [];
-  const pageRequests: Array<number> = [];
   const failures = [...(scenario.failures ?? [])];
   const statuses = new Map(scenario.statuses ?? []);
   const optOuts = new Set((scenario.optOuts ?? []).map(([email, list]) => `${email} ${list}`));
@@ -92,21 +111,16 @@ const fixture = (scenario: Scenario = {}) => {
 
   const layer = Layer.mergeAll(
     configuration,
+    NodeCrypto.layer,
     Layer.succeed(AudienceStore)({
       ...unusedAudience,
-      listMembers: (_listId, limit) =>
-        Effect.gen(function* () {
-          pageRequests.push(limit);
+      getContactByEmail: (email) =>
+        Effect.suspend(() => {
+          const found = [ada, bob].find((contact) => contact.email === email);
 
-          if (scenario.listMissing === true) {
-            return yield* new Errors.ListNotFound();
-          }
-
-          const items = [...(scenario.members ?? [])];
-
-          return scenario.nextCursor === undefined
-            ? { items }
-            : { items, nextCursor: scenario.nextCursor };
+          return found === undefined
+            ? Effect.fail(new Errors.ContactNotFound())
+            : Effect.succeed(found);
         }),
       addressStatus: (email, list) =>
         Effect.succeed(
@@ -125,18 +139,24 @@ const fixture = (scenario: Scenario = {}) => {
             ? Effect.succeed(campaign)
             : Effect.fail(new Errors.CampaignNotFound());
         }),
+      getRoutes: () =>
+        Effect.sync(() => {
+          reads.push("routes");
+
+          return { routes: campaign.variants ?? [], revision: 1 };
+        }),
       getBody: () =>
         Effect.sync(() => {
           reads.push("body");
 
-          return { text: campaign.text, html: "<p>Hello there</p>" };
+          return { text: campaign.text, html };
         }),
       getVariant: (_id, key) =>
         Effect.suspend(() => {
           reads.push(`variant ${key}`);
 
-          return key === half.key
-            ? Effect.succeed(half)
+          return key === berlin.key
+            ? Effect.succeed(berlin)
             : Effect.fail(new Errors.VariantNotFound({ variant: key }));
         }),
     }),
@@ -163,7 +183,7 @@ const fixture = (scenario: Scenario = {}) => {
     }),
   );
 
-  return { layer, sent, sentAt, slots, pageRequests, reads };
+  return { layer, sent, sentAt, slots, reads };
 };
 
 const run = (fix: ReturnType<typeof fixture>, payload: Schemas.TestSendPayload) =>
@@ -179,7 +199,7 @@ const failureOf = <A, E>(attempt: Result.Result<A, E>): E => {
 
 describe("sendTest", () => {
   it.effect(
-    "sends a [Test] copy of the campaign to each address in order, untagged, one paced slot each",
+    "sends a [Test] of the campaign, rendered as no contact, to each address in order, untagged, one paced slot each",
     () =>
       Effect.gen(function* () {
         const fix = fixture();
@@ -194,24 +214,53 @@ describe("sendTest", () => {
         });
         const recipients = ["b@example.com", "a@example.com"];
 
-        const links = yield* Effect.forEach(recipients, (recipient) =>
-          unsubscribeLink({ mailbox: recipient, listId }).pipe(Effect.provide(configuration)),
-        );
+        const links = yield* Effect.forEach(recipients, linkFor);
 
         expect(fix.sent).toStrictEqual(
-          recipients.map((recipient, index) => ({
-            recipient,
-            mail: Mail.Test({
-              content: {
-                subject: "[Test] Release notes",
-                text: campaign.text,
-                html: campaign.html,
-              },
-              unsubscribeUrl: links[index] ?? "",
-            }),
-          })),
+          recipients.map((recipient, index) => {
+            const link = links[index] ?? "";
+
+            return {
+              recipient,
+              mail: Mail.Test({
+                content: {
+                  subject: "[Test] Release notes",
+                  text: `Hi\n${link}\n${postalAddress}`,
+                  html: `<p>Hi there</p><a href="${link.replaceAll("&", "&amp;")}">Unsubscribe</a> ${postalAddress}`,
+                },
+                unsubscribeUrl: link,
+              }),
+            };
+          }),
         );
         expect(fix.slots).toStrictEqual([healthy.limit, healthy.limit]);
+      }),
+  );
+
+  it.effect(
+    "renders as the contact `as` names, with the copy their attributes choose, linked for the test address",
+    () =>
+      Effect.gen(function* () {
+        const fix = fixture();
+
+        yield* run(fix, { to: ["tester@example.com"], as: ada.email });
+
+        const link = yield* linkFor("tester@example.com");
+
+        expect(fix.sent).toStrictEqual([
+          {
+            recipient: "tester@example.com",
+            mail: Mail.Test({
+              content: {
+                subject: "[Test] Berlin notes",
+                text: `Hallo Ada, since März 2024\n${link}\n${postalAddress}`,
+                html: undefined,
+              },
+              unsubscribeUrl: link,
+            }),
+          },
+        ]);
+        expect(fix.reads).toStrictEqual(["summary", "routes", "variant berlin"]);
       }),
   );
 
@@ -219,25 +268,43 @@ describe("sendTest", () => {
     Effect.gen(function* () {
       const fix = fixture();
 
-      yield* run(fix, { to: ["a@example.com"], variant: "half" });
+      yield* run(fix, { to: ["a@example.com"], as: ada.email, variant: "default" });
 
-      expect(fix.sent[0]?.mail).toMatchObject({
-        content: { subject: "[Test] Half notes", text: "Split copy", html: undefined },
-      });
-      expect(fix.reads).toStrictEqual(["summary", "variant half"]);
+      const [sent] = fix.sent;
 
-      yield* run(fix, { to: ["a@example.com"], variant: "default" });
-
-      expect(fix.sent[1]?.mail).toMatchObject({ content: { subject: "[Test] Release notes" } });
-      expect(fix.reads.slice(2)).toStrictEqual(["summary", "body"]);
+      expect(sent?.mail._tag === "Test" && sent.mail.content.subject).toBe("[Test] Release notes");
+      expect(sent?.mail._tag === "Test" && sent.mail.content.html).toContain("<p>Hi Ada</p>");
+      expect(fix.reads).toStrictEqual(["summary", "body"]);
 
       const missing = fixture();
 
       expect(
-        failureOf(yield* run(missing, { to: ["a@example.com"], variant: "berlin" })),
-      ).toStrictEqual(new Errors.VariantNotFound({ variant: "berlin" }));
+        failureOf(yield* run(missing, { to: ["a@example.com"], variant: "half" })),
+      ).toStrictEqual(new Errors.VariantNotFound({ variant: "half" }));
       expect(missing.sent).toStrictEqual([]);
     }),
+  );
+
+  it.effect(
+    "sends nothing when the copy cannot render for the contact, or the contact is unknown",
+    () =>
+      Effect.gen(function* () {
+        const fix = fixture();
+
+        expect(
+          failureOf(yield* run(fix, { to: ["a@example.com", "b@example.com"], as: bob.email })),
+        ).toStrictEqual(
+          new Errors.RenderFailed({
+            copy: "berlin",
+            message: 'date: cannot read "some day" as a date',
+          }),
+        );
+        expect(
+          failureOf(yield* run(fix, { to: ["a@example.com"], as: "nobody@example.com" })),
+        ).toStrictEqual(new Errors.ContactNotFound());
+        expect(fix.sent).toStrictEqual([]);
+        expect(fix.slots).toStrictEqual([]);
+      }),
   );
 
   it.effect("sends each address only once its pacing slot's delay has passed", () =>
@@ -304,67 +371,24 @@ describe("sendTest", () => {
     }),
   );
 
-  it.effect("sends to every member of a list that fits, asking for one member past the limit", () =>
+  // A test copy stands in for the campaign's mail, so the campaign's list decides.
+  it.effect("skips addresses unsubscribed from the campaign's list, linking the rest to it", () =>
     Effect.gen(function* () {
-      const fix = fixture({ members: [member(1), member(2)] });
+      const fix = fixture({ optOuts: [["gone@example.com", listId]] });
 
-      const attempt = yield* run(fix, { listId });
-
-      expect(fix.pageRequests).toStrictEqual([Schemas.maxTestRecipients + 1]);
-      expect(Result.isSuccess(attempt) && attempt.success.recipients).toStrictEqual([
-        { email: "member1@example.com", outcome: "accepted", messageId: "message-1" },
-        { email: "member2@example.com", outcome: "accepted", messageId: "message-2" },
-      ]);
-    }),
-  );
-
-  // A test copy stands in for the campaign's mail, so the campaign's list decides, whichever list
-  // the copy goes to.
-  it.effect("skips members who left the campaign's list, not the list the test went to", () =>
-    Effect.gen(function* () {
-      const fix = fixture({
-        members: [member(1), member(2)],
-        optOuts: [
-          ["member1@example.com", listId],
-          ["member2@example.com", otherListId],
-        ],
-      });
-
-      const attempt = yield* run(fix, { listId: otherListId });
+      const attempt = yield* run(fix, { to: ["gone@example.com", "ok@example.com"] });
 
       expect(Result.isSuccess(attempt) && attempt.success.recipients).toStrictEqual([
-        { email: "member1@example.com", outcome: "skipped", reason: "unsubscribed" },
-        { email: "member2@example.com", outcome: "accepted", messageId: "message-1" },
+        { email: "gone@example.com", outcome: "skipped", reason: "unsubscribed" },
+        { email: "ok@example.com", outcome: "accepted", messageId: "message-1" },
       ]);
-      expect(fix.sent[0]?.mail).toMatchObject({
-        unsubscribeUrl: yield* unsubscribeLink({ mailbox: "member2@example.com", listId }).pipe(
-          Effect.provide(configuration),
-        ),
-      });
+      expect(fix.sent[0]?.mail).toMatchObject({ unsubscribeUrl: yield* linkFor("ok@example.com") });
     }),
   );
 
-  it.effect("refuses a list with a second page, even when orphaned members thinned the first", () =>
+  it.effect("answers CampaignNotFound for a missing campaign", () =>
     Effect.gen(function* () {
-      const fix = fixture({
-        members: Array.from({ length: 19 }, (_, n) => member(n)),
-        nextCursor: member(21).id,
-      });
-
-      const attempt = yield* run(fix, { listId });
-
-      expect(failureOf(attempt)).toStrictEqual(
-        new Errors.TestAudienceTooLarge({ limit: Schemas.maxTestRecipients }),
-      );
-      expect(fix.sent).toHaveLength(0);
-    }),
-  );
-
-  it.effect("answers NotFound for a missing list and a missing campaign", () =>
-    Effect.gen(function* () {
-      const fix = fixture({ listMissing: true });
-
-      expect(failureOf(yield* run(fix, { listId }))).toStrictEqual(new Errors.ListNotFound());
+      const fix = fixture();
 
       const missing = yield* Effect.result(
         sendTest("0195f0a0-1111-4222-8333-4444444ca40a", { to: ["a@example.com"] }),

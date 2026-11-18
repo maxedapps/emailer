@@ -21,6 +21,7 @@ import {
   sendToSimulatorList,
   simulator,
   submitToSimulatorList,
+  textFooter,
   type LiveTest,
 } from "../../test/IntegrationSupport.ts";
 
@@ -57,7 +58,7 @@ const createSimulatorCampaign = (client: EmailerClient, runId: string, name: str
       payload: {
         listId: list.id,
         subject: `Queued cancel ${name} ${runId}`,
-        text: `Simulator campaign ${runId} for ${name}.`,
+        text: `Simulator campaign ${runId} for ${name}.${textFooter}`,
       },
     });
 

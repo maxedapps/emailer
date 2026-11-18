@@ -167,7 +167,7 @@ class ListsGroup extends HttpApiGroup.make("lists")
       params: { listId: Schemas.EntityId },
       payload: Schemas.ImportContactsPayload,
       success: Schemas.ImportContactsResult,
-      error: [...storage, Errors.ListNotFound, Errors.ContactChanged],
+      error: [...storage, Errors.ListNotFound, Errors.ContactChanged, Errors.TooManyAttributes],
     }),
   )
   .prefix("/lists") {}
@@ -177,7 +177,7 @@ class CampaignsGroup extends HttpApiGroup.make("campaigns")
     HttpApiEndpoint.post("create", "/", {
       payload: Schemas.CreateCampaignPayload,
       success: Schemas.Campaign.pipe(HttpApiSchema.status(201)),
-      error: [...storage, Errors.ListNotFound],
+      error: [...storage, Errors.ListNotFound, Errors.InvalidTemplate],
     }),
     HttpApiEndpoint.get("list", "/", {
       query: listingQuery,
@@ -198,6 +198,7 @@ class CampaignsGroup extends HttpApiGroup.make("campaigns")
         Errors.CampaignNotFound,
         Errors.ListNotFound,
         Errors.CampaignStateConflict,
+        Errors.InvalidTemplate,
       ],
     }),
     HttpApiEndpoint.delete("remove", "/:id", {
@@ -226,6 +227,7 @@ class CampaignsGroup extends HttpApiGroup.make("campaigns")
         Errors.DraftChanged,
         Errors.TooManyVariants,
         Errors.SplitOverfull,
+        Errors.InvalidTemplate,
       ],
     }),
     HttpApiEndpoint.delete("removeVariant", "/:id/variants/:key", {
@@ -243,6 +245,25 @@ class CampaignsGroup extends HttpApiGroup.make("campaigns")
       success: Schemas.PreviewLink,
       error: [...storage, Errors.CampaignNotFound],
     }),
+    HttpApiEndpoint.post("render", "/:id/render", {
+      params: { id: Schemas.EntityId },
+      payload: Schemas.RenderPayload,
+      success: Schemas.RenderedCopy,
+      error: [
+        ...storage,
+        Errors.CampaignNotFound,
+        Errors.VariantNotFound,
+        Errors.ContactNotFound,
+        Errors.RenderFailed,
+      ],
+    }),
+    HttpApiEndpoint.post("check", "/:id/check", {
+      params: { id: Schemas.EntityId },
+      payload: Schemas.CheckPayload,
+      success: Schemas.CheckPage,
+      // A variant the rules named can be removed by a draft edit while the check runs.
+      error: [...storage, Errors.CampaignNotFound, Errors.ListNotFound, Errors.VariantNotFound],
+    }),
     HttpApiEndpoint.post("test", "/:id/test", {
       params: { id: Schemas.EntityId },
       payload: Schemas.TestSendPayload,
@@ -254,8 +275,8 @@ class CampaignsGroup extends HttpApiGroup.make("campaigns")
         Errors.AlarmsUnavailable,
         Errors.CampaignNotFound,
         Errors.VariantNotFound,
-        Errors.ListNotFound,
-        Errors.TestAudienceTooLarge,
+        Errors.ContactNotFound,
+        Errors.RenderFailed,
         Errors.SendingPaused,
       ],
     }),

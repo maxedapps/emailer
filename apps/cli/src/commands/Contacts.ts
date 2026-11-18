@@ -189,7 +189,9 @@ const contactsUpdate = Command.make(
  * request is made.
  */
 const attributesFile = Flag.File("file", { mustExist: true }).pipe(
-  Flag.withDescription("A CSV file: an email column, and one column per attribute to set"),
+  Flag.withDescription(
+    "A CSV file: an email column, an optional name column and one column per attribute to set",
+  ),
   Flag.mapEffect((path) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -223,13 +225,13 @@ const contactsSetAttributes = Command.make(
   }),
 ).pipe(
   Command.withDescription(
-    "Merge attributes from a CSV file into the contacts holding its addresses",
+    "Set names and merge attributes from a CSV file into the contacts holding its addresses",
   ),
   Command.withExamples([
     {
       command: "emailer contacts set-attributes --file segments.csv",
       description:
-        "Set each row's attributes on the contact with its email, keeping the others; a blank cell changes nothing",
+        "Set each row's name and attributes on the contact with its email, keeping the others; a blank cell changes nothing",
     },
   ]),
 );

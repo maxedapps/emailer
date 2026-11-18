@@ -17,9 +17,11 @@ import {
   configuration,
   feedbackRows,
   fetchPage,
+  htmlFooter,
   sendRows,
   sendToSimulatorList,
   simulator,
+  textFooter,
   type LiveTest,
 } from "../../test/IntegrationSupport.ts";
 
@@ -79,7 +81,7 @@ export const variantsSuite = (test: LiveTest) => {
           payload: {
             listId: list.id,
             subject: `Emailer variants ${runId}`,
-            text: "The campaign's own copy.",
+            text: `The campaign's own copy.${textFooter}`,
           },
         });
 
@@ -88,7 +90,7 @@ export const variantsSuite = (test: LiveTest) => {
           payload: {
             when: { level: "beginner" },
             subject: `Emailer variants for beginners ${runId}`,
-            text: "The beginners' copy.",
+            text: `The beginners' copy.${textFooter}`,
           },
         });
 
@@ -97,7 +99,7 @@ export const variantsSuite = (test: LiveTest) => {
           payload: {
             percent: 50,
             subject: `Emailer variants split ${runId}`,
-            text: "The split copy.",
+            text: `The split copy.${textFooter}`,
           },
         });
 
@@ -167,8 +169,9 @@ export const variantsSuite = (test: LiveTest) => {
         const client = yield* makeEmailerClient(settings.apiUrl, settings.token);
         const runId = yield* newIdentifier;
         const list = yield* client.lists.create({ payload: { name: `variants-full-${runId}` } });
-        const text = "t".repeat(Schemas.maxTextBytes);
-        const html = "h".repeat(Schemas.maxHtmlBytes);
+        // At the byte limits, each still carrying the required tags.
+        const text = `${"t".repeat(Schemas.maxTextBytes - textFooter.length)}${textFooter}`;
+        const html = `${"h".repeat(Schemas.maxHtmlBytes - htmlFooter.length)}${htmlFooter}`;
 
         const campaign = yield* client.campaigns.create({
           payload: { listId: list.id, subject: `Emailer full ${runId}`, text, html },

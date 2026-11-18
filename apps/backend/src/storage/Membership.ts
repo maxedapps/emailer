@@ -7,7 +7,9 @@ import { corrupt } from "../Errors.ts";
 import {
   contactItem,
   contactKey,
+  contactUpdate,
   readContact,
+  readContactRecords,
   readHolders,
   reservationItem,
   reservationKey,
@@ -16,6 +18,7 @@ import {
 import { itemReader, keyCodec, num, recordVersion, str, tableLogicalId } from "./Items.ts";
 import { listKey } from "./Lists.ts";
 
+import type { ContactRecord } from "./Contacts.ts";
 import type {
   Action,
   BatchPrimitives,
@@ -85,21 +88,56 @@ const joinMember = (
 });
 
 /**
+ * The writes that give existing contacts the name and attributes their candidates bring, by
+ * contact: the name replaces the stored one and the attributes merge into the stored ones, at the
+ * next revision of the contact as read (ADR-0041). A contact moved off the candidate's address
+ * since it was read is a lost race.
+ */
+const contactUpdates = Effect.fnUntraced(function* (
+  candidates: ReadonlyArray<Schemas.Contact>,
+  holders: ReadonlyMap<string, string>,
+  records: ReadonlyMap<string, ContactRecord>,
+) {
+  const updates = new Map<string, Action<ContactChanged>>();
+
+  for (const candidate of candidates) {
+    const contactId = holders.get(Schemas.mailboxKey(candidate.email));
+    const record = contactId === undefined ? undefined : records.get(contactId);
+
+    if (record === undefined) {
+      continue;
+    }
+
+    if (Schemas.mailboxKey(record.email) !== Schemas.mailboxKey(candidate.email)) {
+      return yield* new ContactChanged();
+    }
+
+    updates.set(record.id, yield* contactUpdate(record, candidate.name, candidate.attributes));
+  }
+
+  return updates;
+});
+
+/**
  * The actions that join each candidate to a list, creating the contact where no one holds its
  * address, and the converged result they leave. Members are written with `Update` rather than
  * `Put`: a conditional `Put` would fail for anyone already in the list and cancel the whole batch,
  * where an upsert makes a re-run a no-op. `addedAt` is kept through `if_not_exists`, so joining
  * again does not rewrite when somebody joined.
  *
- * The transaction's own conditions are the authority over `holders`: every existing contact carries
- * a `ConditionCheck`, so a join racing that contact's deletion fails rather than resurrecting a
- * membership; and each new address is reserved conditionally, so losing a race to a concurrent
- * creation fails too. Both races answer `ContactChanged`, which a caller retries from a fresh read.
+ * An existing contact with a write in `updates` gets that write (`contactUpdates`); any other
+ * existing contact is left as it is. The transaction's own conditions are the authority over
+ * `holders` and `updates`: every existing contact carries a revision condition or a
+ * `ConditionCheck`, so a join racing that contact's change or deletion fails rather than writing
+ * over it or resurrecting a membership; and each new address is reserved conditionally, so losing
+ * a race to a concurrent creation fails too. Every race answers `ContactChanged`, which a caller
+ * retries from a fresh read.
  */
 export const joinActions = Effect.fnUntraced(function* (
   listId: string,
   candidates: ReadonlyArray<Schemas.Contact>,
   holders: ReadonlyMap<string, string>,
+  updates: ReadonlyMap<string, Action<ContactChanged>>,
   addedAt: string,
 ) {
   const actions: Array<Action<ContactChanged>> = [];
@@ -131,7 +169,7 @@ export const joinActions = Effect.fnUntraced(function* (
       );
     } else {
       actions.push(
-        {
+        updates.get(contactId) ?? {
           ConditionCheck: {
             Table: tableLogicalId,
             Key: contactKey(contactId),
@@ -445,7 +483,22 @@ export const membershipOperations = (
       return yield* new ListNotFound();
     }
 
-    const joined = yield* joinActions(listId, candidates, holders, addedAt);
+    // Only a contact the import brings a name or attributes for is read, to be updated.
+    const records = yield* readContactRecords(
+      primitives,
+      "importContacts",
+      candidates.flatMap((candidate) => {
+        const contactId = holders.get(Schemas.mailboxKey(candidate.email));
+
+        return contactId === undefined ||
+          (candidate.name === undefined && candidate.attributes === undefined)
+          ? []
+          : [contactId];
+      }),
+    );
+
+    const updates = yield* contactUpdates(candidates, holders, records);
+    const joined = yield* joinActions(listId, candidates, holders, updates, addedAt);
 
     yield* transact("importContacts", joined.actions);
 

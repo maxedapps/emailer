@@ -188,3 +188,37 @@ describe("renderMarkdown text against its html", () => {
     expect(rendered.text).not.toMatch(/<\/?[a-z][^>]*>/i);
   });
 });
+
+describe("renderMarkdown with Liquid", () => {
+  const template = [
+    'Hi **{{ contact.name | default: "there" }}**{% if contact.city %} from {{ contact.city }}{% endif %},',
+    "",
+    "| Plan | Since |",
+    "| --- | --- |",
+    '| {{ contact.plan | default: "free" }} | {{ contact["member since"] | date: "%B %Y" }} |',
+    "",
+    "[Unsubscribe]({{ unsubscribe_url }}) · {{ postal_address }}",
+  ].join("\n");
+
+  it("keeps every tag as written in both parts and in the title", () => {
+    const rendered = renderMarkdown(template, '{{ contact.name | default: "News" }} & more');
+
+    for (const tag of [
+      '{{ contact.name | default: "there" }}',
+      "{% if contact.city %}",
+      '{{ contact.plan | default: "free" }}',
+      '{{ contact["member since"] | date: "%B %Y" }}',
+      "{{ postal_address }}",
+    ]) {
+      expect(rendered.html).toContain(tag);
+      expect(rendered.text).toContain(tag);
+    }
+
+    expect(rendered.html).toContain('<strong>{{ contact.name | default: "there" }}</strong>');
+    expect(rendered.html).toContain('<a href="{{ unsubscribe_url }}"');
+    expect(rendered.html).toContain(
+      '<title>{{ contact.name | default: "News" }} &amp; more</title>',
+    );
+    expect(rendered.text).toContain("Unsubscribe ({{ unsubscribe_url }})");
+  });
+});

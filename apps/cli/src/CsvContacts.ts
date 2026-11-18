@@ -114,22 +114,11 @@ export const decodeCsvContacts = Effect.fn("decodeCsvContacts")(function* (text:
 });
 
 /**
- * Reads a CSV file as attributes to merge into existing contacts: the email column and one column
- * per attribute. A blank cell leaves that attribute alone. A name column is refused rather than
- * read as an attribute called `name`, which it names everywhere else.
+ * Reads a CSV file as names and attributes to set on existing contacts: the email column, an
+ * optional name column and one column per attribute. A blank cell leaves that value alone.
  */
 export const decodeCsvAttributes = Effect.fn("decodeCsvAttributes")(function* (text: string) {
-  const { fields, rows } = yield* readEntries(text);
+  const { rows } = yield* readEntries(text);
 
-  if (fields.includes("name")) {
-    return yield* new InvalidCsv({
-      message: "The file has a name column; it sets attributes only, so remove the column",
-    });
-  }
-
-  const contacts = yield* decodeEach(rows, (entry) =>
-    decodeAttributeUpdate({ email: entry.email, attributes: entry.attributes ?? {} }),
-  );
-
-  return yield* decodeAttributesFile({ contacts });
+  return yield* decodeAttributesFile({ contacts: yield* decodeEach(rows, decodeAttributeUpdate) });
 });

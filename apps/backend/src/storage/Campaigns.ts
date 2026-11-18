@@ -9,7 +9,7 @@ import {
 import * as Schemas from "@emailer/api/Schemas";
 import * as AWS from "@alchemy.run/aws";
 import type * as dynamodb from "@distilled.cloud/aws/dynamodb";
-import { Context, Data, Effect, Layer, Predicate, Schema } from "effect";
+import { Context, Data, Effect, Layer, Predicate, Schema, Struct } from "effect";
 import { SecureRandom } from "effect/crypto";
 
 import { CorruptItem } from "../Errors.ts";
@@ -127,7 +127,9 @@ const readSending = itemReader(SendingRecord);
 
 const writeCampaign = itemWriter(CampaignRecord);
 
-/** The campaign's own copy's text and HTML; its subject is on META, which the listing reads. */
+/**
+ * The campaign's own copy's text, HTML and language; its subject is on META, which the listing reads.
+ */
 const readBody = itemReader(Schemas.CampaignBody);
 
 const writeBody = itemWriter(Schemas.CampaignBody);
@@ -161,6 +163,7 @@ const VariantBody = Schema.Struct({
   subject: Schemas.CampaignSubject,
   text: Schemas.CampaignText,
   html: Schema.optionalKey(Schemas.CampaignHtml),
+  language: Schema.optionalKey(Schemas.Language),
 });
 
 const readVariantBody = itemReader(VariantBody);
@@ -568,8 +571,8 @@ export const campaignOperations = (
   const createCampaign = Effect.fn("Storage.createCampaign")(function* (
     campaign: Schemas.Campaign,
   ) {
-    const { text, html, variants: _variants, submission: _submission, ...summary } = campaign;
-    const body = yield* writeBody(html === undefined ? { text } : { text, html });
+    const summary = Struct.omit(campaign, ["text", "html", "language", "variants", "submission"]);
+    const body = yield* writeBody(Struct.pick(campaign, ["text", "html", "language"]));
 
     yield* recordOnce("createCampaign", { ...bodyKey(campaign.id), ...body });
 
@@ -997,6 +1000,10 @@ export const campaignOperations = (
     const body = fieldUpdate({
       text: change.text === undefined ? undefined : str(change.text),
       html: change.html === undefined || change.html === null ? change.html : str(change.html),
+      language:
+        change.language === undefined || change.language === null
+          ? change.language
+          : str(change.language),
     });
 
     const check = draftCheck(campaignId, "updateDraft");

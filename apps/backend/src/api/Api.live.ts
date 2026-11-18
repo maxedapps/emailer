@@ -8,7 +8,6 @@ import { describe, expect } from "vitest";
 import { newIdentifier, nowIso } from "../Identifiers.ts";
 
 import {
-  Deployment,
   accountSendQuota,
   addressRecord,
   awaitCampaignFeedback,
@@ -17,6 +16,7 @@ import {
   configuration,
   contactFor,
   deleteSuppressedDestination,
+  Deployment,
   describeAlarms,
   detachAlarm,
   getSuppressedDestination,
@@ -30,6 +30,7 @@ import {
   simulator,
   submitted,
   submitToSimulatorList,
+  textFooter,
   uniqueAddress,
   unsuppress,
   type LiveTest,
@@ -101,7 +102,7 @@ export const apiSuite = (test: LiveTest) => {
           payload: {
             listId: list.id,
             subject: `Emailer integration ${runId}`,
-            text: `Sixty labelled simulator recipients for campaign ${runId}.`,
+            text: `Sixty labelled simulator recipients for campaign ${runId}.${textFooter}`,
             html,
           },
         });
@@ -171,7 +172,7 @@ export const apiSuite = (test: LiveTest) => {
           payload: {
             listId: list.id,
             subject: `Emailer concurrency ${runId}`,
-            text: "Two requests raced for this campaign; only one row may exist per member.",
+            text: `Two requests raced for this campaign; only one row may exist per member.${textFooter}`,
           },
         });
 
@@ -245,7 +246,7 @@ export const apiSuite = (test: LiveTest) => {
           payload: {
             listId: list.id,
             subject: `Emailer filter ${runId}`,
-            text: `Three labelled simulator recipients, two matching plan=pro, for campaign ${runId}.`,
+            text: `Three labelled simulator recipients, two matching plan=pro, for campaign ${runId}.${textFooter}`,
             filter,
           },
         });
@@ -330,7 +331,7 @@ export const apiSuite = (test: LiveTest) => {
           payload: {
             listId: list.id,
             subject: `Emailer schedule ${runId}`,
-            text: `Two labelled simulator recipients for scheduled campaign ${runId}.`,
+            text: `Two labelled simulator recipients for scheduled campaign ${runId}.${textFooter}`,
           },
         });
 
@@ -399,7 +400,7 @@ export const apiSuite = (test: LiveTest) => {
           payload: {
             listId: list.id,
             subject: `Emailer cancel ${runId}`,
-            text: `Two labelled simulator recipients for cancelled campaign ${runId}.`,
+            text: `Two labelled simulator recipients for cancelled campaign ${runId}.${textFooter}`,
           },
         });
 
@@ -459,7 +460,7 @@ export const apiSuite = (test: LiveTest) => {
         const list = yield* client.lists.create({ payload: { name: "empty audience" } });
 
         const campaign = yield* client.campaigns.create({
-          payload: { listId: list.id, subject: "Never sent", text: "Never sent." },
+          payload: { listId: list.id, subject: "Never sent", text: `Never sent.${textFooter}` },
         });
 
         const sent = yield* sendToSimulatorList(client, list.id, campaign.id);
@@ -510,7 +511,7 @@ export const apiSuite = (test: LiveTest) => {
           payload: {
             listId: list.id,
             subject: `Emailer breaker ${runId}`,
-            text: "Half of these labelled simulator recipients bounce.",
+            text: `Half of these labelled simulator recipients bounce.${textFooter}`,
           },
         });
 
@@ -597,7 +598,7 @@ export const apiSuite = (test: LiveTest) => {
             payload: {
               listId: list.id,
               subject: `Emailer gate ${runId}`,
-              text: "Five labelled simulator recipients behind forced bounce alarms.",
+              text: `Five labelled simulator recipients behind forced bounce alarms.${textFooter}`,
             },
           });
 

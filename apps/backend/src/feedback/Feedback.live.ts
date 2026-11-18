@@ -15,6 +15,7 @@ import {
   sendRows,
   sendToSimulatorList,
   simulator,
+  textFooter,
   type LiveTest,
 } from "../../test/IntegrationSupport.ts";
 
@@ -44,7 +45,7 @@ export const feedbackSuite = (test: LiveTest) => {
           payload: {
             listId: list.id,
             subject: `Emailer feedback ${runId}`,
-            text: "This message drives bounce and complaint through the SES mailbox simulator.",
+            text: `This message drives bounce and complaint through the SES mailbox simulator.${textFooter}`,
           },
         });
 
@@ -77,7 +78,7 @@ export const feedbackSuite = (test: LiveTest) => {
           payload: {
             listId: list.id,
             subject: `Emailer feedback skipped ${runId}`,
-            text: "These two recipients must be skipped.",
+            text: `These two recipients must be skipped.${textFooter}`,
           },
         });
 

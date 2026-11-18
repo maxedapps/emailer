@@ -105,6 +105,7 @@ describe("GET /unsubscribe/:token", () => {
     Effect.gen(function* () {
       const body = yield* bodyOf(yield* responding(storeWith(), "GET"));
 
+      expect(body).toContain("no longer want to receive any emails from us");
       expect(body).toContain('method="post"');
       expect(body).not.toContain("action=");
       expect(body).not.toContain(validToken);
@@ -131,6 +132,8 @@ describe("POST /unsubscribe/:token", () => {
 
       expect(response.status).toBe(200);
       expect(store.written).toStrictEqual([{ email: "sam@example.com", listId }]);
+      // One opt-out keeps every list's mail away (ADR-0041), and the page says so.
+      expect(yield* bodyOf(response)).toContain("You will not receive emails from us again.");
     }),
   );
 

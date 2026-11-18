@@ -23,9 +23,10 @@ export const configurationSet = AWS.SES.ConfigurationSet(configurationSetLogical
 export const submissionTimeout = Duration.seconds(8);
 
 /**
- * What goes out, and why. A campaign mail is tagged so its feedback lands on the campaign's
- * counters and names the copy it drew; a test copy and a sign-up's confirmation carry no tags, so their bounces and complaints
- * never reach them.
+ * What goes out, and why. Campaign and test mail carry content already rendered for their
+ * recipient. A campaign mail is tagged so its feedback lands on the campaign's counters and names
+ * the copy it drew; a test copy and a sign-up's confirmation carry no tags, so their bounces and
+ * complaints never reach them.
  */
 export type Mail = Data.TaggedEnum<{
   Campaign: {
@@ -116,7 +117,7 @@ export const feedbackPublishing = Effect.gen(function* () {
 const prepare = (mail: Mail, postal: string) =>
   Mail.$match(mail, {
     Campaign: ({ content, unsubscribeUrl, campaignId, sendId, variant }) => ({
-      message: compose(content, unsubscribeUrl, postal),
+      message: compose(content, unsubscribeUrl),
       tags: [
         { Name: "campaignId", Value: campaignId },
         { Name: "sendId", Value: sendId },
@@ -125,7 +126,7 @@ const prepare = (mail: Mail, postal: string) =>
       logged: { mail: "Campaign", campaignId, sendId, variant },
     }),
     Test: ({ content, unsubscribeUrl }) => ({
-      message: compose(content, unsubscribeUrl, postal),
+      message: compose(content, unsubscribeUrl),
       tags: [],
       logged: { mail: "Test" },
     }),

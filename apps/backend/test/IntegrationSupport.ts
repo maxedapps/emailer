@@ -4,8 +4,8 @@
  *
  * Automated sends go only to SES mailbox-simulator addresses. `submitToSimulatorList` is the
  * test-side guard: it pages a list and refuses to run the submit if any member is not a simulator
- * address. `sendToSimulatorList` is the send form of that guard, and `testToSimulators` the form
- * for test sends, which also checks explicit addresses.
+ * address. `sendToSimulatorList` is the send form of that guard, and `testToSimulators` the guard
+ * for test sends, which go only to the addresses they name.
  */
 import { NodeCrypto } from "@effect/platform-node";
 import { fromChain } from "@distilled.cloud/aws/Credentials";
@@ -356,23 +356,23 @@ export const sendToSimulatorList = (client: EmailerClient, listId: string, campa
     client.campaigns.send({ params: { id: campaignId } }),
   );
 
+/** Ends a live copy's text with the two tags every body part must carry (ADR-0041). */
+export const textFooter = "\n\n{{ unsubscribe_url }}\n{{ postal_address }}";
+
+/** The HTML form of `textFooter`. */
+export const htmlFooter =
+  '<p><a href="{{ unsubscribe_url }}">Unsubscribe</a> {{ postal_address }}</p>';
+
 /** A test send, refused before any request unless every recipient is a simulator address. */
 export const testToSimulators = (
   client: EmailerClient,
   campaignId: string,
-  recipients: { readonly to: ReadonlyArray<string> } | { readonly listId: string },
+  payload: Schemas.TestSendPayload,
 ) =>
   Effect.gen(function* () {
-    requireSimulators(
-      "to" in recipients ? recipients.to : yield* memberAddresses(client, recipients.listId),
-      `refusing to test-send campaign ${campaignId}`,
-    );
+    requireSimulators(payload.to, `refusing to test-send campaign ${campaignId}`);
 
-    const params = { id: campaignId };
-
-    return yield* "to" in recipients
-      ? client.campaigns.test({ params, payload: { to: recipients.to } })
-      : client.campaigns.test({ params, payload: { listId: recipients.listId } });
+    return yield* client.campaigns.test({ params: { id: campaignId }, payload });
   });
 
 export const accountSendQuota = Effect.gen(function* () {
