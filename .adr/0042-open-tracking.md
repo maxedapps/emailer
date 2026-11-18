@@ -78,4 +78,11 @@ Steady state, us-east-1 on-demand prices, free tiers ignored:
 
 ## Confirmation
 
-To be filled in when the change lands: unit tests, the live feedback suite (an injected `Email Opened` event reaches `campaigns get` and `GET /opens`), and a CLI check on a test stage.
+- Unit tests: `Mailer.test.ts` (campaign mail tagged and tracked; test and confirmation requests carry the override), `feedback/Feedback.test.ts` and `FeedbackClassification.test.ts` (opens recorded, bot-likely and untagged opens dropped), `storage/Feedback.test.ts` (first, repeat, earlier and redelivered opens, races), `storage/Campaigns.test.ts`, `api/Api.test.ts` and the CLI tests (counters and the openers listing).
+- Live: the feedback suite injects two `Email Opened` events for a simulator send and reads them back through `campaigns get` and `GET /campaigns/:id/opens`.
+- Hand check on a test stage, a two-copy campaign to two simulator contacts:
+  - the rule matched only the stage's configuration set;
+  - the API role held `ses:ApplyTrackingConfigurationOverrides` for `DISABLED` only, and a test copy sent with the override was accepted;
+  - four injected opens, one marked a likely bot, gave `campaigns get` 2 unique and 3 total (pro 1/2, default 1/1);
+  - `campaigns opens` listed both openers with the earlier of the pro reader's two open times;
+  - `campaigns list` carried no opens.

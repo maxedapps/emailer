@@ -30,3 +30,9 @@ Task 4102. [ADR-0042](0042-open-tracking.md) holds the design and its cost.
 ## Open questions
 
 - None. The full live run the reach map calls for was put to Max on topic 4102.
+
+## Settled findings
+
+- medium bug: the live suite's shared send-row reader made `sendId` and `variant` mandatory, which a skipped recipient's row lacks, breaking the feedback and unsubscribe suites — fixed: optional again, asserted only for the send an open is injected for (f39ae2d).
+- medium bug: the account-wide rule copied every SES open in the region to every stage's queue, Lambda and logs — fixed: the rule matches the stage's configuration set; the handler's check goes (ADR-0042 decision 3).
+- medium simplification: a second, untracked configuration set doubled sets, destinations and send bindings — fixed: one set, and test and confirmation mail turn open tracking off per message with `ses:ApplyTrackingConfigurationOverrides` granted for `DISABLED` only (ADR-0042 decision 1).
