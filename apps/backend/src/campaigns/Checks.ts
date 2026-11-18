@@ -103,7 +103,7 @@ export const checkPage = Effect.fn("Checks.checkPage")(function* (
       }),
       Effect.as(undefined),
       Effect.catchTags({
-        InvalidTemplate: (error) => Effect.succeed(error.message),
+        InvalidTemplate: (error) => Effect.succeed(error.reason),
         Unrenderable: (error) => Effect.succeed(error.message),
       }),
     );

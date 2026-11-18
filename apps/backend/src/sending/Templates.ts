@@ -167,8 +167,7 @@ const parsePart = (liquid: Liquid, part: Schemas.TemplatePart, source: string) =
         (failure) =>
           new InvalidTemplate({
             part,
-            // An error's message is not an own property: it is copied by name.
-            message: failure.message,
+            reason: failure.message,
             ...Struct.pick(failure, ["line", "column"]),
           }),
       ),
@@ -183,7 +182,7 @@ const parsePart = (liquid: Liquid, part: Schemas.TemplatePart, source: string) =
     if (unknown !== undefined) {
       return yield* new InvalidTemplate({
         part,
-        message: `unknown variable "${unknown.name}": use contact.${unknown.name} for a contact field, or ${unsubscribeVariable} or ${postalVariable}`,
+        reason: `unknown variable "${unknown.name}": use contact.${unknown.name} for a contact field, or ${unsubscribeVariable} or ${postalVariable}`,
         line: unknown.location.row,
         column: unknown.location.col,
       });
@@ -194,7 +193,7 @@ const parsePart = (liquid: Liquid, part: Schemas.TemplatePart, source: string) =
         if (!(name in globals)) {
           return yield* new InvalidTemplate({
             part,
-            message: `the ${part} part must carry {{ ${name} }}`,
+            reason: `the ${part} part must carry {{ ${name} }}`,
           });
         }
       }

@@ -329,7 +329,7 @@ describe("create", () => {
       expect(failureOf(attempt)).toStrictEqual(
         new Errors.InvalidTemplate({
           part: "subject",
-          message: "undefined filter: shout",
+          reason: "undefined filter: shout",
           line: 1,
           column: 4,
         }),
@@ -433,7 +433,7 @@ describe("update", () => {
       expect(failureOf(attempt)).toStrictEqual(
         new Errors.InvalidTemplate({
           part: "text",
-          message: "the text part must carry {{ unsubscribe_url }}",
+          reason: "the text part must carry {{ unsubscribe_url }}",
         }),
       );
       expect(fix.recorded.drafts).toStrictEqual([]);
@@ -504,7 +504,7 @@ describe("variants", () => {
       expect(failureOf(attempt)).toStrictEqual(
         new Errors.InvalidTemplate({
           part: "html",
-          message: "the html part must carry {{ postal_address }}",
+          reason: "the html part must carry {{ postal_address }}",
         }),
       );
       expect(fix.recorded.variantEdits).toStrictEqual([]);

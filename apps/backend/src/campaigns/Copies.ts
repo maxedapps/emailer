@@ -96,18 +96,17 @@ export const chooseCopy = Effect.fn("Copies.chooseCopy")(function* (
   const contact = as === undefined ? undefined : yield* audience.getContactByEmail(as);
   const key = yield* pickCopy(campaign, contact, named);
 
-  const failed = ({ message }: { readonly message: string }) =>
-    new RenderFailed({ copy: key, message });
+  const failed = (reason: string) => new RenderFailed({ copy: key, reason });
 
   const compiled = yield* copyContent(campaign, key).pipe(
     Effect.flatMap(compileCopy),
-    Effect.catchTag("InvalidTemplate", (error) => Effect.fail(failed(error))),
+    Effect.catchTag("InvalidTemplate", ({ reason }) => Effect.fail(failed(reason))),
   );
 
   const render = (unsubscribeUrl: string) =>
     compiled
       .render({ contact, unsubscribeUrl, postalAddress: postal } satisfies Recipient)
-      .pipe(Effect.mapError(failed));
+      .pipe(Effect.mapError(({ message }) => failed(message)));
 
   return { key, contact, render } satisfies ChosenCopy;
 });

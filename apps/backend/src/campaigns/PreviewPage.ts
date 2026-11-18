@@ -157,8 +157,8 @@ const copySection = (settings: PreviewSender, key: string, rule: string, copy: C
 <section><h2>Plain text</h2><pre>${escapeHtml(message.text)}</pre></section>`;
     }),
     Effect.catchTags({
-      InvalidTemplate: ({ message }) =>
-        Effect.succeed(unrenderable(settings, key, rule, copy, message)),
+      InvalidTemplate: ({ reason }) =>
+        Effect.succeed(unrenderable(settings, key, rule, copy, reason)),
       Unrenderable: ({ message }) =>
         Effect.succeed(unrenderable(settings, key, rule, copy, message)),
     }),

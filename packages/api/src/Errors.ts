@@ -182,7 +182,7 @@ export class InvalidTemplate extends Schema.TaggedError<
   "InvalidTemplate",
   {
     part: TemplatePart,
-    message: Schema.String,
+    reason: Schema.String,
     line: Schema.optionalKey(Schema.Int),
     column: Schema.optionalKey(Schema.Int),
   },
@@ -200,7 +200,7 @@ export class InvalidTemplate extends Schema.TaggedError<
 export class RenderFailed extends Schema.TaggedError<
   RenderFailed,
   { readonly brand: unique symbol }
->()("RenderFailed", { copy: CopyKey, message: Schema.String }, { httpApiStatus: 422 }) {
+>()("RenderFailed", { copy: CopyKey, reason: Schema.String }, { httpApiStatus: 422 }) {
   override get [ErrorReporter.ignore]() {
     return true;
   }

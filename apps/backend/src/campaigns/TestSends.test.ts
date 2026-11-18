@@ -296,7 +296,7 @@ describe("sendTest", () => {
         ).toStrictEqual(
           new Errors.RenderFailed({
             copy: "berlin",
-            message: 'date: cannot read "some day" as a date',
+            reason: 'date: cannot read "some day" as a date',
           }),
         );
         expect(

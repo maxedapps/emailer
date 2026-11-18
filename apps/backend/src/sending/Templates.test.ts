@@ -200,7 +200,7 @@ describe("validateParts", () => {
       undefined,
       undefined,
     ],
-  ] as const)("refuses %j", ([parts, part, message, line, column]) =>
+  ] as const)("refuses %j", ([parts, part, reason, line, column]) =>
     Effect.gen(function* () {
       const error = yield* Effect.flip(validateParts(parts));
 
@@ -210,7 +210,7 @@ describe("validateParts", () => {
         line,
         column,
       ]);
-      expect(error.message).toContain(message);
+      expect(error.reason).toContain(reason);
     }),
   );
 
