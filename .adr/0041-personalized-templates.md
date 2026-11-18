@@ -1,6 +1,6 @@
 # ADR-0041: Personalized templates, opt-outs across lists, and safe test sends
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-11-18
 - Authority: The operator decided on 2026-11-18 (task 4068) that every copy is a template rendered per recipient (Liquid, rendered in the send path before the recipient claim, HTML escaped only in the HTML part, validated on save with line and column, a language per copy for dates); that templates must carry the unsubscribe link and the postal address, with no fallback footer; that an opt-out from any list keeps every campaign away; that several campaigns to one person are fine; that re-importing must not drop a contact's name and attributes; that preview and test send render as a chosen contact and test sends must not mail list members; and that `campaigns check` renders every recipient without sending.
 - Amends:
@@ -54,5 +54,5 @@
 ## Verification
 
 - `pnpm check`: 1009 unit tests, among them the template engine (fallbacks, escaping, strict `date`, refused tags and variables with line and column), the send path's `unrenderable` skip, `campaigns check`, the opt-out model and the import merge.
-- Live suite: the cross-list opt-out, the double opt-in rejoin, test sends only to named simulator addresses, preview and test as a contact, `campaigns check` and every send with template bodies. LIVE_RESULT
+- Live suite: the cross-list opt-out, the double opt-in rejoin, test sends only to named simulator addresses, preview and test as a contact, `campaigns check` and every send with template bodies. The landing gate ran all 42 live tests green on one fresh stage.
 - Hand check on a test stage, simulator addresses only: a save with an unknown filter refused with part, line and column; a German variant rendered "März 2024" with `lang="de-DE"`; fallbacks for a contact without values; `campaigns check` named an unreadable date and the fallbacks; an opt-out from another list skipped the member; a re-import kept the name and attributes; the send accepted 3 and skipped 2.
