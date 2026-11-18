@@ -22,7 +22,7 @@
 
 1. **Every copy is a LiquidJS template.** Subject, text and HTML are templates, rendered per recipient with `contact.email`, `contact.name`, `contact.<attribute>` (`contact["member since"]` for keys with spaces; the two fields win over a same-named attribute), `unsubscribe_url` and `postal_address`.
    - Only the HTML part escapes output. Filters are strict, `include`/`render`/`layout` are refused, and `date` refuses a value it cannot read instead of printing it unchanged.
-   - A copy has an optional language (BCP 47, English when absent), which names months and days in `date`.
+   - A copy has an optional language (BCP 47, English when absent), which names months and days in `date` and is the `lang` of the HTML document the CLI renders from Markdown.
 2. **Validated on save.** Create, update and set-variant parse each given part before any write and answer `422 InvalidTemplate` with the part, line and column for a syntax error, an unknown filter or tag, a variable outside the five above, or a body part without `{{ unsubscribe_url }}` and `{{ postal_address }}`. No footer is appended any more.
 3. **Rendered in the send path.** The dispatcher compiles each copy once per slice and renders a member after their status read, before the pacing slot and the claim. A render that fails, or whose output lacks the link or the address or has a subject that is no longer one line within the limit, records the member as skipped with reason `unrenderable` and logs the campaign, copy and error, never the address. `compose` only adds the unsubscribe headers.
 4. **An opt-out keeps the address off every list.** The address item keeps `optOuts`, the lists left, as evidence, and gains `rejoined`, the lists confirmed by double opt-in since the latest opt-out. An address is unsubscribed for list L while `optOuts` is non-empty and L is not in `rejoined`. An opt-out adds its list and clears `rejoined`; a confirmed sign-up adds its list to `rejoined`. One function decides this for sends, test sends and sign-ups.
@@ -53,4 +53,6 @@
 
 ## Verification
 
-- (filled in when landed)
+- `pnpm check`: 1009 unit tests, among them the template engine (fallbacks, escaping, strict `date`, refused tags and variables with line and column), the send path's `unrenderable` skip, `campaigns check`, the opt-out model and the import merge.
+- Live suite: the cross-list opt-out, the double opt-in rejoin, test sends only to named simulator addresses, preview and test as a contact, `campaigns check` and every send with template bodies. LIVE_RESULT
+- Hand check on a test stage, simulator addresses only: a save with an unknown filter refused with part, line and column; a German variant rendered "März 2024" with `lang="de-DE"`; fallbacks for a contact without values; `campaigns check` named an unreadable date and the fallbacks; an opt-out from another list skipped the member; a re-import kept the name and attributes; the send accepted 3 and skipped 2.
