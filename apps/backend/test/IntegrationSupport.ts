@@ -76,9 +76,10 @@ const readSendRow = itemReader(
   Schema.Struct({
     contactId: Schemas.EntityId,
     recipient: Schema.String,
-    sendId: Schemas.EntityId,
+    // A skipped recipient's row carries neither: no mail was sent.
+    sendId: Schema.optionalKey(Schemas.EntityId),
     state: Schema.Literals(["unconfirmed", "accepted", "rejected", "uncertain", "skipped"]),
-    variant: Schemas.CopyKey,
+    variant: Schema.optionalKey(Schemas.CopyKey),
     finishedAt: Schema.optionalKey(Schemas.Timestamp),
     skipReason: Schema.optionalKey(Schema.String),
   }),

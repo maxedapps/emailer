@@ -132,11 +132,13 @@ export const feedbackSuite = (test: LiveTest) => {
           campaignStateTimeout(1, quota?.MaxSendRate),
         );
 
-        const [send] = yield* sendRows(campaign.id);
+        const [row] = yield* sendRows(campaign.id);
 
-        if (send === undefined) {
-          throw new Error(`campaign ${campaign.id} has no send row`);
+        if (row?.sendId === undefined || row.variant === undefined) {
+          throw new Error(`campaign ${campaign.id} has no sent mail`);
         }
+
+        const send = { contactId: row.contactId, sendId: row.sendId, variant: row.variant };
 
         // The second open arrives later but happened earlier: it becomes the first open.
         yield* injectOpen(campaign.id, send, "2026-09-11T10:05:00.000Z");
