@@ -504,6 +504,31 @@ describe("campaigns", () => {
     }),
   );
 
+  it.effect("pages a campaign's openers by the cursor it was given", () =>
+    Effect.gen(function* () {
+      const calls: Array<ReadonlyArray<unknown>> = [];
+
+      const opener = {
+        contactId,
+        email: "user@example.com",
+        copy: "default",
+        firstOpenedAt: "2026-09-11T10:05:00.000Z",
+        opens: 2,
+      };
+
+      const { call } = yield* api({
+        campaigns: { listOpeners: recording(calls, { items: [opener], nextCursor: contactId }) },
+      });
+
+      expect(
+        yield* call((client) =>
+          client.campaigns.opens({ params: { id: campaignId }, query: { cursor: contactId } }),
+        ),
+      ).toStrictEqual({ items: [opener], nextCursor: contactId });
+      expect(calls).toStrictEqual([[campaignId, contactId]]);
+    }),
+  );
+
   it.effect("edits a draft and deletes one", () =>
     Effect.gen(function* () {
       const calls: Array<ReadonlyArray<unknown>> = [];

@@ -13,6 +13,7 @@ Self-hosted marketing email over Amazon SES. Deploy it to your own AWS account, 
 - **Delivery:** send now or schedule for later; cancel a pending send and resume a paused one.
 - **Sign-ups:** an API for your website's newsletter form, with double or single opt-in per key, stored consent evidence and an opt-out endpoint for the site's own unsubscribe links, reached with scoped keys ([Sign-ups from your website](#sign-ups-from-your-website)).
 - **Compliance:** one-click unsubscribe (`List-Unsubscribe` and `List-Unsubscribe-Post`) that keeps every list's campaigns away, and your postal address in every message.
+- **Opens:** unique and total opens per campaign and per copy, and who opened when ([Opens](#opens)).
 - **List hygiene:** bounced and complaining addresses are suppressed automatically. A campaign pauses itself when its list bounces or complains too much, and all sending stops when the whole SES account's reputation alarms fire or SES puts the account under review.
 - **Pacing:** sends stay within your SES rate and daily quota, with an optional daily cap of your own.
 - **Alerts:** CloudWatch alarms, delivered by email.
@@ -22,7 +23,7 @@ Self-hosted marketing email over Amazon SES. Deploy it to your own AWS account, 
 
 - There is no web interface. You manage everything from the CLI.
 - There are no hosted sign-up or confirm pages. Your site hosts both and calls the sign-up API.
-- There is no open or click tracking.
+- There is no click tracking: tag your links for your site's analytics ([Personalized templates](#personalized-templates)). Opens are tracked for campaign mail only ([Opens](#opens)).
 - Markdown campaigns share one fixed layout. For any other design, supply your own HTML.
 
 ## How it works
@@ -32,7 +33,7 @@ Self-hosted marketing email over Amazon SES. Deploy it to your own AWS account, 
   - `alchemy.run.ts` is the service. You deploy it once per stage, such as `prod`.
 - **API:** a Lambda behind a public Function URL, authorized with a bearer token: the admin token for everything the CLI does, or a scoped key for the sign-up endpoints only.
 - **Sending:** `campaigns send`, or a one-time EventBridge Scheduler schedule, queues the campaign on SQS. A dispatcher Lambda then sends one message per recipient through SES, paced within your quota.
-- **Feedback:** SES bounce and complaint events reach a feedback Lambda through EventBridge and an SQS queue. It suppresses the address and counts the event against its campaign.
+- **Feedback:** SES bounce, complaint and open events reach a feedback Lambda through EventBridge and an SQS queue. It suppresses a bounced or complaining address and counts the event against its campaign, and records an open on the recipient's send row.
 - **Public pages:** the unsubscribe page and the preview page are separate Lambdas that accept only signed links.
 - **Storage and alerts:** one DynamoDB table holds contacts, lists, campaigns, sends, scoped keys, pending sign-ups and consent records. Pending sign-ups expire through DynamoDB TTL. CloudWatch alarms notify an SNS topic.
 
@@ -325,10 +326,20 @@ pnpm emailer campaigns variants set <campaignId> b --subject "Release notes" --m
 - **Who gets which copy:** the first `--when` variant, in the order you added them, whose `key=value` entries all match the member's attributes. Everyone else is split: each `--percent` variant takes its share, and the default copy takes the rest. So `--when` alone gives segment copies with a default, `--percent` alone an A/B or weighted test, and both together "these segments get their copy, everyone else is split".
 - **The split is fresh per campaign and stable within it:** a member lands in the same share on every delivery of that campaign, but may land in another share in the next campaign.
 - **Attributes count until the member is reached.** A change before the dispatcher gets to a member changes their copy; after that, the copy is fixed.
-- **Compare copies through your site's analytics:** give each copy's links their own `utm_content`. There is no open or click tracking. Each send row, and each bounce or complaint, records the copy's key, and every message carries it as the SES tag `variant`.
+- **Compare copies** by their opens in `campaigns get`, and through your site's analytics: give each copy's links their own `utm_content`. Each send row, and each bounce or complaint, records the copy's key, and every message carries it as the SES tag `variant`.
 - `campaigns get` shows the variants' rules; `campaigns variants get <campaignId> <key>` shows one variant's content. The preview page shows the default copy and lists every variant with its rule, each linking to its own page. `campaigns test --variant <key>` sends one of them, and `--as <email>` sends the one that contact gets.
 - Each copy has its own `--language` for its dates, which a Markdown copy's HTML also declares as its `lang`. `campaigns update --markdown` keeps the draft's language unless `--language` changes it.
 - To get a segment attribute onto existing contacts, use `contacts set-attributes --file segments.csv`.
+
+### Opens
+
+Campaign mail goes out through an SES configuration set that publishes open events, so SES adds a tracking image to its HTML part ([ADR-0042](.adr/0042-open-tracking.md)).
+
+- `campaigns get` shows `opens` from `sending` on: unique and total, for the campaign and for each copy. `campaigns opens <campaignId>` lists everyone who opened, with their first open time and open count.
+- **Opens are a rough signal.** Apple Mail Privacy Protection loads the image when the mail arrives, so unread mail counts as opened. Image blocking hides real opens, and a text-only copy records none. Compare copies sent to similar audiences; an open does not prove the mail was read. Opens SES judges likely bots are dropped.
+- **Who opened is personal data.** It stays on the campaign's send rows as long as the campaign exists. A tracking image may need your recipients' consent under EU rules; that is your call. The IP address and user agent SES reports are neither stored nor logged.
+- Test copies and sign-up confirmations carry no tracking image.
+- There is no open rate per copy: emailer does not count sends per copy.
 
 ### Commands
 
@@ -377,7 +388,8 @@ Each command below is run as `pnpm emailer <command>`. `[…]` marks an optional
 | `campaigns schedule <campaignId> --at <date-time>`                                                                                                                                       | Send the campaign at a future time                                                  |
 | `campaigns cancel <campaignId>`                                                                                                                                                          | Withdraw a scheduled or queued send                                                 |
 | `campaigns resume <campaignId>`                                                                                                                                                          | Continue a paused campaign                                                          |
-| `campaigns get <campaignId>`                                                                                                                                                             | Show a campaign with its body, variant rules and progress                           |
+| `campaigns get <campaignId>`                                                                                                                                                             | Show a campaign with its body, variant rules, progress and opens                    |
+| `campaigns opens <campaignId>`                                                                                                                                                           | List who opened the campaign, first opener first                                    |
 | `campaigns list [--limit <n>] [--cursor <cursor>]`                                                                                                                                       | List campaigns in the order they were created, without bodies                       |
 | `campaigns delete <campaignId>`                                                                                                                                                          | Delete a draft                                                                      |
 
@@ -403,10 +415,11 @@ Each command below is run as `pnpm emailer <command>`. `[…]` marks an optional
 - **`lists add-contact` / `remove-contact`:** `{ listId, contactId, member }`. **Deletes:** `{ id, deleted: true }`.
 - **`lists import`:** `{ contacts: [{ email, contactId, member }] }`, one entry per imported address, in file order.
 - **`contacts set-attributes`:** `{ contacts: [{ email, outcome, contactId? }] }` in file order. `outcome` is `updated`, with the `contactId`, or `not-found` when no contact holds the address.
-- **A campaign:** `{ id, listId, subject, createdAt, filter?, submission, text, html?, variants? }`; `campaigns list` leaves out `text`, `html` and `variants`.
+- **A campaign:** `{ id, listId, subject, createdAt, filter?, submission, text, html?, variants?, opens? }`; `campaigns list` leaves out `text`, `html`, `variants` and `opens`.
   - `variants` holds each variant's rule, in the order they are tried: `{ key, when }` or `{ key, percent }`. `campaigns variants get` prints one variant with its content: `{ key, subject, text, html?, when }` or `{ key, subject, text, html?, percent }`.
   - `submission.state` is `draft`, `scheduled` (with `sendAt`), `queued`, `sending`, `paused` (with a `reason`) or `completed`.
-  - From `sending` on, it carries `progress` (`accepted`, `rejected`, `uncertain`, `skipped`) and `feedback` (`bounced`, `complained`).
+  - From `sending` on, it carries `progress` (`accepted`, `rejected`, `uncertain`, `skipped`) and `feedback` (`bounced`, `complained`), and the campaign carries `opens`: `{ unique, total, copies: { <key>: { unique, total } } }`, with every copy listed, `default` included.
+- **`campaigns opens`:** `[{ contactId, email, copy, firstOpenedAt, opens }]`, everyone who opened, first opener first. It reads every send row of the campaign, so it takes longer on a large list.
 - **`campaigns test`:** `{ recipients: [{ email, outcome, … }] }`. The `outcome` is one of:
   - `accepted`, with the SES `messageId`;
   - `skipped`, with a `reason`: `unsubscribed`, `suppressed` or `bouncing` (a campaign's own send rows also know `unrenderable`);
@@ -456,7 +469,7 @@ Each command below is run as `pnpm emailer <command>`. `[…]` marks an optional
 - `addresses unsuppress` clears local suppression, the transient-bounce window and the SES **account** suppression list (one list per account and Region, shared with every other sender there). Redrive failed feedback first (see [Operate](#operate)): older feedback processed after the clear can restore the suppression or the transient-bounce window. SES stores suppression entries case-sensitively, so pass the address in the case SES stored it: as the contact holds it (`contacts by-email` shows it) or as `aws sesv2 list-suppressed-destinations` lists it. `addresses status` echoes the address you pass, so another case shows no account entry rather than an error. It never clears an opt-out.
 - Deleting a contact removes it from every list; deleting a list removes every membership in it. Neither deletes the other side. A delete that times out on a large list is safe to repeat.
 - Listings page in created order. A page's `nextCursor` is absent when there is nothing more; a full last page may still carry one that leads to an empty page.
-- `campaigns send` exits zero when the campaign is **queued**. Poll `campaigns get` for `progress`, `feedback` and a `paused` reason.
+- `campaigns send` exits zero when the campaign is **queued**. Poll `campaigns get` for `progress`, `feedback`, `opens` and a `paused` reason.
 - `campaigns schedule` exits zero when the campaign is `scheduled`. `--at` is an ISO date (`YYYY-MM-DD`) or date-time; no zone means UTC. Past instants are **409**. The scheduler fires with 60-second precision. `campaigns send` on a scheduled campaign sends now.
 - `campaigns cancel` withdraws a pending send. A `scheduled` campaign, or a `queued` first send that never started, returns to `draft`. A `queued` resume returns to `paused` with reason `manual`. A campaign that is `sending` or `completed`, or whose send another command replaced in the meantime, answers **409** `CampaignStateConflict`. Cancel does not stop messages already handed to SES, or recall mail.
 - `campaigns variants set` adds a variant, or replaces the one with the same key where it stands; `remove` drops one, and repeating it changes nothing. Each sends one variant, so every copy can use the full body limits. Both edit drafts only, and a variant edit racing another one on the same draft is re-read and applied again.
@@ -466,7 +479,7 @@ Each command below is run as `pnpm emailer <command>`. `[…]` marks an optional
 - `campaigns test` sends right away to the `--to` addresses and no one else; the campaign's filter does not apply. The subject gets a `[Test] ` prefix. Without `--as`, every contact value falls back; `--as <email>` renders the copy, and its values, that contact gets, but still sends only to `--to`. `--variant <key>` sends that variant's copy instead; an unknown key is **404** `VariantNotFound`. Unsubscribed, suppressed and bouncing addresses are skipped, and each address gets one attempt. It uses the account's daily quota and send pacing, and answers **503** `SendingPaused` while a reputation halt, a paused SES account or the daily budget stops sending. **The unsubscribe link in a test message is real**: clicking it opts the test address out, which keeps every campaign away from it. Addresses that opted out are skipped for the same reason. A hard bounce or complaint from a test copy suppresses the address but never counts against the campaign; a soft bounce from a test copy or a sign-up confirmation counts toward `bouncing` like any other.
 - An individual recipient is never retried automatically. A recipient whose SES response was lost stays `uncertain`.
 
-Every campaign and test message carries the unsubscribe link and postal address its template places, plus `List-Unsubscribe` and one-click `List-Unsubscribe-Post` headers. Open/click tracking is off.
+Every campaign and test message carries the unsubscribe link and postal address its template places, plus `List-Unsubscribe` and one-click `List-Unsubscribe-Post` headers. Campaign messages carry SES's open tracking image in their HTML part; test messages and sign-up confirmations carry none, and no link is rewritten for click tracking.
 
 ## Sign-ups from your website
 
@@ -595,7 +608,7 @@ Send only the fields documented here: a field or query parameter the API does no
 
 | Alarm                                        | Meaning                                                                                                      |
 | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `FeedbackFailuresVisible`                    | A bounce/complaint was accepted and could not be processed five times. Redrive it.                           |
+| `FeedbackFailuresVisible`                    | A bounce, complaint or open event could not be processed five times. Redrive it.                             |
 | `DispatchFailuresVisible`                    | The dispatcher failed on a campaign's queue message five times. The campaign is stuck `sending`; redrive it. |
 | `SetBounceRate` / `SetComplaintRate`         | This configuration set at 2% bounces / 0.05% complaints. A warning only; silent until the set has sent.      |
 | `AccountBounceRate` / `AccountComplaintRate` | The whole account at 5% / 0.1%, including every other SES sender in the account. Halts all sending.          |

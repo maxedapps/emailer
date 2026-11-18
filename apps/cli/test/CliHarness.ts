@@ -70,6 +70,8 @@ interface Seed {
   readonly importFailures?: ReadonlyArray<Errors.StorageUnavailable>;
   /** The pages `campaigns check` answers with, one per call. */
   readonly checkPages?: ReadonlyArray<Schemas.CheckPage>;
+  /** The pages `campaigns opens` answers with, one per call. */
+  readonly openersPages?: ReadonlyArray<Schemas.OpenersPage>;
 }
 
 /** One request the service received: which endpoint, and what it carried. */
@@ -95,6 +97,7 @@ export const fakeService = (seed: Seed = {}) => {
   const removeFailures = [...(seed.removeFailures ?? [])];
   const importFailures = [...(seed.importFailures ?? [])];
   const checkPages = [...(seed.checkPages ?? [])];
+  const openersPages = [...(seed.openersPages ?? [])];
   let imported = 0;
 
   const receive = (endpoint: string, request: Omit<Received, "endpoint"> = {}) =>
@@ -307,6 +310,12 @@ export const fakeService = (seed: Seed = {}) => {
         receive("campaigns.check", { params: request.params, payload: request.payload }).pipe(
           Effect.andThen(
             Effect.suspend(() => found(checkPages.shift(), new Errors.CampaignNotFound())),
+          ),
+        ),
+      opens: (request) =>
+        receive("campaigns.opens", { params: request.params, query: request.query }).pipe(
+          Effect.andThen(
+            Effect.suspend(() => found(openersPages.shift(), new Errors.CampaignNotFound())),
           ),
         ),
       send: (request) =>

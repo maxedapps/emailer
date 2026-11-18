@@ -76,8 +76,9 @@ const readSendRow = itemReader(
   Schema.Struct({
     contactId: Schemas.EntityId,
     recipient: Schema.String,
+    sendId: Schemas.EntityId,
     state: Schema.Literals(["unconfirmed", "accepted", "rejected", "uncertain", "skipped"]),
-    variant: Schema.optionalKey(Schemas.CopyKey),
+    variant: Schemas.CopyKey,
     finishedAt: Schema.optionalKey(Schemas.Timestamp),
     skipReason: Schema.optionalKey(Schema.String),
   }),
@@ -547,6 +548,84 @@ export const awaitCampaignFeedback = (
         ),
     }),
   );
+
+/** Polls the campaign until SES's opens reach `total`, then answers it. */
+export const awaitCampaignOpens = (client: EmailerClient, id: string, total: number) =>
+  client.campaigns.get({ params: { id } }).pipe(
+    Effect.repeat({
+      schedule: Schedule.spaced("3 seconds"),
+      until: (campaign: Schemas.Campaign) => (campaign.opens?.total ?? 0) >= total,
+    }),
+    Effect.timeoutOrElse({
+      duration: feedbackSettleTimeout,
+      orElse: () => Effect.die(new Error(`campaign ${id} did not reach ${total} opens`)),
+    }),
+  );
+
+/** The tracked configuration set's name, as the deployed feedback function was given it. */
+const trackedConfigurationSet = Effect.gen(function* () {
+  const getFunctionConfiguration = yield* lambda.getFunctionConfiguration;
+
+  const deployed = yield* getFunctionConfiguration({
+    FunctionName: yield* functionName("feedback"),
+  });
+
+  const name = deployed.Environment?.Variables?.["EMAILER_TRACKED_CONFIGURATION_SET"];
+
+  if (name === undefined) {
+    throw new Error("the deployed feedback function names no tracked configuration set");
+  }
+
+  // The AWS client marks environment values sensitive, and may hand this one over redacted.
+  return Redacted.isRedacted(name) ? Redacted.value(name) : name;
+});
+
+/**
+ * Puts an `Email Opened` event for one send on the stage's feedback queue, the way the rule
+ * delivers SES's: the mailbox simulator produces no opens (ADR-0042).
+ */
+export const injectOpen = (
+  campaignId: string,
+  send: { readonly contactId: string; readonly sendId: string; readonly variant: string },
+  timestamp: string,
+) =>
+  Effect.gen(function* () {
+    const { stage } = yield* Deployment;
+    const getQueueUrl = yield* sqs.getQueueUrl;
+    const sendMessage = yield* sqs.sendMessage;
+
+    const { QueueUrl } = yield* getQueueUrl({ QueueName: `emailer-${stage}-feedback-events` });
+
+    if (QueueUrl === undefined) {
+      throw new Error(`no URL for the feedback queue of ${stage}`);
+    }
+
+    const detail = {
+      eventType: "Open",
+      mail: {
+        messageId: yield* newIdentifier,
+        tags: {
+          "ses:configuration-set": [yield* trackedConfigurationSet],
+          campaignId: [campaignId],
+          contactId: [send.contactId],
+          sendId: [send.sendId],
+          variant: [send.variant],
+        },
+      },
+      open: { timestamp, ipAddress: "192.0.2.1", userAgent: "Mozilla/5.0", isBotEvent: "Unlikely" },
+    };
+
+    yield* sendMessage({
+      QueueUrl,
+      MessageBody: JSON.stringify({
+        version: "0",
+        id: yield* newIdentifier,
+        "detail-type": "Email Opened",
+        source: "aws.ses",
+        detail,
+      }),
+    });
+  });
 
 /** Every SEND row of a campaign, across pages: Distilled carries `LastEvaluatedKey` forward. */
 export const sendRows = (campaignId: string) =>

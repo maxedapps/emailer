@@ -89,6 +89,7 @@ const campaignsHandlers = HttpApiBuilder.group(EmailerApi, "campaigns", (handler
       test: (request) => sendTest(request.params.id, request.payload),
       render: (request) => renderAs(request.params.id, request.payload),
       check: (request) => checkPage(request.params.id, request.payload),
+      opens: (request) => campaigns.listOpeners(request.params.id, request.query.cursor),
       // The campaign's control item is enough to know it exists; its body is not read.
       preview: (request) =>
         campaigns

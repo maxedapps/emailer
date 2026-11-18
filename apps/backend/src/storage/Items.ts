@@ -54,6 +54,22 @@ export const variantBodyKey = (campaignId: string, variantKey: string) => ({
   sk: str(`BODY#${variantKey}`),
 });
 
+/** One recipient's send row: claimed, settled, and once opened, its opens (ADR-0042). */
+export const sendKey = (campaignId: string, contactId: string) => ({
+  pk: str(`CAMPAIGN#${campaignId}`),
+  sk: str(`SEND#${contactId}`),
+});
+
+export const sendPrefix = "SEND#";
+
+/** How often one copy of a campaign was opened. */
+export const opensKey = (campaignId: string, copy: string) => ({
+  pk: str(`CAMPAIGN#${campaignId}`),
+  sk: str(`${opensPrefix}${copy}`),
+});
+
+export const opensPrefix = "OPENS#";
+
 export const strMap = (values: Schemas.ContactAttributes) => ({
   M: Object.fromEntries(Object.entries(values).map(([name, value]) => [name, str(value)])),
 });

@@ -304,7 +304,7 @@ const submitClaimed = Effect.fn("Dispatching.submitClaimed")(function* (input: {
   const { recipient, content, unsubscribeUrl, campaignId, sendId, variant, contactId, runToken } =
     input;
 
-  const mail = Mail.Campaign({ content, unsubscribeUrl, campaignId, sendId, variant });
+  const mail = Mail.Campaign({ content, unsubscribeUrl, campaignId, contactId, sendId, variant });
 
   // One attempt waits for its pacing slot and sends. The first attempt's slot is the one already
   // checked against the time budget; a retry reserves its own once it has backed off, and checks it

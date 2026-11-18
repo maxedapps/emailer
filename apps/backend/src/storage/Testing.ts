@@ -229,6 +229,7 @@ export const unusedCampaigns: CampaignStoreOperations = {
   getSummary: () => notExercised("CampaignStore", "getSummary"),
   getBody: () => notExercised("CampaignStore", "getBody"),
   getCampaign: () => notExercised("CampaignStore", "getCampaign"),
+  listOpeners: () => notExercised("CampaignStore", "listOpeners"),
   getVariant: () => notExercised("CampaignStore", "getVariant"),
   getVariantContent: () => notExercised("CampaignStore", "getVariantContent"),
   listCampaigns: () => notExercised("CampaignStore", "listCampaigns"),

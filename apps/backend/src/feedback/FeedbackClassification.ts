@@ -16,32 +16,52 @@ const Mail = Schema.Struct({
   tags: Schema.optional(Schema.Record(Schema.String, Schema.Array(Schema.String))),
 });
 
-export const EmailEvent = Schema.Union([
-  Schema.Struct({
-    eventType: Schema.Literal("Bounce"),
-    mail: Mail,
-    bounce: Schema.Struct({
-      bounceType: Schema.String,
-      bounceSubType: Schema.optional(Schema.NullOr(Schema.String)),
-      bouncedRecipients: Schema.Array(Recipient),
-      feedbackId: Schema.NonEmptyString,
-      /** When the receiving server sent the bounce. */
-      timestamp: Schema.DateTimeUtcFromString,
-    }),
+const BounceEvent = Schema.Struct({
+  eventType: Schema.Literal("Bounce"),
+  mail: Mail,
+  bounce: Schema.Struct({
+    bounceType: Schema.String,
+    bounceSubType: Schema.optional(Schema.NullOr(Schema.String)),
+    bouncedRecipients: Schema.Array(Recipient),
+    feedbackId: Schema.NonEmptyString,
+    /** When the receiving server sent the bounce. */
+    timestamp: Schema.DateTimeUtcFromString,
   }),
-  Schema.Struct({
-    eventType: Schema.Literal("Complaint"),
-    mail: Mail,
-    complaint: Schema.Struct({
-      complainedRecipients: Schema.Array(Recipient),
-      feedbackId: Schema.NonEmptyString,
-      complaintFeedbackType: Schema.optional(Schema.NullOr(Schema.String)),
-      complaintSubType: Schema.optional(Schema.NullOr(Schema.String)),
-    }),
+});
+
+const ComplaintEvent = Schema.Struct({
+  eventType: Schema.Literal("Complaint"),
+  mail: Mail,
+  complaint: Schema.Struct({
+    complainedRecipients: Schema.Array(Recipient),
+    feedbackId: Schema.NonEmptyString,
+    complaintFeedbackType: Schema.optional(Schema.NullOr(Schema.String)),
+    complaintSubType: Schema.optional(Schema.NullOr(Schema.String)),
   }),
-]);
+});
+
+/**
+ * A load of the open pixel. Its IP address and user agent are left undecoded: emailer keeps
+ * neither (ADR-0042).
+ */
+const OpenEvent = Schema.Struct({
+  eventType: Schema.Literal("Open"),
+  mail: Mail,
+  open: Schema.Struct({
+    timestamp: Schema.DateTimeUtcFromString,
+    /** SES's guess whether a machine rather than a person loaded the pixel. */
+    isBotEvent: Schema.optional(Schema.Literals(["Likely", "Unlikely"])),
+  }),
+});
+
+export const EmailEvent = Schema.Union([BounceEvent, ComplaintEvent, OpenEvent]);
 
 export type EmailEvent = typeof EmailEvent.Type;
+
+/** A bounce or complaint: what `classify` decides on. */
+export type FeedbackEvent = typeof BounceEvent.Type | typeof ComplaintEvent.Type;
+
+export type OpenEvent = typeof OpenEvent.Type;
 
 export const decodeEmailEvent = Schema.decodeUnknownEffect(EmailEvent);
 
@@ -156,7 +176,7 @@ const classifyComplaint = (
     : decisions.complaint;
 };
 
-export const classify = (event: EmailEvent): Classified => {
+export const classify = (event: FeedbackEvent): Classified => {
   switch (event.eventType) {
     case "Bounce": {
       const bounceSubType = orUndefined(event.bounce.bounceSubType);

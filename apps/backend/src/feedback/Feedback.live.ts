@@ -8,9 +8,11 @@ import {
   accountSendQuota,
   awaitAddressStatus,
   awaitCampaignFeedback,
+  awaitCampaignOpens,
   awaitCampaignState,
   campaignStateTimeout,
   configuration,
+  injectOpen,
   liveStorage,
   sendRows,
   sendToSimulatorList,
@@ -95,6 +97,72 @@ export const feedbackSuite = (test: LiveTest) => {
 
         expect(rows).toHaveLength(2);
         expect(rows.every((row) => row.state === "skipped")).toBe(true);
+      }),
+      sendTestTimeout,
+    );
+
+    test(
+      "counts injected opens per campaign and copy, and lists who opened first when",
+      Effect.gen(function* () {
+        const settings = yield* configuration;
+        const client = yield* makeEmailerClient(settings.apiUrl, settings.token);
+        const quota = yield* accountSendQuota;
+        const runId = yield* newIdentifier;
+        const reader = simulator("success", runId);
+        const list = yield* client.lists.create({ payload: { name: `opens-${runId}` } });
+
+        yield* client.lists.import({
+          params: { listId: list.id },
+          payload: { contacts: [{ email: reader }] },
+        });
+
+        const campaign = yield* client.campaigns.create({
+          payload: {
+            listId: list.id,
+            subject: `Emailer opens ${runId}`,
+            text: `This message is opened by injected SES events.${textFooter}`,
+          },
+        });
+
+        yield* sendToSimulatorList(client, list.id, campaign.id);
+        yield* awaitCampaignState(
+          client,
+          campaign.id,
+          "completed",
+          campaignStateTimeout(1, quota?.MaxSendRate),
+        );
+
+        const [send] = yield* sendRows(campaign.id);
+
+        if (send === undefined) {
+          throw new Error(`campaign ${campaign.id} has no send row`);
+        }
+
+        // The second open arrives later but happened earlier: it becomes the first open.
+        yield* injectOpen(campaign.id, send, "2026-09-11T10:05:00.000Z");
+        yield* awaitCampaignOpens(client, campaign.id, 1);
+        yield* injectOpen(campaign.id, send, "2026-09-11T10:01:00.000Z");
+
+        const opened = yield* awaitCampaignOpens(client, campaign.id, 2);
+
+        expect(opened.opens).toStrictEqual({
+          unique: 1,
+          total: 2,
+          copies: { default: { unique: 1, total: 2 } },
+        });
+        expect(
+          yield* client.campaigns.opens({ params: { id: campaign.id }, query: {} }),
+        ).toStrictEqual({
+          items: [
+            {
+              contactId: send.contactId,
+              email: reader,
+              copy: "default",
+              firstOpenedAt: "2026-09-11T10:01:00.000Z",
+              opens: 2,
+            },
+          ],
+        });
       }),
       sendTestTimeout,
     );

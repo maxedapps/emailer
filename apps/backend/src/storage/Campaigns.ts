@@ -12,16 +12,20 @@ import type * as dynamodb from "@distilled.cloud/aws/dynamodb";
 import { Context, Data, Effect, Layer, Predicate, Schema, Struct } from "effect";
 import { SecureRandom } from "effect/crypto";
 
-import { CorruptItem } from "../Errors.ts";
+import { CorruptItem, corrupt } from "../Errors.ts";
 
 import {
   bodyKey,
   campaignKey,
   itemReader,
   itemWriter,
+  keyCodec,
   listingAttributes,
   num,
+  opensPrefix,
   routesKey,
+  sendKey,
+  sendPrefix,
   str,
   strMap,
   tableLogicalId,
@@ -34,6 +38,7 @@ import type { TableOperations } from "./Items.ts";
 import type {
   Action,
   PagePrimitives,
+  QueryPrimitives,
   ReadPrimitives,
   StoredItem,
   StoredPage,
@@ -44,11 +49,6 @@ import type {
 } from "./Primitives.ts";
 
 const campaignKind = "campaign";
-
-const sendKey = (campaignId: string, contactId: string) => ({
-  pk: str(`CAMPAIGN#${campaignId}`),
-  sk: str(`SEND#${contactId}`),
-});
 
 /** What every state shares: the summary's fields, the counters and the current run's baselines. */
 const always = {
@@ -191,6 +191,31 @@ const SendRecord = Schema.Union([
 ]);
 
 const writeSend = itemWriter(SendRecord);
+
+/** A send row once opened: `recordOpen` adds `openedAt` and `opens` (ADR-0042). */
+const OpenedSend = Schema.Struct({
+  contactId: Schemas.EntityId,
+  recipient: Schemas.NormalizedEmailAddress,
+  variant: Schemas.CopyKey,
+  openedAt: Schemas.Timestamp,
+  opens: Schema.Int,
+});
+
+const readOpenedSend = itemReader(OpenedSend);
+
+const decodeSendCursor = Schema.decodeUnknownEffect(
+  keyCodec(Schema.Struct({ sk: Schema.String.check(Schema.isStartingWith(sendPrefix)) })),
+);
+
+/** One copy's open counters, named by their key. */
+const readOpens = itemReader(
+  Schema.Struct({
+    sk: Schema.String.check(Schema.isStartingWith(opensPrefix)),
+    ...Schemas.OpenCounts.fields,
+  }),
+);
+
+const noOpens: Schemas.OpenCounts = { unique: 0, total: 0 };
 
 /**
  * What one SES submission came to: the mailer answers it, and a send row is settled from it.
@@ -558,11 +583,114 @@ export const campaignOperations = (
     WritePrimitives &
     TransactionPrimitives &
     UpdatePrimitives &
+    QueryPrimitives &
     PagePrimitives,
 ) => {
-  const { readEntityPage, readItem, recordOnce, transact, updateIf } = primitives;
+  const { readEntityPage, readItem, recordOnce, runQuery, transact, updateIf } = primitives;
   const reads = campaignReads(primitives);
-  const { getRoutes } = reads;
+  const { getRoutes, getSummary } = reads;
+
+  /**
+   * The opens of each copy, from one query of the campaign's counter items. A copy nobody opened has
+   * no item and counts zero; a counter left by a copy since removed still counts.
+   */
+  const getOpens = Effect.fn("Storage.getOpens")(function* (
+    campaignId: string,
+    copies: ReadonlyArray<string>,
+  ) {
+    const response = yield* runQuery("getOpens", "base-table", {
+      KeyConditionExpression: "pk = :pk AND begins_with(sk, :prefix)",
+      ExpressionAttributeValues: {
+        ":pk": str(`CAMPAIGN#${campaignId}`),
+        ":prefix": str(opensPrefix),
+      },
+    });
+
+    const perCopy = new Map(copies.map((copy) => [copy, noOpens] as const));
+
+    for (const item of response.Items ?? []) {
+      const { sk, unique, total } = yield* readOpens("getOpens", item);
+
+      perCopy.set(sk.slice(opensPrefix.length), { unique, total });
+    }
+
+    const counts = [...perCopy.values()];
+
+    return {
+      unique: counts.reduce((sum, it) => sum + it.unique, 0),
+      total: counts.reduce((sum, it) => sum + it.total, 0),
+      copies: Object.fromEntries(perCopy),
+    } satisfies Schemas.CampaignOpens;
+  });
+
+  /** The campaign as `campaignReads` has it, with its opens once its submission has progress. */
+  const getCampaign = (campaignId: string) =>
+    reads.getCampaign(campaignId).pipe(
+      Effect.filterOrElse(
+        (campaign) => !("progress" in campaign.submission),
+        (started) =>
+          Effect.map(
+            getOpens(campaignId, [
+              Schemas.defaultCopy,
+              ...(started.variants ?? []).map((variant) => variant.key),
+            ]),
+            (opens): Schemas.Campaign => ({ ...started, opens }),
+          ),
+      ),
+    );
+
+  /**
+   * One page of the campaign's send rows, filtered to those opened. DynamoDB filters after it reads,
+   * so a page costs every row it passes, opened or not, and may hold no opener yet name a next
+   * cursor: the contact of the last row read.
+   */
+  const listOpeners = Effect.fn("Storage.listOpeners")(function* (
+    campaignId: string,
+    cursor: string | undefined,
+  ) {
+    yield* getSummary(campaignId);
+
+    const request = {
+      KeyConditionExpression: "pk = :pk AND begins_with(sk, :prefix)",
+      FilterExpression: "attribute_exists(opens)",
+      ExpressionAttributeValues: {
+        ":pk": str(`CAMPAIGN#${campaignId}`),
+        ":prefix": str(sendPrefix),
+      },
+    };
+
+    const page = yield* runQuery(
+      "listOpeners",
+      "base-table",
+      cursor === undefined
+        ? request
+        : { ...request, ExclusiveStartKey: sendKey(campaignId, cursor) },
+    );
+
+    const openers = yield* Effect.forEach(page.Items ?? [], (item) =>
+      Effect.map(readOpenedSend("listOpeners", item), (row): Schemas.Opener => ({
+        contactId: row.contactId,
+        email: row.recipient,
+        copy: row.variant,
+        firstOpenedAt: row.openedAt,
+        opens: row.opens,
+      })),
+    );
+
+    const last = page.LastEvaluatedKey;
+
+    if (last === undefined) {
+      return { items: openers } satisfies StoredPage<Schemas.Opener, string>;
+    }
+
+    // An unreadable `LastEvaluatedKey` would silently end the listing, so it is corrupt.
+    const { sk } = yield* decodeSendCursor(last).pipe(corrupt("listOpeners"));
+
+    return { items: openers, nextCursor: sk.slice(sendPrefix.length) } satisfies StoredPage<
+      Schemas.Opener,
+      string
+    >;
+  });
 
   // Every key is fresh, so an item already there can only be this request landing again after a
   // lost response: `recordOnce` reports that as done, which it is. The body goes first so that
@@ -571,7 +699,15 @@ export const campaignOperations = (
   const createCampaign = Effect.fn("Storage.createCampaign")(function* (
     campaign: Schemas.Campaign,
   ) {
-    const summary = Struct.omit(campaign, ["text", "html", "language", "variants", "submission"]);
+    const summary = Struct.omit(campaign, [
+      "text",
+      "html",
+      "language",
+      "variants",
+      "opens",
+      "submission",
+    ]);
+
     const body = yield* writeBody(Struct.pick(campaign, ["text", "html", "language"]));
 
     yield* recordOnce("createCampaign", { ...bodyKey(campaign.id), ...body });
@@ -1170,6 +1306,8 @@ export const campaignOperations = (
 
   return {
     ...reads,
+    getCampaign,
+    listOpeners,
     createCampaign,
     getVariantContent,
     listCampaigns,

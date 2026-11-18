@@ -10,6 +10,7 @@
   - [ADR-0027](0027-signup-api-scoped-keys-and-double-opt-in.md) and [ADR-0037](0037-single-opt-in-keys-and-integration-opt-out.md): an opt-out is recorded per list but keeps the address from every list until a confirmed sign-up brings it back to that list.
   - [ADR-0028](0028-campaign-variants-and-attribute-merge.md): import merges name and attributes into an existing contact.
 - Plan: [0041-personalized-templates.plan.md](0041-personalized-templates.plan.md)
+- Amended by [ADR-0042](0042-open-tracking.md), decision 7: links still carry no per-person code, but campaign mail now carries SES's open pixel, and who opened is recorded.
 
 ## Context
 

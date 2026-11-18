@@ -5,15 +5,21 @@ import type * as AWS from "@alchemy.run/aws";
 import { ConfigProvider, Effect, Layer, Logger, References, Result } from "effect";
 import { TestClock } from "effect/testing";
 
-import { expectedConfigurationSet, handleMessage } from "./Feedback.ts";
-import { FeedbackAlreadyRecorded, FeedbackStore } from "../storage/Feedback.ts";
+import { expectedConfigurationSets, handleMessage } from "./Feedback.ts";
+import { FeedbackAlreadyRecorded, FeedbackStore, SendNotFound } from "../storage/Feedback.ts";
 
 import type { AddressSuppression } from "../storage/Addresses.ts";
-import type { FeedbackCounter, FeedbackRow } from "../storage/Feedback.ts";
+import type { FeedbackCounter, FeedbackRow, Open } from "../storage/Feedback.ts";
 
 type WriteOutcome = "committed" | "duplicate" | "unknown-campaign";
 
 const configurationSetName = "emailer-test-mail";
+
+const untrackedSetName = "emailer-test-untracked-mail";
+
+const contactId = "0195f0a0-1111-4222-8333-44444444c001";
+
+const sendId = "0195f0a0-1111-4222-8333-44444444e5d1";
 
 const campaignId = "0195f0a0-1111-4222-8333-4444444ca409";
 
@@ -39,6 +45,7 @@ interface World {
   readonly historyKeys: Set<string>;
   readonly writeOutcomes: Array<WriteOutcome>;
   readonly repeated: Array<string>;
+  readonly opens: Array<Open>;
   readonly logs: Array<LogEntry>;
 }
 
@@ -87,13 +94,22 @@ const storageOperations = (world: World): FeedbackStore["Service"] => ({
 
       return rememberWrite(world, historyKey(row));
     }),
+  recordOpen: (open) =>
+    Effect.sync(() => {
+      world.opens.push(open);
+
+      return "first" as const;
+    }),
 });
 
 const storageLayer = (world: World): Layer.Layer<FeedbackStore> =>
   Layer.succeed(FeedbackStore)(storageOperations(world));
 
 const configuration = Layer.succeed(ConfigProvider.ConfigProvider)(
-  ConfigProvider.fromEnvRecord({ EMAILER_CONFIGURATION_SET: configurationSetName }),
+  ConfigProvider.fromEnvRecord({
+    EMAILER_TRACKED_CONFIGURATION_SET: configurationSetName,
+    EMAILER_UNTRACKED_CONFIGURATION_SET: untrackedSetName,
+  }),
 );
 
 const emptyWorld = (): World => ({
@@ -103,6 +119,7 @@ const emptyWorld = (): World => ({
   historyKeys: new Set(),
   writeOutcomes: [],
   repeated: [],
+  opens: [],
   logs: [],
 });
 
@@ -124,7 +141,8 @@ const logsNamed = (world: World, name: string) =>
 const tags = (extra: Record<string, Array<string>> = {}) => ({
   "ses:configuration-set": [configurationSetName],
   campaignId: [campaignId],
-  sendId: ["0195f0a0-1111-4222-8333-44444444e5d1"],
+  contactId: [contactId],
+  sendId: [sendId],
   variant: ["half"],
   ...extra,
 });
@@ -166,6 +184,20 @@ const complaintEvent = (
   },
 });
 
+const openEvent = (
+  judged: { readonly isBotEvent?: string } = { isBotEvent: "Unlikely" },
+  messageTags: Record<string, Array<string>> = tags(),
+): AWS.SES.EmailEventDetail => ({
+  eventType: "Open",
+  mail: { messageId, destination: ["reader@example.com"], tags: { ...messageTags } },
+  open: {
+    ipAddress: "192.0.2.1",
+    timestamp: "2026-09-11T10:05:00.123Z",
+    userAgent: "Mozilla/5.0",
+    ...judged,
+  },
+});
+
 /** The queue message the rule delivers: the whole EventBridge event, with SES's event as `detail`. */
 const envelope = (detail: AWS.SES.EmailEventDetail, envelopeId = "envelope-1") =>
   JSON.stringify({ version: "0", id: envelopeId, source: "aws.ses", detail });
@@ -182,7 +214,7 @@ const handling = (
   store: Layer.Layer<FeedbackStore> = storageLayer(world),
 ) =>
   Effect.gen(function* () {
-    const expected = yield* expectedConfigurationSet;
+    const expected = yield* expectedConfigurationSets;
 
     yield* handleMessage(expected, body);
   }).pipe(
@@ -328,6 +360,110 @@ describe("complaints", () => {
   );
 });
 
+describe("opens", () => {
+  it.effect("records an open of campaign mail on the send its tags name", () =>
+    Effect.gen(function* () {
+      const world = yield* run(openEvent());
+
+      expect(world.opens).toStrictEqual([
+        {
+          campaignId,
+          contactId,
+          sendId,
+          eventId: "envelope-1",
+          openedAt: "2026-09-11T10:05:00.123Z",
+        },
+      ]);
+      expect(world.suppressions.size).toBe(0);
+      expect(world.writes).toHaveLength(0);
+    }),
+  );
+
+  it.effect("records an open SES does not judge, and keeps no IP address or user agent", () =>
+    Effect.gen(function* () {
+      const world = yield* run(openEvent({}));
+
+      expect(world.opens).toHaveLength(1);
+      expect(JSON.stringify(world.logs)).not.toMatch(/192\.0\.2\.1|Mozilla/);
+    }),
+  );
+
+  it.effect("ignores an open SES calls likely a bot's", () =>
+    Effect.gen(function* () {
+      const world = yield* run(openEvent({ isBotEvent: "Likely" }));
+
+      expect(world.opens).toHaveLength(0);
+      expect(logsNamed(world, "open ignored")[0]?.message).toStrictEqual([
+        "open ignored",
+        { envelopeId: "envelope-1", messageId, reason: "bot" },
+      ]);
+    }),
+  );
+
+  it.effect("ignores an open of mail without a send's tags", () =>
+    Effect.gen(function* () {
+      const world = yield* run(openEvent({ isBotEvent: "Unlikely" }, untagged));
+
+      expect(world.opens).toHaveLength(0);
+      expect(logsNamed(world, "open ignored")).toHaveLength(1);
+    }),
+  );
+
+  it.effect("warns and succeeds when the send row is not there", () =>
+    Effect.gen(function* () {
+      const world = emptyWorld();
+
+      const missing = Layer.succeed(FeedbackStore)({
+        ...storageOperations(world),
+        recordOpen: () => Effect.fail(new SendNotFound()),
+      });
+
+      yield* handling(world, envelope(openEvent()), missing);
+
+      const warnings = logsNamed(world, "open ignored");
+
+      expect(warnings[0]?.level).toBe("Warn");
+      expect(warnings[0]?.message).toStrictEqual([
+        "open ignored",
+        { campaignId, sendId, reason: "no send row" },
+      ]);
+    }),
+  );
+
+  it.effect("fails the invocation when the open cannot be stored, so SQS delivers it again", () =>
+    Effect.gen(function* () {
+      const world = emptyWorld();
+
+      const unavailable = Layer.succeed(FeedbackStore)({
+        ...storageOperations(world),
+        recordOpen: () =>
+          Effect.fail(
+            new StorageUnavailable({ operation: "recordOpen", failure: "InternalServerError" }),
+          ),
+      });
+
+      const attempt = yield* Effect.result(handling(world, envelope(openEvent()), unavailable));
+
+      expect(Result.isFailure(attempt)).toBe(true);
+    }),
+  );
+});
+
+describe("the untracked configuration set", () => {
+  it.effect("suppresses a bounce of a test copy or confirmation sent through it", () =>
+    Effect.gen(function* () {
+      const world = yield* run(
+        bounceEvent("Permanent", "General", ["hard@example.com"], {
+          "ses:configuration-set": [untrackedSetName],
+        }),
+      );
+
+      expect(world.suppressions.has("hard@example.com")).toBe(true);
+      expect(world.writes).toHaveLength(0);
+    }),
+  );
+});
+
 describe("events the handler must not act on", () => {
   it.effect("ignores an event published through another configuration set", () =>
     Effect.gen(function* () {
@@ -340,6 +476,19 @@ describe("events the handler must not act on", () => {
 
       expect(world.suppressions.size).toBe(0);
       expect(world.writes).toHaveLength(0);
+    }),
+  );
+
+  it.effect("ignores an open published through another configuration set", () =>
+    Effect.gen(function* () {
+      const world = yield* run(
+        openEvent(
+          { isBotEvent: "Unlikely" },
+          { ...tags(), "ses:configuration-set": ["someone-elses-set"] },
+        ),
+      );
+
+      expect(world.opens).toHaveLength(0);
     }),
   );
 

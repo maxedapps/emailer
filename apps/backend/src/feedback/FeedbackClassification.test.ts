@@ -3,7 +3,7 @@ import { DateTime, Effect, Result } from "effect";
 
 import { classify, decodeEmailEvent } from "./FeedbackClassification.ts";
 
-import type { EmailEvent } from "./FeedbackClassification.ts";
+import type { FeedbackEvent } from "./FeedbackClassification.ts";
 
 const mail = { messageId: "0100019" };
 
@@ -11,7 +11,7 @@ const feedbackId = "0100019a-6c6f-4a39-8f12-0b2f9c3d4e5f";
 
 const bouncedAt = DateTime.makeUnsafe("2026-09-11T10:00:00.250Z");
 
-const bounce = (bounceType: string, bounceSubType: string | null): EmailEvent => ({
+const bounce = (bounceType: string, bounceSubType: string | null): FeedbackEvent => ({
   eventType: "Bounce",
   mail,
   bounce: {
@@ -26,7 +26,7 @@ const bounce = (bounceType: string, bounceSubType: string | null): EmailEvent =>
 const complaint = (
   complaintFeedbackType: string | null,
   complaintSubType: string | null = null,
-): EmailEvent => ({
+): FeedbackEvent => ({
   eventType: "Complaint",
   mail,
   complaint: {
@@ -153,7 +153,9 @@ describe("decoding", () => {
     Effect.gen(function* () {
       const event = yield* decodeEmailEvent(detail("2026-09-11T10:00:00Z"));
 
-      expect(classify(event).transientAt).toBe("2026-09-11T10:00:00.000Z");
+      expect(event.eventType === "Bounce" && classify(event).transientAt).toBe(
+        "2026-09-11T10:00:00.000Z",
+      );
     }),
   );
 
@@ -163,6 +165,46 @@ describe("decoding", () => {
       expect(Result.isFailure(yield* Effect.result(decodeEmailEvent(detail(undefined))))).toBe(
         true,
       );
+    }),
+  );
+});
+
+describe("opens", () => {
+  const open = (fields: { readonly timestamp: string; readonly isBotEvent?: string }) => ({
+    eventType: "Open",
+    mail: { messageId: "0100019", tags: { campaignId: ["c"] } },
+    open: { ipAddress: "192.0.2.1", userAgent: "Mozilla/5.0", ...fields },
+  });
+
+  it.effect("decodes an open's time and SES's bot guess, and leaves its IP and agent out", () =>
+    Effect.gen(function* () {
+      const event = yield* decodeEmailEvent(
+        open({ timestamp: "2026-09-11T10:05:00Z", isBotEvent: "Likely" }),
+      );
+
+      expect(event).toStrictEqual({
+        eventType: "Open",
+        mail: { messageId: "0100019", tags: { campaignId: ["c"] } },
+        open: { timestamp: DateTime.makeUnsafe("2026-09-11T10:05:00.000Z"), isBotEvent: "Likely" },
+      });
+    }),
+  );
+
+  it.effect("decodes an open without a bot guess", () =>
+    Effect.gen(function* () {
+      const event = yield* decodeEmailEvent(open({ timestamp: "2026-09-11T10:05:00.123Z" }));
+
+      expect(event.eventType === "Open" && event.open).toStrictEqual({
+        timestamp: DateTime.makeUnsafe("2026-09-11T10:05:00.123Z"),
+      });
+    }),
+  );
+
+  it.effect("refuses an open without a readable time", () =>
+    Effect.gen(function* () {
+      expect(
+        Result.isFailure(yield* Effect.result(decodeEmailEvent(open({ timestamp: "soon" })))),
+      ).toBe(true);
     }),
   );
 });

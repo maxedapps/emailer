@@ -451,14 +451,29 @@ export const VariantRoutes = Schema.Array(VariantRoute).check(
 
 export type VariantRoutes = typeof VariantRoutes.Type;
 
+/** How often a copy, or a whole campaign, was opened: by how many recipients, and in all. */
+export const OpenCounts = Schema.Struct({ unique: Schema.Natural, total: Schema.Natural });
+
+export type OpenCounts = typeof OpenCounts.Type;
+
+/** A started campaign's opens, in all and for each of its copies, opened or not (ADR-0042). */
+export const CampaignOpens = Schema.Struct({
+  ...OpenCounts.fields,
+  copies: Schema.Record(CopyKey, OpenCounts),
+});
+
+export type CampaignOpens = typeof CampaignOpens.Type;
+
 /**
- * A campaign is its summary, which `list` answers alone, plus its own copy's body and the rules of
- * any alternate copies; each variant's content is read on its own.
+ * A campaign is its summary, which `list` answers alone, plus its own copy's body, the rules of
+ * any alternate copies and, once it has started sending, its opens; each variant's content is read
+ * on its own.
  */
 export const Campaign = Schema.Struct({
   ...CampaignSummary.fields,
   ...CampaignBody.fields,
   variants: Schema.optionalKey(VariantRoutes),
+  opens: Schema.optionalKey(CampaignOpens),
 });
 
 export type Campaign = typeof Campaign.Type;
@@ -958,6 +973,25 @@ export const CheckPage = Schema.Struct({
 });
 
 export type CheckPage = typeof CheckPage.Type;
+
+/** One recipient who opened a campaign: who, which copy, when first and how often. */
+export const Opener = Schema.Struct({
+  contactId: EntityId,
+  email: NormalizedEmailAddress,
+  copy: CopyKey,
+  firstOpenedAt: Timestamp,
+  opens: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
+});
+
+export type Opener = typeof Opener.Type;
+
+/**
+ * One page of a campaign's send rows, filtered to those opened: a page can hold no opener and still
+ * name a next cursor, which is the last row's contact.
+ */
+export const OpenersPage = page(Opener, EntityId);
+
+export type OpenersPage = typeof OpenersPage.Type;
 
 /** A short-lived public link to a campaign's rendered preview. */
 export const PreviewLink = Schema.Struct({ url: Schema.String, expiresAt: Timestamp });

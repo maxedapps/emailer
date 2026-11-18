@@ -607,7 +607,43 @@ const campaignsGet = Command.make(
       yield* withClient((client) => client.campaigns.get({ params: { id: input.id } })),
     );
   }),
-).pipe(Command.withDescription("Retrieve a campaign and its submission status"));
+).pipe(
+  Command.withDescription(
+    "Retrieve a campaign, its submission status and, once it has started sending, its opens",
+  ),
+);
+
+/** Earliest first open first; recipients who first opened at the same moment by address. */
+const byFirstOpen = (left: Schemas.Opener, right: Schemas.Opener) =>
+  left.firstOpenedAt.localeCompare(right.firstOpenedAt) || left.email.localeCompare(right.email);
+
+const campaignsOpens = Command.make(
+  "opens",
+  { id: idArgument("id") },
+  Effect.fn(function* (input) {
+    const openers = yield* withClient((client) =>
+      Stream.paginate(undefined, (cursor: string | undefined) =>
+        client.campaigns
+          .opens({ params: { id: input.id }, query: { cursor } })
+          .pipe(
+            Effect.map((page) => [page.items, Option.fromUndefinedOr(page.nextCursor)] as const),
+          ),
+      ).pipe(Stream.runCollect),
+    );
+
+    yield* report(openers.toSorted(byFirstOpen));
+  }),
+).pipe(
+  Command.withDescription(
+    "List who opened a campaign: each recipient's copy, first open and number of opens",
+  ),
+  Command.withExamples([
+    {
+      command: "emailer campaigns opens 0195f0a0-1111-4222-8333-4444444ca409",
+      description: "Read every opener, earliest first open first",
+    },
+  ]),
+);
 
 const campaignsSend = Command.make(
   "send",
@@ -744,6 +780,7 @@ export const campaigns = Command.make("campaigns").pipe(
     campaignsPreview,
     campaignsCheck,
     campaignsGet,
+    campaignsOpens,
     campaignsSend,
     campaignsResume,
     campaignsSchedule,

@@ -601,7 +601,7 @@ describe("runSlice", () => {
         expect(fix.wake.messages).toStrictEqual([{ campaignId, runToken }]);
         expect(fix.world.completed).toBe(0);
 
-        // Each send goes out as the campaign, under the send id of the row it claimed, rendered for
+        // Each send goes out as the campaign, under the contact and send id of the row it claimed, rendered for
         // the recipient with their own unsubscribe link.
         const campaignMail = (member: Schemas.Contact) =>
           Effect.map(linkOf(member), (unsubscribeUrl) =>
@@ -613,6 +613,7 @@ describe("runSlice", () => {
               },
               unsubscribeUrl,
               campaignId,
+              contactId: member.id,
               sendId: fix.world.rows.get(member.id)?.sendId ?? "",
               variant: Schemas.defaultCopy,
             }),

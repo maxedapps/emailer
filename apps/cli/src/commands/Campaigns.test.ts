@@ -378,6 +378,50 @@ describe("campaigns preview --as", () => {
   );
 });
 
+describe("campaigns opens", () => {
+  const opener = (n: number, firstOpenedAt: string, opens = 1): Schemas.Opener => ({
+    contactId: member(n).id,
+    email: member(n).email,
+    copy: "default",
+    firstOpenedAt,
+    opens,
+  });
+
+  it.effect("reads every page, empty ones too, and prints the openers by first open", () =>
+    Effect.gen(function* () {
+      const service = fakeService({
+        openersPages: [
+          { items: [opener(1, "2026-09-11T12:00:00.000Z", 3)], nextCursor: member(2).id },
+          { items: [], nextCursor: member(4).id },
+          { items: [opener(5, "2026-09-11T10:30:00.000Z"), opener(6, "2026-09-11T12:00:00.000Z")] },
+        ],
+      });
+
+      const run = yield* runCli(service, ["campaigns", "opens", campaignId]);
+
+      expect(Exit.isSuccess(run.exit)).toBe(true);
+      expect(service.received.map((request) => request.query)).toStrictEqual([
+        {},
+        { cursor: member(2).id },
+        { cursor: member(4).id },
+      ]);
+      expect(yield* parseJson(run.stdout)).toStrictEqual([
+        opener(5, "2026-09-11T10:30:00.000Z"),
+        opener(1, "2026-09-11T12:00:00.000Z", 3),
+        opener(6, "2026-09-11T12:00:00.000Z"),
+      ]);
+    }),
+  );
+
+  it.effect("fails for a campaign that does not exist", () =>
+    Effect.gen(function* () {
+      const run = yield* runCli(fakeService(), ["campaigns", "opens", campaignId]);
+
+      expect(Exit.isFailure(run.exit)).toBe(true);
+    }),
+  );
+});
+
 describe("campaigns check", () => {
   const page = (
     findings: ReadonlyArray<Schemas.CheckFinding>,

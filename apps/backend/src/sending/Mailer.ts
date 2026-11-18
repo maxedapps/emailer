@@ -11,28 +11,41 @@ import { compose, composeConfirmation, fromHeader, senderSettings } from "./Mess
 import type { MessageContent } from "./Message.ts";
 import type { SubmissionOutcome } from "../storage/Campaigns.ts";
 
-const configurationSetLogicalId = "EmailerMail";
-
-const eventDestinationLogicalId = "EmailerMailFeedback";
-
-export const configurationSet = AWS.SES.ConfigurationSet(configurationSetLogicalId, {
+const suppression = {
   suppressedReasons: ["BOUNCE", "COMPLAINT"],
   reputationMetricsEnabled: true,
-});
+} satisfies AWS.SES.ConfigurationSetProps;
+
+/**
+ * Campaign mail. It publishes opens, which makes SES put its open pixel into every HTML part sent
+ * through it (ADR-0042).
+ */
+export const trackedConfigurationSet = AWS.SES.ConfigurationSet("EmailerMail", suppression);
+
+/**
+ * Test copies and sign-up confirmations: the same suppression, and no open pixel, since publishing
+ * no opens is what keeps SES from inserting one.
+ */
+export const untrackedConfigurationSet = AWS.SES.ConfigurationSet(
+  "EmailerUntrackedMail",
+  suppression,
+);
 
 export const submissionTimeout = Duration.seconds(8);
 
 /**
  * What goes out, and why. Campaign and test mail carry content already rendered for their
- * recipient. A campaign mail is tagged so its feedback lands on the campaign's counters and names
- * the copy it drew; a test copy and a sign-up's confirmation carry no tags, so their bounces and
- * complaints never reach them.
+ * recipient. A campaign mail goes through the tracked configuration set, tagged so its feedback
+ * lands on the campaign's counters and its opens on the recipient's send row, and names the copy it
+ * drew. A test copy and a sign-up's confirmation go untracked and carry no tags, so their bounces
+ * and complaints reach no campaign.
  */
 export type Mail = Data.TaggedEnum<{
   Campaign: {
     readonly content: MessageContent;
     readonly unsubscribeUrl: string;
     readonly campaignId: string;
+    readonly contactId: string;
     readonly sendId: string;
     readonly variant: Schemas.CopyKey;
   };
@@ -97,29 +110,52 @@ export const failureOutcomes = {
   SubmissionUncertain: () => Effect.succeed<SubmissionOutcome>({ outcome: "uncertain" }),
 };
 
+/** Both sets publish bounces and complaints to the default bus; only campaign mail its opens. */
 export const feedbackPublishing = Effect.gen(function* () {
-  const mail = yield* configurationSet;
+  const tracked = yield* trackedConfigurationSet;
+  const untracked = yield* untrackedConfigurationSet;
   const { accountId, region } = yield* AWS.AWSEnvironment.current;
 
-  return yield* AWS.SES.ConfigurationSetEventDestination(eventDestinationLogicalId, {
-    configurationSetName: mail.configurationSetName,
+  const eventBridgeDestination = {
+    eventBusArn: `arn:aws:events:${region}:${accountId}:event-bus/default`,
+  };
+
+  yield* AWS.SES.ConfigurationSetEventDestination("EmailerMailFeedback", {
+    configurationSetName: tracked.configurationSetName,
+    matchingEventTypes: ["BOUNCE", "COMPLAINT", "OPEN"],
+    eventBridgeDestination,
+  });
+
+  yield* AWS.SES.ConfigurationSetEventDestination("EmailerUntrackedMailFeedback", {
+    configurationSetName: untracked.configurationSetName,
     matchingEventTypes: ["BOUNCE", "COMPLAINT"],
-    eventBridgeDestination: {
-      eventBusArn: `arn:aws:events:${region}:${accountId}:event-bus/default`,
-    },
+    eventBridgeDestination,
   });
 });
 
+type SendEmail = (
+  request: AWS.SES.SendEmailRequest,
+) => Effect.Effect<sesv2.SendEmailResponse, sesv2.SendEmailError>;
+
+/** The send binding of each configuration set. */
+export interface SendEmails {
+  readonly tracked: SendEmail;
+  readonly untracked: SendEmail;
+}
+
 /**
- * A mail as SES is sent it: the composed message, its tags, and what a log line may say about it.
- * The log names neither the recipient nor a link: each is its action's whole authorization.
+ * A mail as SES is sent it: the composed message, the configuration set, its tags, and what a log
+ * line may say about it. The log names neither the recipient nor a link: each is its action's
+ * whole authorization.
  */
 const prepare = (mail: Mail, postal: string) =>
   Mail.$match(mail, {
-    Campaign: ({ content, unsubscribeUrl, campaignId, sendId, variant }) => ({
+    Campaign: ({ content, unsubscribeUrl, campaignId, contactId, sendId, variant }) => ({
       message: compose(content, unsubscribeUrl),
+      via: "tracked" as const,
       tags: [
         { Name: "campaignId", Value: campaignId },
+        { Name: "contactId", Value: contactId },
         { Name: "sendId", Value: sendId },
         { Name: "variant", Value: variant },
       ],
@@ -127,27 +163,23 @@ const prepare = (mail: Mail, postal: string) =>
     }),
     Test: ({ content, unsubscribeUrl }) => ({
       message: compose(content, unsubscribeUrl),
+      via: "untracked" as const,
       tags: [],
       logged: { mail: "Test" },
     }),
     Confirmation: ({ listName, confirmUrl }) => ({
       message: composeConfirmation(listName, confirmUrl, postal),
+      via: "untracked" as const,
       tags: [],
       logged: { mail: "Confirmation" },
     }),
   });
 
 export const makeSend =
-  (
-    sendEmail: (
-      request: AWS.SES.SendEmailRequest,
-    ) => Effect.Effect<sesv2.SendEmailResponse, sesv2.SendEmailError>,
-    from: string,
-    postal: string,
-  ) =>
+  (sendEmails: SendEmails, from: string, postal: string) =>
   (recipient: string, mail: Mail): Effect.Effect<string, SendError> =>
     Effect.gen(function* () {
-      const { message, tags, logged } = prepare(mail, postal);
+      const { message, via, tags, logged } = prepare(mail, postal);
       const text = { Text: { Data: message.text, Charset: "UTF-8" } };
 
       const request: AWS.SES.SendEmailRequest = {
@@ -174,7 +206,7 @@ export const makeSend =
           cause: describeCause(cause),
         }).pipe(Effect.andThen(Effect.fail(new SubmissionUncertain({ reason }))));
 
-      const response = yield* sendEmail(
+      const response = yield* sendEmails[via](
         tags.length === 0 ? request : { ...request, EmailTags: tags },
       ).pipe(
         Retry.none,
@@ -200,13 +232,15 @@ export class Mailer extends Context.Service<Mailer>()("emailer/backend/Mailer", 
 
     const identity = yield* sendingIdentity;
 
-    const mail = yield* configurationSet;
-    const sendEmail = yield* AWS.SES.SendEmail(identity, mail);
+    const sendEmails: SendEmails = {
+      tracked: yield* AWS.SES.SendEmail(identity, yield* trackedConfigurationSet),
+      untracked: yield* AWS.SES.SendEmail(identity, yield* untrackedConfigurationSet),
+    };
 
     return {
       send: Effect.fn("Mailer.send")(
         makeSend(
-          sendEmail,
+          sendEmails,
           fromHeader(settings.sender, settings.senderName),
           settings.postalAddress,
         ),

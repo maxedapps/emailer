@@ -1,17 +1,17 @@
 import { NodeCrypto } from "@effect/platform-node";
 import { Stack } from "alchemy";
 import * as AWS from "@alchemy.run/aws";
-import { Config, Duration, Effect, Layer, Schema } from "effect";
+import { Config, DateTime, Duration, Effect, Layer, Schema } from "effect";
 
 import { classify, decodeEmailEvent } from "./FeedbackClassification.ts";
 import { nowIso } from "../Identifiers.ts";
 import { functionServicesLayer, lambdaBasics } from "../Lambda.ts";
 import { failingInvocation } from "../Reporting.ts";
-import { configurationSet } from "../sending/Mailer.ts";
+import { trackedConfigurationSet, untrackedConfigurationSet } from "../sending/Mailer.ts";
 import { queueBacklogAlarm } from "../sending/Reputation.ts";
 import { FeedbackStore } from "../storage/Feedback.ts";
 
-import type { EmailEvent } from "./FeedbackClassification.ts";
+import type { EmailEvent, FeedbackEvent, OpenEvent } from "./FeedbackClassification.ts";
 
 const invocationTimeout = Duration.seconds(30);
 
@@ -66,7 +66,7 @@ const feedbackEvents = AWS.SQS.Queue(
 );
 
 /**
- * The default-bus rule that puts SES bounce and complaint events on the queue, and
+ * The default-bus rule that puts SES bounce, complaint and open events on the queue, and
  * the queue policy that lets EventBridge send them. Deploy-time only, like `feedbackPublishing`:
  * `alchemy.run.ts` yields this and the function's constructor does not.
  *
@@ -86,7 +86,7 @@ export const feedbackRouting = Effect.gen(function* () {
     name: ruleName,
     eventPattern: {
       source: ["aws.ses"],
-      "detail-type": ["Email Bounced", "Email Complaint Received"],
+      "detail-type": ["Email Bounced", "Email Complaint Received", "Email Opened"],
     },
     targets: [{ Id: "FeedbackEvents", Arn: queue.queueArn }],
   });
@@ -120,14 +120,29 @@ const configurationSetTag = "ses:configuration-set";
 
 const campaignTag = "campaignId";
 
+const contactTag = "contactId";
+
+const sendTag = "sendId";
+
 const variantTag = "variant";
 
-export const expectedConfigurationSet = Config.String("EMAILER_CONFIGURATION_SET");
+/**
+ * This stage's configuration sets. The default bus carries every stage's SES events in the
+ * account and region, so an event from any other set is not this stage's.
+ */
+export const expectedConfigurationSets = Config.all([
+  Config.String("EMAILER_TRACKED_CONFIGURATION_SET"),
+  Config.String("EMAILER_UNTRACKED_CONFIGURATION_SET"),
+]);
 
-const record = Effect.fn("Feedback.record")(function* (event: EmailEvent) {
+type ConfigurationSets = ReadonlyArray<string>;
+
+const tagOf = (event: EmailEvent, name: string) => event.mail.tags?.[name]?.[0];
+
+const record = Effect.fn("Feedback.record")(function* (event: FeedbackEvent) {
   const classified = classify(event);
-  const campaignId = event.mail.tags?.[campaignTag]?.[0];
-  const variant = event.mail.tags?.[variantTag]?.[0];
+  const campaignId = tagOf(event, campaignTag);
+  const variant = tagOf(event, variantTag);
   const messageId = event.mail.messageId;
 
   const storage = yield* FeedbackStore;
@@ -209,26 +224,69 @@ const record = Effect.fn("Feedback.record")(function* (event: EmailEvent) {
   });
 });
 
+/**
+ * One open of a campaign's mail, recorded on its send row and its copy's counters. Neither the IP
+ * address nor the user agent is kept or logged (ADR-0042).
+ */
+const recordOpen = Effect.fn("Feedback.recordOpen")(function* (
+  event: OpenEvent,
+  envelopeId: string,
+) {
+  const messageId = event.mail.messageId;
+
+  // SES's own guess: a link scanner or a security gateway loading the pixel is nobody reading.
+  if (event.open.isBotEvent === "Likely") {
+    return yield* Effect.logInfo("open ignored", { envelopeId, messageId, reason: "bot" });
+  }
+
+  const campaignId = tagOf(event, campaignTag);
+  const contactId = tagOf(event, contactTag);
+  const sendId = tagOf(event, sendTag);
+
+  if (campaignId === undefined || contactId === undefined || sendId === undefined) {
+    return yield* Effect.logInfo("open ignored", { envelopeId, messageId, reason: "untagged" });
+  }
+
+  const storage = yield* FeedbackStore;
+
+  yield* storage
+    .recordOpen({
+      campaignId,
+      contactId,
+      sendId,
+      eventId: envelopeId,
+      openedAt: DateTime.formatIso(event.open.timestamp),
+    })
+    .pipe(
+      Effect.flatMap((open) => Effect.logInfo("open recorded", { campaignId, sendId, open })),
+      Effect.catchTag("SendNotFound", () =>
+        Effect.logWarning("open ignored", { campaignId, sendId, reason: "no send row" }),
+      ),
+    );
+});
+
 const handleEvent = Effect.fn("Feedback.handleEvent")((
-  expected: string,
+  expected: ConfigurationSets,
   event: EmailEvent,
   envelopeId: string,
 ) => {
-  if (event.mail.tags?.[configurationSetTag]?.[0] !== expected) {
+  const configurationSet = tagOf(event, configurationSetTag);
+
+  if (configurationSet === undefined || !expected.includes(configurationSet)) {
     return Effect.logInfo("feedback event from another configuration set", {
       envelopeId,
       messageId: event.mail.messageId,
     });
   }
 
-  return record(event);
+  return event.eventType === "Open" ? recordOpen(event, envelopeId) : record(event);
 });
 
 /**
  * One queue message: the EventBridge envelope around an SES event. A body that is not an envelope
  * fails the invocation, so SQS dead-letters it like any other failure.
  */
-export const handleMessage = (expected: string, body: string) =>
+export const handleMessage = (expected: ConfigurationSets, body: string) =>
   decodeEnvelope(body).pipe(
     Effect.flatMap((envelope) =>
       decodeEmailEvent(envelope.detail).pipe(
@@ -247,7 +305,8 @@ export const handleMessage = (expected: string, body: string) =>
 const feedbackProps = Effect.gen(function* () {
   const basics = yield* lambdaBasics("feedback");
 
-  const mail = yield* configurationSet;
+  const tracked = yield* trackedConfigurationSet;
+  const untracked = yield* untrackedConfigurationSet;
 
   return {
     ...basics,
@@ -256,7 +315,8 @@ const feedbackProps = Effect.gen(function* () {
     timeout: invocationTimeout,
     functionUrl: false,
     env: {
-      EMAILER_CONFIGURATION_SET: mail.configurationSetName,
+      EMAILER_TRACKED_CONFIGURATION_SET: tracked.configurationSetName,
+      EMAILER_UNTRACKED_CONFIGURATION_SET: untracked.configurationSetName,
     },
   } as const;
 });
@@ -274,7 +334,7 @@ export default class FeedbackFunction extends AWS.Lambda.Function<FeedbackFuncti
 
     yield* AWS.SQS.consumeQueueMessages(yield* feedbackEvents, { batchSize: 1 }, (event) =>
       Effect.gen(function* () {
-        const expected = yield* expectedConfigurationSet;
+        const expected = yield* expectedConfigurationSets;
 
         yield* Effect.forEach(event.Records, (message) => handleMessage(expected, message.body), {
           discard: true,

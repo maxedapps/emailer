@@ -280,6 +280,12 @@ class CampaignsGroup extends HttpApiGroup.make("campaigns")
         Errors.SendingPaused,
       ],
     }),
+    HttpApiEndpoint.get("opens", "/:id/opens", {
+      params: { id: Schemas.EntityId },
+      query: { cursor: Schema.optional(Schemas.EntityId) },
+      success: Schemas.OpenersPage,
+      error: [...storage, Errors.CampaignNotFound],
+    }),
     HttpApiEndpoint.post("send", "/:id/send", {
       params: { id: Schemas.EntityId },
       success: Schemas.Campaign,

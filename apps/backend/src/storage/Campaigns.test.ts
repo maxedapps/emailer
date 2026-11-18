@@ -64,7 +64,7 @@ const recipient = "success@simulator.amazonses.com";
 
 const progress = { accepted: 1, rejected: 2, uncertain: 3, skipped: 4 };
 
-const reservedAttributeName = /(?<![:#])\b(count|state|cursor|text|filter)\b/;
+const reservedAttributeName = /(?<![:#])\b(count|state|cursor|text|filter|total|unique)\b/;
 
 const expectAliasedReservedNames = (table: Table) => {
   const expressions: Array<string | undefined> = [];
@@ -160,6 +160,31 @@ const body = (html?: string, stored: dynamodb.AttributeMap = {}) => ({
 });
 
 const routesKey = { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "ROUTES" } };
+
+/** The open counters of a campaign nobody opened yet. */
+const noCounters = Effect.succeed({ Items: [] });
+
+/** One copy's open counters as `recordOpen` keeps them (ADR-0042). */
+const counters = (copy: string, unique: number, total: number) => ({
+  pk: { S: `CAMPAIGN#${campaignId}` },
+  sk: { S: `OPENS#${copy}` },
+  v: { N: "1" },
+  total: { N: String(total) },
+  unique: { N: String(unique) },
+});
+
+/** A send row as `recordOpen` leaves it, with what `listOpeners` reads. */
+const openedSend = (contact: string, openedAt: string, opens: number) => ({
+  pk: { S: `CAMPAIGN#${campaignId}` },
+  sk: { S: `SEND#${contact}` },
+  v: { N: "1" },
+  contactId: { S: contact },
+  recipient: { S: `${contact.slice(-4)}@example.com` },
+  sendId: { S: sendId },
+  variant: { S: "default" },
+  openedAt: { S: openedAt },
+  opens: { N: String(opens) },
+});
 
 /** The read of a campaign no variant was ever set on. */
 const noRoutes = Effect.succeed({});
@@ -343,6 +368,8 @@ describe("campaign records", () => {
             }),
           }),
         ],
+        // Only the three submissions with progress read their open counters.
+        query: [noCounters, noCounters, noCounters],
       });
 
       expect((yield* storage.getCampaign(campaignId)).submission).toStrictEqual({
@@ -505,6 +532,130 @@ describe("getCampaign with variants", () => {
       expect(yield* Effect.flip(storage.getCampaign(campaignId))).toBeInstanceOf(
         Errors.StorageUnavailable,
       );
+    }),
+  );
+});
+
+describe("opens", () => {
+  const sending = meta({ state: "sending", queuedAt, startedAt, ...progress });
+
+  it.effect("counts every copy of a started campaign, zero for those nobody opened", () =>
+    Effect.gen(function* () {
+      const { table, storage } = withStorage({
+        getItem: [
+          routesRead(2, [
+            { key: "berlin", when: { city: "Berlin" } },
+            { key: "half", percent: 50 },
+          ]),
+          Effect.succeed({ Item: body() }),
+          Effect.succeed({ Item: sending }),
+        ],
+        // A copy removed after it was opened still counts toward the campaign.
+        query: [
+          Effect.succeed({
+            Items: [counters("default", 2, 3), counters("gone", 1, 1), counters("half", 4, 9)],
+          }),
+        ],
+      });
+
+      expect((yield* storage.getCampaign(campaignId)).opens).toStrictEqual({
+        unique: 7,
+        total: 13,
+        copies: {
+          default: { unique: 2, total: 3 },
+          berlin: { unique: 0, total: 0 },
+          half: { unique: 4, total: 9 },
+          gone: { unique: 1, total: 1 },
+        },
+      });
+      expect(table.queryRequests).toStrictEqual([
+        {
+          KeyConditionExpression: "pk = :pk AND begins_with(sk, :prefix)",
+          ExpressionAttributeValues: {
+            ":pk": { S: `CAMPAIGN#${campaignId}` },
+            ":prefix": { S: "OPENS#" },
+          },
+          ConsistentRead: true,
+        },
+      ]);
+    }),
+  );
+
+  it.effect("leaves opens out, and reads no counters, before a campaign starts", () =>
+    Effect.gen(function* () {
+      const { table, storage } = withStorage({
+        getItem: [
+          noRoutes,
+          Effect.succeed({ Item: body() }),
+          Effect.succeed({ Item: meta({ state: "queued", queuedAt }) }),
+        ],
+      });
+
+      expect(yield* storage.getCampaign(campaignId)).not.toHaveProperty("opens");
+      expect(table.queryRequests).toHaveLength(0);
+    }),
+  );
+
+  it.effect("treats an unreadable counter as corrupt", () =>
+    Effect.gen(function* () {
+      const { storage } = withStorage({
+        getItem: [noRoutes, Effect.succeed({ Item: body() }), Effect.succeed({ Item: sending })],
+        query: [Effect.succeed({ Items: [{ ...counters("default", 1, 1), total: { S: "x" } }] })],
+      });
+
+      expect(yield* defectOf(storage.getCampaign(campaignId))).toStrictEqual(
+        new CorruptItem({ operation: "getOpens" }),
+      );
+    }),
+  );
+
+  it.effect("lists one page of openers and names the next page by its last contact", () =>
+    Effect.gen(function* () {
+      const opened = openedSend(contactId, "2026-09-11T10:05:00.000Z", 2);
+
+      const { table, storage } = withStorage({
+        getItem: [Effect.succeed({ Item: sending }), Effect.succeed({ Item: sending })],
+        query: [
+          Effect.succeed({
+            Items: [opened],
+            LastEvaluatedKey: { pk: opened.pk, sk: { S: `SEND#${nextContactId}` } },
+          }),
+          Effect.succeed({ Items: [] }),
+        ],
+      });
+
+      expect(yield* storage.listOpeners(campaignId, undefined)).toStrictEqual({
+        items: [
+          {
+            contactId,
+            email: `${contactId.slice(-4)}@example.com`,
+            copy: "default",
+            firstOpenedAt: "2026-09-11T10:05:00.000Z",
+            opens: 2,
+          },
+        ],
+        nextCursor: nextContactId,
+      });
+      expect(yield* storage.listOpeners(campaignId, nextContactId)).toStrictEqual({ items: [] });
+      expect(table.queryRequests.map((request) => request.FilterExpression)).toStrictEqual([
+        "attribute_exists(opens)",
+        "attribute_exists(opens)",
+      ]);
+      expect(table.queryRequests[1]?.ExclusiveStartKey).toStrictEqual({
+        pk: { S: `CAMPAIGN#${campaignId}` },
+        sk: { S: `SEND#${nextContactId}` },
+      });
+    }),
+  );
+
+  it.effect("answers CampaignNotFound for openers of no campaign, and reads no send row", () =>
+    Effect.gen(function* () {
+      const { table, storage } = withStorage({ getItem: [Effect.succeed({})] });
+
+      expect(yield* Effect.flip(storage.listOpeners(campaignId, undefined))).toStrictEqual(
+        new Errors.CampaignNotFound(),
+      );
+      expect(table.queryRequests).toHaveLength(0);
     }),
   );
 });
