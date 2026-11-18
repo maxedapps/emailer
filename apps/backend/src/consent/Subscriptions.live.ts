@@ -98,7 +98,9 @@ export const subscriptionsSuite = (test: LiveTest) => {
         });
 
         expect(members.items.map((member) => member.id)).toStrictEqual([contact.id]);
-        expect(confirmed.optOuts).toStrictEqual([]);
+        // ADR-0041: the opt-out stays on record; the confirmation brings back this list alone.
+        expect(confirmed.optOuts).toStrictEqual([list.id]);
+        expect(confirmed.rejoined).toStrictEqual([list.id]);
         expect(confirmed.pending).toStrictEqual([]);
         expect(confirmed.consents).toMatchObject([
           { listId: list.id, ...consent, ip: "203.0.113.7", confirmIp: "203.0.113.8" },

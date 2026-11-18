@@ -294,11 +294,14 @@ Hi {{ contact.name | default: "there" }},
 
 {% if contact.joined %}You have been with us since {{ contact.joined | date: "%B %Y" }}.{% else %}You have been with us for a long time.{% endif %}
 
+[See what's new](https://example.com/news?utm_source=emailer&utm_medium=email&utm_campaign=thank-you&utm_content=default-news)
+
 [Unsubscribe]({{ unsubscribe_url }}) · {{ postal_address }}
 ```
 
 Ada, who joined on `2024-03-15`, reads "Hi Ada," and "You have been with us since March 2024."; a contact with neither value reads "Hi there," and "You have been with us for a long time."
 
+- **Track clicks per campaign, never per person.** Tag each link with `utm_source=emailer`, `utm_medium=email`, `utm_campaign=<campaign slug>` and `utm_content=<copy or link>`, and read them in your site's analytics. Never put a contact value (email, name, attribute) or any per-person code into a link: everyone getting a copy gets the same links, apart from their unsubscribe link.
 - Only the HTML part escapes the values it inserts; the subject and text get them as they are.
 - `date` takes an ISO date such as `2024-03-15` and [strftime](https://liquidjs.com/filters/date.html) formats. Months and days are in the copy's `--language` (a BCP 47 tag such as `de-DE`, English when absent), times in UTC. A value `date` cannot read is not printed as it is: that recipient is skipped.
 - Saving a draft or variant checks every template and answers **422** `InvalidTemplate` with the part, line and column of a syntax error, an unknown filter, tag or variable, or a missing `unsubscribe_url` or `postal_address`. `include`, `render` and `layout` are refused: a copy is one template.
