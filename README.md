@@ -333,7 +333,7 @@ pnpm emailer campaigns variants set <campaignId> b --subject "Release notes" --m
 
 ### Opens
 
-Campaign mail goes out through an SES configuration set that publishes open events, so SES adds a tracking image to its HTML part ([ADR-0042](.adr/0042-open-tracking.md)).
+emailer's SES configuration set publishes open events, so SES adds a tracking image to the HTML part of campaign mail. Test copies and sign-up confirmations turn it off for themselves ([ADR-0042](.adr/0042-open-tracking.md)).
 
 - `campaigns get` shows `opens` from `sending` on: unique and total, for the campaign and for each copy. `campaigns opens <campaignId>` lists everyone who opened, with their first open time and open count.
 - **Opens are a rough signal.** Apple Mail Privacy Protection loads the image when the mail arrives, so unread mail counts as opened. Image blocking hides real opens, and a text-only copy records none. Compare copies sent to similar audiences; an open does not prove the mail was read. Opens SES judges likely bots are dropped.

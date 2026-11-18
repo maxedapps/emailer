@@ -104,20 +104,14 @@ const identityStandIn = {
   emailIdentity: Effect.succeed(Effect.succeed("news@example.com")),
 };
 
-const configurationSetStandIn = (logicalId: string, name: string) => ({
-  LogicalId: logicalId,
-  configurationSetName: Effect.succeed(Effect.succeed(name)),
-});
+const configurationSetStandIn = {
+  LogicalId: "EmailerMail",
+  configurationSetName: Effect.succeed(Effect.succeed("emailer-mail")),
+};
 
 const identity = asResource<AWS.SES.EmailIdentity>(identityStandIn);
 
-const trackedSet = asResource<AWS.SES.ConfigurationSet>(
-  configurationSetStandIn("EmailerMail", "emailer-mail"),
-);
-
-const untrackedSet = asResource<AWS.SES.ConfigurationSet>(
-  configurationSetStandIn("EmailerUntrackedMail", "emailer-untracked-mail"),
-);
+const configurationSet = asResource<AWS.SES.ConfigurationSet>(configurationSetStandIn);
 
 const unsubscribeBase = "https://unsub.lambda-url.eu-central-1.on.aws";
 
@@ -135,6 +129,9 @@ const content: MessageContent = {
   html: undefined,
 };
 
+/** What turns the configuration set's open tracking off for one message. */
+const untracked = { Tracking: { OpenTrackingEnabled: "DISABLED" } };
+
 const campaignId = "0195f0a0-1111-4222-8333-4444444ca409";
 
 const contactId = "0195f0a0-1111-4222-8333-44444444c001";
@@ -146,12 +143,9 @@ const campaignMail = (sent: MessageContent = content) =>
 
 const sending = (transport: Transport, mail: Mail = campaignMail()) =>
   Effect.gen(function* () {
-    const sendEmails = {
-      tracked: yield* AWS.SES.SendEmail(identity, trackedSet),
-      untracked: yield* AWS.SES.SendEmail(identity, untrackedSet),
-    };
+    const send = yield* AWS.SES.SendEmail(identity, configurationSet);
 
-    return yield* makeSend(sendEmails, "news@example.com", postalAddress)(recipient, mail);
+    return yield* makeSend(send, "news@example.com", postalAddress)(recipient, mail);
   }).pipe(Effect.provide(sendEmailLayer(transport)));
 
 /** Captures what a send logs, which is the only place an uncertain outcome says why. */
@@ -239,7 +233,7 @@ describe("makeSend", () => {
 
         expect(yield* parseJson(transport.sent[0]?.body ?? "{}")).toStrictEqual({
           ...testRequest,
-          ConfigurationSetName: "emailer-untracked-mail",
+          ConfigurationOverrides: untracked,
         });
       }),
   );
@@ -347,7 +341,7 @@ describe("makeSend", () => {
 
         expect(yield* parseJson(transport.sent[0]?.body ?? "{}")).toMatchObject({
           Destination: { ToAddresses: ["sam@example.com"] },
-          ConfigurationSetName: "emailer-untracked-mail",
+          ConfigurationOverrides: untracked,
           Content: {
             Simple: {
               Subject: { Data: "Please confirm your email address for News" },

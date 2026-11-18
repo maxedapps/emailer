@@ -563,27 +563,10 @@ export const awaitCampaignOpens = (client: EmailerClient, id: string, total: num
     }),
   );
 
-/** The tracked configuration set's name, as the deployed feedback function was given it. */
-const trackedConfigurationSet = Effect.gen(function* () {
-  const getFunctionConfiguration = yield* lambda.getFunctionConfiguration;
-
-  const deployed = yield* getFunctionConfiguration({
-    FunctionName: yield* functionName("feedback"),
-  });
-
-  const name = deployed.Environment?.Variables?.["EMAILER_TRACKED_CONFIGURATION_SET"];
-
-  if (name === undefined) {
-    throw new Error("the deployed feedback function names no tracked configuration set");
-  }
-
-  // The AWS client marks environment values sensitive, and may hand this one over redacted.
-  return Redacted.isRedacted(name) ? Redacted.value(name) : name;
-});
-
 /**
  * Puts an `Email Opened` event for one send on the stage's feedback queue, the way the rule
- * delivers SES's: the mailbox simulator produces no opens (ADR-0042).
+ * delivers SES's, past the rule's configuration-set match: the mailbox simulator produces no
+ * opens (ADR-0042).
  */
 export const injectOpen = (
   campaignId: string,
@@ -606,7 +589,6 @@ export const injectOpen = (
       mail: {
         messageId: yield* newIdentifier,
         tags: {
-          "ses:configuration-set": [yield* trackedConfigurationSet],
           campaignId: [campaignId],
           contactId: [send.contactId],
           sendId: [send.sendId],

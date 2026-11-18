@@ -3,7 +3,7 @@ import { Effect } from "effect";
 
 import type { Input } from "alchemy";
 
-import { trackedConfigurationSet } from "./Mailer.ts";
+import { configurationSet } from "./Mailer.ts";
 
 /**
  * Alert topic and every alarm that notifies it. This module is a leaf: it must not grow a Function
@@ -64,7 +64,7 @@ interface MetricScope {
   readonly Dimensions?: Array<{ readonly Name: string; readonly Value: Input<string> }>;
 }
 
-const configurationSetMetric = Effect.map(trackedConfigurationSet, (mail): MetricScope => ({
+const configurationSetMetric = Effect.map(configurationSet, (mail): MetricScope => ({
   Dimensions: [{ Name: "ses:configuration-set", Value: mail.configurationSetName }],
 }));
 

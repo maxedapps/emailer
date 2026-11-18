@@ -6,9 +6,9 @@
   - build open tracking. This is his explicit go for its added running cost under [ADR-0032](0032-low-running-cost-is-a-hard-constraint.md);
   - record who opened, not only counts;
   - no click tracking.
-  The worker chose the design below, including untracked test and confirmation mail, under the cost rule.
+  The worker chose the design below, including untracked test and confirmation mail, under the cost rule. The review replaced a second, untracked configuration set with a per-message override and moved the configuration-set filter into the rule.
 - Amends:
-  - [ADR-0003](0003-feedback-events-through-eventbridge.md): the rule also routes `Email Opened`, and two configuration sets publish to it.
+  - [ADR-0003](0003-feedback-events-through-eventbridge.md): the rule also routes `Email Opened`, and it filters on the stage's configuration set instead of the handler.
   - [ADR-0028](0028-campaign-variants-and-attribute-merge.md): copies are compared by their opens as well as by UTM links in site analytics.
   - [ADR-0041](0041-personalized-templates.md) decision 7: links still carry no per-person code, but the open pixel SES inserts does. Who opened is recorded.
 - Plan: [0042-open-tracking.plan.md](0042-open-tracking.plan.md)
@@ -22,9 +22,9 @@
 
 ## Decision
 
-1. **Only campaign mail is tracked.** `EmailerMail` takes campaign mail and publishes `BOUNCE`, `COMPLAINT` and `OPEN`. A second set, `EmailerUntrackedMail`, takes test copies and sign-up confirmations. It publishes `BOUNCE` and `COMPLAINT` with the same SES suppression, so neither kind of mail carries a pixel. A confirmation goes to someone who has not consented yet. A test copy's opens would belong to no campaign. Both would cost events that record nothing. The second set and its event destination cost nothing.
+1. **Only campaign mail is tracked.** `EmailerMail`, still the set every mail goes through, also publishes `OPEN`. Test copies and sign-up confirmations send with `ConfigurationOverrides: { Tracking: { OpenTrackingEnabled: "DISABLED" } }`, so SES adds no pixel to them ([TrackingConfigurationOverrides](https://docs.aws.amazon.com/ses/latest/APIReference-V2/API_TrackingConfigurationOverrides.html)). A confirmation goes to someone who has not consented yet. A test copy's opens would belong to no campaign. Both would cost events that record nothing. The override needs the permission-only action `ses:ApplyTrackingConfigurationOverrides`, which Alchemy's send binding does not grant: the `Mailer` binds it on its host itself, for `ses:OpenTrackingEnabled` = `DISABLED` only.
 2. **Campaign mail is also tagged with its `contactId`,** so an open finds its send row without a lookup.
-3. **One rule, one queue, one consumer.** The default-bus rule also matches `Email Opened`. The feedback Lambda accepts events from either set. It records an open of tagged campaign mail and logs and drops everything else: a bot-likely open (`isBotEvent: Likely`), an open whose tags or send row are missing, and a redelivery.
+3. **One rule, one queue, one consumer.** The default-bus rule also matches `Email Opened`, and only events whose `ses:configuration-set` tag is this stage's set. The default bus carries the SES events of every stage in the account and region, and opens are far more numerous than bounces: without the match, each stage would pay SQS, Lambda and logs for every other stage's opens. The handler's own configuration-set check and its environment variable go. The feedback Lambda records an open of tagged campaign mail and logs and drops everything else: a bot-likely open (`isBotEvent: Likely`), an open whose tags or send row are missing, and a redelivery.
 4. **An open is one strongly consistent read and one two-item transaction.**
    - The read: the send row (`SEND#<contactId>`).
    - The send row's update: `openedAt` set to the earlier of its value and this open's time, `opens` plus one, and `lastOpen` set to the EventBridge event's ID. It is conditioned on the `sendId` the mail was tagged with and on the `opens` value just read.
@@ -51,7 +51,8 @@ Steady state, us-east-1 on-demand prices, free tiers ignored:
 
 - A bot-likely open costs SQS and Lambda, no DynamoDB.
 - Storage: three attributes (~70 B) on each opened send row, and one ~100 B counter item per opened copy.
-- Idle: $0. The second configuration set, its event destination and the rule pattern are free.
+- Idle: $0. The rule pattern and the IAM statement are free.
+- Another stage's opens cost this stage nothing: the rule drops them before SQS.
 - Reads: `campaigns get` adds one Query of at most 51 small items (≤1 RRU) for a started campaign. `campaigns opens` reads each of the campaign's send rows, about 350 B each, once per listing: about 9,000 RRU, or $0.001, for 100,000 recipients.
 - Example: 100,000 campaign mails a month, half of them opened, 1.5 opens each, is about $0.38 a month against $10 for sending them.
 
@@ -63,14 +64,16 @@ Steady state, us-east-1 on-demand prices, free tiers ignored:
 - **A sparse index of openers.** One more write per first open, plus index storage, only to speed up `campaigns opens`, which runs rarely. Rejected.
 - **Trying the first-open transaction and falling back on refusal, instead of reading first.** A refused transaction still consumes its writes, so a repeat open costs 8 WRU instead of 1 RRU and 4 WRU. Rejected.
 - **CloudWatch metrics as the destination.** $0.30 per metric-month per campaign and copy, total opens only, nobody per recipient. Rejected in the study.
-- **One configuration set for all mail.** It puts a pixel into confirmations sent before consent and into test copies whose opens no campaign takes. Rejected.
+- **Tracking all mail.** It puts a pixel into confirmations sent before consent and into test copies whose opens no campaign takes. Rejected.
+- **A second, untracked configuration set for test and confirmation mail.** Also free, and needs no extra permission, but it doubles the sets, event destinations and send bindings, and the handler had to accept both. The per-message override keeps one of each. Rejected after review.
+- **Filtering on the configuration set in the handler, as before.** Every stage's queue and Lambda would take every open in the account and region, then drop the foreign ones. Rejected.
 
 ## Consequences
 
 - Opens are inflated by Apple Mail Privacy Protection and hidden by image blocking. Text-only copies record none. The README says so.
 - Who opened is personal data. It lives on the send rows, as long as the campaign does, and `campaigns opens` lists it. Tracking pixels may need consent under EU rules. That is the operator's call.
 - An open rate per copy needs the number of mails each copy sent. Only the send rows hold that, so the API gives none. Counting sends per copy would add a write to every send.
-- Set-level reputation alarms cover `EmailerMail` only. Test and confirmation mail counts toward the account-level alarms, which halt sending ([ADR-0036](0036-only-account-wide-signals-halt-sending.md)).
+- The configuration-set filter now lives in the rule pattern, which no unit test reads. The live suite's bounce and complaint tests go through the rule and cover it.
 - An open of mail sent before this change carries no `contactId` tag and is dropped. emailer is not in production yet.
 
 ## Confirmation

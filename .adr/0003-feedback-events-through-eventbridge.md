@@ -7,7 +7,7 @@
 - Clerical note: 2026-09-15. The live-confirmation refusal of a second campaign (`recipient-suppressed`) became a per-recipient skip under [ADR-0011](0011-open-recipient-set-and-paced-dispatch.md): the second campaign completes with skipped rows rather than `InvalidAudience`. The EventBridge transport decision is unchanged.
 - Superseded in part: [ADR-0012](0012-reputation-guardrails.md) for "neither Lambda calls any SES suppression API".
 - Amended: 2026-09-24, on the user's decision in the simplification plan (`work/simplify.md`): the rule now targets an SQS queue, `FeedbackEvents`, which the feedback Lambda consumes, and failures are recovered by the queue's redrive policy and a native SQS redrive. The Lambda `OnFailure` destination and the replay tool are gone. The EventBridge transport decision remains in effect.
-- Amended by [ADR-0042](0042-open-tracking.md): the rule also routes `Email Opened`, from a tracked set for campaign mail and an untracked one for test and confirmation mail, and the feedback Lambda records opens.
+- Amended by [ADR-0042](0042-open-tracking.md): the rule also routes `Email Opened` and the feedback Lambda records opens. The rule, not the handler, now filters on the configuration set: a stage would otherwise take every other stage's opens. That reverses "Filtering on the configuration set in the rule" below.
 
 ## Context
 

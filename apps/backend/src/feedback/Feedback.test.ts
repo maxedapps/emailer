@@ -2,10 +2,10 @@ import { describe, expect, it } from "@effect/vitest";
 import { CampaignNotFound, StorageUnavailable } from "@emailer/api/Errors";
 import * as Schemas from "@emailer/api/Schemas";
 import type * as AWS from "@alchemy.run/aws";
-import { ConfigProvider, Effect, Layer, Logger, References, Result } from "effect";
+import { Effect, Layer, Logger, References, Result } from "effect";
 import { TestClock } from "effect/testing";
 
-import { expectedConfigurationSets, handleMessage } from "./Feedback.ts";
+import { handleMessage } from "./Feedback.ts";
 import { FeedbackAlreadyRecorded, FeedbackStore, SendNotFound } from "../storage/Feedback.ts";
 
 import type { AddressSuppression } from "../storage/Addresses.ts";
@@ -14,8 +14,6 @@ import type { FeedbackCounter, FeedbackRow, Open } from "../storage/Feedback.ts"
 type WriteOutcome = "committed" | "duplicate" | "unknown-campaign";
 
 const configurationSetName = "emailer-test-mail";
-
-const untrackedSetName = "emailer-test-untracked-mail";
 
 const contactId = "0195f0a0-1111-4222-8333-44444444c001";
 
@@ -104,13 +102,6 @@ const storageOperations = (world: World): FeedbackStore["Service"] => ({
 
 const storageLayer = (world: World): Layer.Layer<FeedbackStore> =>
   Layer.succeed(FeedbackStore)(storageOperations(world));
-
-const configuration = Layer.succeed(ConfigProvider.ConfigProvider)(
-  ConfigProvider.fromEnvRecord({
-    EMAILER_TRACKED_CONFIGURATION_SET: configurationSetName,
-    EMAILER_UNTRACKED_CONFIGURATION_SET: untrackedSetName,
-  }),
-);
 
 const emptyWorld = (): World => ({
   suppressions: new Map(),
@@ -213,15 +204,10 @@ const handling = (
   body: string,
   store: Layer.Layer<FeedbackStore> = storageLayer(world),
 ) =>
-  Effect.gen(function* () {
-    const expected = yield* expectedConfigurationSets;
-
-    yield* handleMessage(expected, body);
-  }).pipe(
+  handleMessage(body).pipe(
     Effect.provide(
       Layer.mergeAll(
         store,
-        configuration,
         collectingLogs(world),
         Layer.succeed(References.MinimumLogLevel)("Debug"),
       ),
@@ -449,49 +435,7 @@ describe("opens", () => {
   );
 });
 
-describe("the untracked configuration set", () => {
-  it.effect("suppresses a bounce of a test copy or confirmation sent through it", () =>
-    Effect.gen(function* () {
-      const world = yield* run(
-        bounceEvent("Permanent", "General", ["hard@example.com"], {
-          "ses:configuration-set": [untrackedSetName],
-        }),
-      );
-
-      expect(world.suppressions.has("hard@example.com")).toBe(true);
-      expect(world.writes).toHaveLength(0);
-    }),
-  );
-});
-
 describe("events the handler must not act on", () => {
-  it.effect("ignores an event published through another configuration set", () =>
-    Effect.gen(function* () {
-      const world = yield* run(
-        bounceEvent("Permanent", "General", ["hard@example.com"], {
-          ...tags(),
-          "ses:configuration-set": ["someone-elses-set"],
-        }),
-      );
-
-      expect(world.suppressions.size).toBe(0);
-      expect(world.writes).toHaveLength(0);
-    }),
-  );
-
-  it.effect("ignores an open published through another configuration set", () =>
-    Effect.gen(function* () {
-      const world = yield* run(
-        openEvent(
-          { isBotEvent: "Unlikely" },
-          { ...tags(), "ses:configuration-set": ["someone-elses-set"] },
-        ),
-      );
-
-      expect(world.opens).toHaveLength(0);
-    }),
-  );
-
   it.effect("ignores an event it cannot decode without failing the invocation", () =>
     Effect.gen(function* () {
       const world = yield* run({ eventType: "Bounce", mail: { messageId } });
