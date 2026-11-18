@@ -225,6 +225,7 @@ export const draftingSuite = (test: LiveTest) => {
           findings: [
             { kind: "fallback", email: unnamed, copy: Schemas.defaultCopy, field: "name" },
           ],
+          nextCursor: undefined,
         });
 
         const meta = yield* campaignMeta(campaign.id);

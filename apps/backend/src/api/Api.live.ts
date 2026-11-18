@@ -20,6 +20,7 @@ import {
   describeAlarms,
   detachAlarm,
   getSuppressedDestination,
+  htmlFooter,
   liveStorage,
   pacedSendLimit,
   putSuppressedDestination,
@@ -94,7 +95,7 @@ export const apiSuite = (test: LiveTest) => {
         });
 
         const list = yield* client.lists.create({ payload: { name: `sixty-${runId}` } });
-        const html = "<html><body><p>Hello</p></body></html>";
+        const html = `<html><body><p>Hello</p>${htmlFooter}</body></html>`;
 
         yield* importSuccessContacts(client, list.id, runId, 60);
 
