@@ -22,6 +22,15 @@ Task 4571. [ADR-0043](0043-campaign-run-alerts.md) holds the design and its cost
 
 - The two messages as the queue received them, and the key files and snippets.
 
+## Hand check
+
+On a fresh test stage, an SQS queue subscribed to the `Alerts` topic received, for two simulator recipients:
+
+- a completed run: subject `emailer: campaign completed`, the campaign subject with its umlauts intact, `Accepted 2, rejected 0, uncertain 0, skipped 0.` and the `campaigns get` command;
+- a run paused through `EMAILER_DAILY_SEND_CEILING=1`: subject `emailer: campaign paused (daily-quota)`, the daily budget explanation, the counters and the `campaigns resume` command.
+
+The landing gate ran all seven live groups green (43 tests) on its own stage, which it destroyed.
+
 ## Settled findings
 
 Codex GPT-6.1 Sol reviewed f984928: no high or medium findings.

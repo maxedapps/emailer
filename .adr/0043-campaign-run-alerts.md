@@ -1,6 +1,6 @@
 # ADR-0043: The dispatcher alerts when a campaign run pauses or completes
 
-- Status: Proposed
+- Status: Accepted (2026-11-23, after a green landing gate)
 - Date: 2026-11-23
 - Authority: The operator chose pause and completion alerts on 2026-11-23 (task 4571), before a send of about 25,000 recipients.
 - Plan: [0043-campaign-run-alerts.plan.md](0043-campaign-run-alerts.plan.md)
