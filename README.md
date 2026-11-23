@@ -16,7 +16,7 @@ Self-hosted marketing email over Amazon SES. Deploy it to your own AWS account, 
 - **Opens:** unique and total opens per campaign and per copy, and who opened when ([Opens](#opens)).
 - **List hygiene:** bounced and complaining addresses are suppressed automatically. A campaign pauses itself when its list bounces or complains too much, and all sending stops when the whole SES account's reputation alarms fire or SES puts the account under review.
 - **Pacing:** sends stay within your SES rate and daily quota, with an optional daily cap of your own.
-- **Alerts:** CloudWatch alarms, delivered by email.
+- **Alerts:** CloudWatch alarms, and a message whenever a campaign pauses or completes, delivered by email.
 - **Optional:** DNS records (DKIM, SPF, DMARC, MAIL FROM) managed in Route 53 or Cloudflare, and a display name on the From address.
 
 ## What it does not do
@@ -35,7 +35,7 @@ Self-hosted marketing email over Amazon SES. Deploy it to your own AWS account, 
 - **Sending:** `campaigns send`, or a one-time EventBridge Scheduler schedule, queues the campaign on SQS. A dispatcher Lambda then sends one message per recipient through SES, paced within your quota.
 - **Feedback:** SES bounce, complaint and open events reach a feedback Lambda through EventBridge and an SQS queue. It suppresses a bounced or complaining address and counts the event against its campaign, and records an open on the recipient's send row.
 - **Public pages:** the unsubscribe page and the preview page are separate Lambdas that accept only signed links.
-- **Storage and alerts:** one DynamoDB table holds contacts, lists, campaigns, sends, scoped keys, pending sign-ups and consent records. Pending sign-ups expire through DynamoDB TTL. CloudWatch alarms notify an SNS topic.
+- **Storage and alerts:** one DynamoDB table holds contacts, lists, campaigns, sends, scoped keys, pending sign-ups and consent records. Pending sign-ups expire through DynamoDB TTL. CloudWatch alarms notify an SNS topic, and so does the dispatcher when a campaign pauses or completes.
 
 ## Requirements
 
@@ -469,7 +469,7 @@ Each command below is run as `pnpm emailer <command>`. `[…]` marks an optional
 - `addresses unsuppress` clears local suppression, the transient-bounce window and the SES **account** suppression list (one list per account and Region, shared with every other sender there). Redrive failed feedback first (see [Operate](#operate)): older feedback processed after the clear can restore the suppression or the transient-bounce window. SES stores suppression entries case-sensitively, so pass the address in the case SES stored it: as the contact holds it (`contacts by-email` shows it) or as `aws sesv2 list-suppressed-destinations` lists it. `addresses status` echoes the address you pass, so another case shows no account entry rather than an error. It never clears an opt-out.
 - Deleting a contact removes it from every list; deleting a list removes every membership in it. Neither deletes the other side. A delete that times out on a large list is safe to repeat.
 - Listings page in created order. A page's `nextCursor` is absent when there is nothing more; a full last page may still carry one that leads to an empty page.
-- `campaigns send` exits zero when the campaign is **queued**. Poll `campaigns get` for `progress`, `feedback`, `opens` and a `paused` reason.
+- `campaigns send` exits zero when the campaign is **queued**. Poll `campaigns get` for `progress`, `feedback`, `opens` and a `paused` reason; with `EMAILER_ALERT_EMAIL` set, you also get mail when the campaign pauses or completes ([Operate](#operate)).
 - `campaigns schedule` exits zero when the campaign is `scheduled`. `--at` is an ISO date (`YYYY-MM-DD`) or date-time; no zone means UTC. Past instants are **409**. The scheduler fires with 60-second precision. `campaigns send` on a scheduled campaign sends now.
 - `campaigns cancel` withdraws a pending send. A `scheduled` campaign, or a `queued` first send that never started, returns to `draft`. A `queued` resume returns to `paused` with reason `manual`. A campaign that is `sending` or `completed`, or whose send another command replaced in the meantime, answers **409** `CampaignStateConflict`. Cancel does not stop messages already handed to SES, or recall mail.
 - `campaigns variants set` adds a variant, or replaces the one with the same key where it stands; `remove` drops one, and repeating it changes nothing. Each sends one variant, so every copy can use the full body limits. Both edit drafts only, and a variant edit racing another one on the same draft is re-read and applied again.
@@ -603,6 +603,8 @@ Send only the fields documented here: a field or query parameter the API does no
 - `feedback`: this campaign's list bounced or complained too much (5% hard bounces after 200 accepted, or 0.1% complaints after 1,000 accepted). Clean the list before resuming.
 - `rate-limited` / `daily-quota`: wait, then resume.
 - `sending-paused`: SES has sending paused for the account or the configuration set. Resume once it is enabled again (`aws sesv2 get-account` shows `SendingEnabled`).
+
+**Campaign alerts.** The dispatcher publishes to the stage's alert topic when it pauses a campaign (subject `emailer: campaign paused (<reason>)`) or completes one (`emailer: campaign completed`). The body names the campaign, its counters and, for a pause, what the reason means and the `campaigns resume` command. A pause through `campaigns cancel` sends none. A publish that fails is only logged (`run alert not published`); `campaigns get` stays the record ([ADR-0043](.adr/0043-campaign-run-alerts.md)).
 
 **Alarms** all notify the stage's alert topic.
 

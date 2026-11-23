@@ -1801,11 +1801,30 @@ describe("checkpoint", () => {
 });
 
 describe("completeRun", () => {
-  it.effect("marks the campaign completed and removes the cursor", () =>
+  it.effect("marks the campaign completed, removes the cursor and answers its counters", () =>
     Effect.gen(function* () {
-      const { table, storage } = withStorage({ updateItem: [succeeded] });
+      const { table, storage } = withStorage({
+        updateItem: [
+          Effect.succeed({
+            Attributes: meta({
+              state: "completed",
+              queuedAt,
+              startedAt,
+              finishedAt: now,
+              accepted: 3,
+              skipped: 1,
+              bounced: 1,
+            }),
+          }),
+        ],
+      });
 
-      yield* storage.completeRun(campaignId, runToken, now);
+      expect(yield* storage.completeRun(campaignId, runToken, now)).toStrictEqual({
+        id: campaignId,
+        subject: "Release",
+        progress: { accepted: 3, rejected: 0, uncertain: 0, skipped: 1 },
+        feedback: { bounced: 1, complained: 0 },
+      });
       expect(table.updateItemRequests[0]).toStrictEqual({
         Key: { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } },
         UpdateExpression: "SET #state = :completed, finishedAt = :now REMOVE #cursor, sliceId",
@@ -1817,17 +1836,37 @@ describe("completeRun", () => {
           ":sending": { S: "sending" },
           ":run": { S: runToken },
         },
+        ReturnValues: "ALL_NEW",
       });
     }),
   );
 });
 
 describe("pauseRun", () => {
-  it.effect("pauses the campaign at the resume cursor", () =>
-    Effect.gen(function* () {
-      const { table, storage } = withStorage({ updateItem: [succeeded] });
+  const pausedItem = (cursor: string | undefined) =>
+    meta({
+      state: "paused",
+      queuedAt,
+      startedAt,
+      pausedReason: "daily-quota",
+      cursor,
+      accepted: 2,
+    });
 
-      yield* storage.pauseRun(campaignId, runToken, "daily-quota", contactId);
+  it.effect("pauses the campaign at the resume cursor and answers its counters", () =>
+    Effect.gen(function* () {
+      const { table, storage } = withStorage({
+        updateItem: [Effect.succeed({ Attributes: pausedItem(contactId) })],
+      });
+
+      expect(yield* storage.pauseRun(campaignId, runToken, "daily-quota", contactId)).toStrictEqual(
+        {
+          id: campaignId,
+          subject: "Release",
+          progress: { accepted: 2, rejected: 0, uncertain: 0, skipped: 0 },
+          feedback: { bounced: 0, complained: 0 },
+        },
+      );
       expect(table.updateItemRequests[0]).toStrictEqual({
         Key: { pk: { S: `CAMPAIGN#${campaignId}` }, sk: { S: "META" } },
         UpdateExpression: "SET #state = :paused, pausedReason = :reason, #cursor = :cursor",
@@ -1840,13 +1879,16 @@ describe("pauseRun", () => {
           ":sending": { S: "sending" },
           ":run": { S: runToken },
         },
+        ReturnValues: "ALL_NEW",
       });
     }),
   );
 
   it.effect("removes the cursor when pausing at the start of the list", () =>
     Effect.gen(function* () {
-      const { table, storage } = withStorage({ updateItem: [succeeded] });
+      const { table, storage } = withStorage({
+        updateItem: [Effect.succeed({ Attributes: pausedItem(undefined) })],
+      });
 
       yield* storage.pauseRun(campaignId, runToken, "sending-paused", undefined);
       expect(table.updateItemRequests[0]?.UpdateExpression).toBe(

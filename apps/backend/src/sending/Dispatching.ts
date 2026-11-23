@@ -6,6 +6,7 @@ import { newIdentifier, nowIso } from "../Identifiers.ts";
 import { CampaignWake } from "./Dispatch.ts";
 import { accepted, failureOutcomes, Mail, Mailer, submissionTimeout } from "./Mailer.ts";
 import { postalAddress } from "./Message.ts";
+import { RunAlerts } from "./RunAlerts.ts";
 import { SendGuard } from "./SendGuard.ts";
 import { compileCopy } from "./Templates.ts";
 import { chooseVariant, matchesAttributes } from "./Variants.ts";
@@ -15,6 +16,7 @@ import { operationTimeout } from "../storage/Items.ts";
 
 import type { DispatchMessage } from "./Dispatch.ts";
 import type { MessageContent } from "./Message.ts";
+import type { RunPauseReason } from "./RunAlerts.ts";
 
 /**
  * Members per invocation. One page is the only loop shape, so every two-page
@@ -68,7 +70,8 @@ const fitsBefore = (deadline: number, delay: Duration.Duration) =>
 
 /**
  * One page of a campaign run. A write that finds the run is no longer the campaign's ends the slice
- * as `RunSuperseded`: the wake-up that started it was stale, or went stale while it ran.
+ * as `RunSuperseded`: the wake-up that started it was stale, or went stale while it ran. A slice
+ * that pauses or completes the run alerts the operator (ADR-0043).
  */
 export const runSlice = Effect.fn("Dispatching.runSlice")(
   function* (message: DispatchMessage, deadline: number) {
@@ -76,6 +79,17 @@ export const runSlice = Effect.fn("Dispatching.runSlice")(
     const audience = yield* AudienceStore;
     const wake = yield* CampaignWake;
     const guards = yield* SendGuard;
+    const alerts = yield* RunAlerts;
+
+    const pause = (reason: RunPauseReason, cursor: string | undefined) =>
+      campaigns
+        .pauseRun(message.campaignId, message.runToken, reason, cursor)
+        .pipe(Effect.flatMap((run) => alerts.paused(run, reason)));
+
+    const complete = nowIso.pipe(
+      Effect.flatMap((now) => campaigns.completeRun(message.campaignId, message.runToken, now)),
+      Effect.flatMap(alerts.completed),
+    );
 
     // Names this slice on the checkpoint it writes, so a retried checkpoint is recognised as its own.
     const sliceId = yield* newIdentifier;
@@ -91,7 +105,7 @@ export const runSlice = Effect.fn("Dispatching.runSlice")(
     const guard = yield* guards.current;
 
     if (guard.refusal !== undefined) {
-      yield* campaigns.pauseRun(message.campaignId, message.runToken, guard.refusal, previous);
+      yield* pause(guard.refusal, previous);
 
       return;
     }
@@ -102,7 +116,7 @@ export const runSlice = Effect.fn("Dispatching.runSlice")(
       (run.accepted >= breaker.complaint.minimumAccepted &&
         run.complained * 1000 >= run.accepted * breaker.complaint.perMille)
     ) {
-      yield* campaigns.pauseRun(message.campaignId, message.runToken, "feedback", previous);
+      yield* pause("feedback", previous);
 
       return;
     }
@@ -113,7 +127,7 @@ export const runSlice = Effect.fn("Dispatching.runSlice")(
       .pipe(Effect.catchTag("ListNotFound", () => Effect.undefined));
 
     if (page === undefined) {
-      yield* campaigns.completeRun(message.campaignId, message.runToken, yield* nowIso);
+      yield* complete;
 
       return;
     }
@@ -245,7 +259,7 @@ export const runSlice = Effect.fn("Dispatching.runSlice")(
         continue;
       }
 
-      const submitted = yield* submitClaimed({
+      const pauseReason = yield* submitClaimed({
         recipient: member.email,
         content: rendered.content,
         unsubscribeUrl,
@@ -253,13 +267,14 @@ export const runSlice = Effect.fn("Dispatching.runSlice")(
         sendId,
         variant,
         contactId: member.id,
-        runToken: message.runToken,
         limit: guard.limit,
         firstDelay: delay,
         deadline,
       });
 
-      if (submitted === "stop") {
+      if (pauseReason !== undefined) {
+        yield* pause(pauseReason, member.id);
+
         return;
       }
 
@@ -267,7 +282,7 @@ export const runSlice = Effect.fn("Dispatching.runSlice")(
     }
 
     if (page.nextCursor === undefined) {
-      yield* campaigns.completeRun(message.campaignId, message.runToken, yield* nowIso);
+      yield* complete;
 
       return;
     }
@@ -284,6 +299,7 @@ export const runSlice = Effect.fn("Dispatching.runSlice")(
     ),
 );
 
+/** Submits a claimed member and settles its row; answers why the run must pause, if it must. */
 const submitClaimed = Effect.fn("Dispatching.submitClaimed")(function* (input: {
   readonly recipient: string;
   readonly content: MessageContent;
@@ -292,7 +308,6 @@ const submitClaimed = Effect.fn("Dispatching.submitClaimed")(function* (input: {
   readonly sendId: string;
   readonly variant: Schemas.CopyKey;
   readonly contactId: string;
-  readonly runToken: string;
   readonly limit: number;
   readonly firstDelay: Duration.Duration;
   readonly deadline: number;
@@ -301,8 +316,7 @@ const submitClaimed = Effect.fn("Dispatching.submitClaimed")(function* (input: {
   const campaigns = yield* CampaignStore;
   const guards = yield* SendGuard;
 
-  const { recipient, content, unsubscribeUrl, campaignId, sendId, variant, contactId, runToken } =
-    input;
+  const { recipient, content, unsubscribeUrl, campaignId, sendId, variant, contactId } = input;
 
   const mail = Mail.Campaign({ content, unsubscribeUrl, campaignId, contactId, sendId, variant });
 
@@ -343,14 +357,8 @@ const submitClaimed = Effect.fn("Dispatching.submitClaimed")(function* (input: {
       ),
     );
 
-  if (
-    settlement.outcome === "rejected" &&
+  return settlement.outcome === "rejected" &&
     (settlement.rejectionCode === "rate-limited" || settlement.rejectionCode === "sending-paused")
-  ) {
-    yield* campaigns.pauseRun(campaignId, runToken, settlement.rejectionCode, contactId);
-
-    return "stop" as const;
-  }
-
-  return "next" as const;
+    ? settlement.rejectionCode
+    : undefined;
 });

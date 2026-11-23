@@ -21,6 +21,7 @@ import { unsubscribeLink } from "../consent/Unsubscribe.ts";
 import { memberPageSize, runSlice, SliceOverrun } from "./Dispatching.ts";
 import { CampaignWake } from "./Dispatch.ts";
 import { Mail, Mailer, SendingSuspended, SendThrottled, SubmissionUncertain } from "./Mailer.ts";
+import { RunAlerts } from "./RunAlerts.ts";
 import { SendGuard } from "./SendGuard.ts";
 import { bucketOf } from "./Variants.ts";
 import { AudienceStore } from "../storage/Audience.ts";
@@ -30,8 +31,9 @@ import { unusedAudience, unusedCampaigns } from "../storage/Testing.ts";
 import type { MailboxStatus, PauseReason, SkipReason } from "@emailer/api/Schemas";
 import type { SendError } from "./Mailer.ts";
 import type { MessageContent } from "./Message.ts";
+import type { RunPauseReason } from "./RunAlerts.ts";
 import type { SendAllowance } from "./SendGuard.ts";
-import type { SubmissionOutcome } from "../storage/Campaigns.ts";
+import type { EndedRun, SubmissionOutcome } from "../storage/Campaigns.ts";
 
 const campaignId = "0195f0a0-1111-4222-8333-4444444ca409";
 
@@ -151,6 +153,14 @@ interface World {
   readonly filter: Schemas.ContactAttributes | undefined;
   readonly run: RunFeedback;
 }
+
+/** The campaign as the run's last write leaves it. */
+const endedRun = (world: World): EndedRun => ({
+  id: campaignId,
+  subject,
+  progress: { ...world.counters },
+  feedback: { bounced: world.run.bounced, complained: world.run.complained },
+});
 
 /** Records a copy read, letting the clock run on for as long as the read takes. */
 const readCopy = (world: World, key: string) =>
@@ -321,7 +331,7 @@ const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> 
 
           world.completed += 1;
 
-          return Effect.void;
+          return Effect.succeed(endedRun(world));
         }),
       pauseRun: (_id, token, reason, cursor) =>
         Effect.suspend(() => {
@@ -331,7 +341,7 @@ const storageLayer = (world: World): Layer.Layer<AudienceStore | CampaignStore> 
 
           world.paused.push({ reason, cursor });
 
-          return Effect.void;
+          return Effect.succeed(endedRun(world));
         }),
     }),
   );
@@ -416,6 +426,32 @@ const wakeDouble = (): WakeDouble => {
   return { layer, messages };
 };
 
+type SentAlert =
+  | { readonly kind: "paused"; readonly reason: RunPauseReason; readonly run: EndedRun }
+  | { readonly kind: "completed"; readonly run: EndedRun };
+
+interface AlertsDouble {
+  readonly layer: Layer.Layer<RunAlerts>;
+  readonly sent: Array<SentAlert>;
+}
+
+const alertsDouble = (): AlertsDouble => {
+  const sent: Array<SentAlert> = [];
+
+  const layer = Layer.succeed(RunAlerts)({
+    paused: (run, reason) =>
+      Effect.sync(() => {
+        sent.push({ kind: "paused", reason, run });
+      }),
+    completed: (run) =>
+      Effect.sync(() => {
+        sent.push({ kind: "completed", run });
+      }),
+  });
+
+  return { layer, sent };
+};
+
 interface Scenario {
   readonly env?: Readonly<Record<string, string>>;
   readonly members?: ReadonlyArray<Schemas.Contact>;
@@ -444,7 +480,9 @@ interface Fixture {
   readonly wake: WakeDouble;
   readonly mailer: MailerDouble;
   readonly guard: GuardDouble;
+  readonly alerts: AlertsDouble;
   readonly layer: Layer.Layer<
+    | RunAlerts
     | CampaignWake
     | AudienceStore
     | CampaignStore
@@ -499,14 +537,17 @@ const fixture = (scenario: Scenario = {}): Fixture => {
   const wake = wakeDouble();
   const mailer = mailerDouble(scenario.answers);
   const guard = guardDouble(scenario.guard ?? defaultGuard, scenario.delays);
+  const alerts = alertsDouble();
 
   return {
     world,
     wake,
     mailer,
     guard,
+    alerts,
     layer: Layer.mergeAll(
       storageLayer(world),
+      alerts.layer,
       wake.layer,
       mailer.layer,
       guard.layer,
@@ -600,6 +641,7 @@ describe("runSlice", () => {
         expect(fix.world.checkpoints).toMatchObject([{ previous: undefined, next: memberC.id }]);
         expect(fix.wake.messages).toStrictEqual([{ campaignId, runToken }]);
         expect(fix.world.completed).toBe(0);
+        expect(fix.alerts.sent).toHaveLength(0);
 
         // Each send goes out as the campaign, under the contact and send id of the row it claimed, rendered for
         // the recipient with their own unsubscribe link.
@@ -708,6 +750,17 @@ describe("runSlice", () => {
       expect(fix.world.completed).toBe(1);
       expect(fix.world.checkpoints).toHaveLength(0);
       expect(fix.wake.messages).toHaveLength(0);
+      expect(fix.alerts.sent).toStrictEqual([
+        {
+          kind: "completed",
+          run: {
+            id: campaignId,
+            subject,
+            progress: { accepted: 1, rejected: 0, uncertain: 0, skipped: 0 },
+            feedback: { bounced: 0, complained: 0 },
+          },
+        },
+      ]);
     }),
   );
 
@@ -895,6 +948,7 @@ describe("runSlice", () => {
       expect(fix.world.settlements).toHaveLength(0);
       expect(fix.world.completed).toBe(0);
       expect(fix.wake.messages).toHaveLength(0);
+      expect(fix.alerts.sent).toHaveLength(0);
       expect(named("stale wake discarded")).toStrictEqual([
         {
           level: "Info",
@@ -1143,6 +1197,18 @@ describe("runSlice", () => {
       expect(fix.world.paused).toStrictEqual([{ reason: "sending-paused", cursor: memberA.id }]);
       expect(fix.wake.messages).toHaveLength(0);
       expect(fix.world.completed).toBe(0);
+      expect(fix.alerts.sent).toStrictEqual([
+        {
+          kind: "paused",
+          reason: "sending-paused",
+          run: {
+            id: campaignId,
+            subject,
+            progress: { accepted: 0, rejected: 1, uncertain: 0, skipped: 0 },
+            feedback: { bounced: 0, complained: 0 },
+          },
+        },
+      ]);
     }),
   );
 
@@ -1208,6 +1274,7 @@ describe("runSlice", () => {
         expect(fix.guard.slots).toHaveLength(0);
         expect(fix.mailer.sent).toHaveLength(0);
         expect(fix.world.paused).toStrictEqual([{ reason, cursor: memberA.id }]);
+        expect(fix.alerts.sent).toMatchObject([{ kind: "paused", reason }]);
       }),
   );
 
@@ -1245,6 +1312,7 @@ describe("runSlice", () => {
       expect(fix.world.completed).toBe(1);
       expect(fix.world.claims).toHaveLength(0);
       expect(fix.wake.messages).toHaveLength(0);
+      expect(fix.alerts.sent).toMatchObject([{ kind: "completed" }]);
     }),
   );
 

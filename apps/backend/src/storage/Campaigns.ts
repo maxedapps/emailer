@@ -338,6 +338,20 @@ const submissionOf = (stored: CampaignRecord): Schemas.CampaignSubmission => {
   }
 };
 
+/** What a run's last write leaves of the campaign, for the dispatcher to report. */
+export interface EndedRun {
+  readonly id: string;
+  readonly subject: string;
+  readonly progress: Schemas.CampaignProgress;
+  readonly feedback: Schemas.CampaignFeedback;
+}
+
+const endedRunOf = (stored: CampaignRecord): EndedRun => ({
+  id: stored.id,
+  subject: stored.subject,
+  ...countersOf(stored),
+});
+
 const summaryOf = (stored: CampaignRecord): Schemas.CampaignSummary => {
   const summary = {
     id: stored.id,
@@ -1063,12 +1077,13 @@ export const campaignOperations = (
     );
   });
 
+  /** Completes the run; answers its subject and counters as written, which the dispatcher reports. */
   const completeRun = Effect.fn("Storage.completeRun")(function* (
     id: string,
     runToken: string,
     now: string,
   ) {
-    yield* updateIf(
+    const completed = yield* updateIf(
       "completeRun",
       {
         Key: campaignKey(id),
@@ -1080,11 +1095,15 @@ export const campaignOperations = (
           ":now": str(now),
           ...sendingAndRun(runToken),
         },
+        ReturnValues: "ALL_NEW",
       },
       superseded,
     );
+
+    return endedRunOf(yield* readCampaign("completeRun", completed));
   });
 
+  /** Pauses the run; answers its subject and counters as written, which the dispatcher reports. */
   const pauseRun = Effect.fn("Storage.pauseRun")(function* (
     id: string,
     runToken: string,
@@ -1093,7 +1112,7 @@ export const campaignOperations = (
   ) {
     const values = { ":paused": str("paused"), ":reason": str(reason), ...sendingAndRun(runToken) };
 
-    yield* updateIf(
+    const paused = yield* updateIf(
       "pauseRun",
       cursor === undefined
         ? {
@@ -1102,6 +1121,7 @@ export const campaignOperations = (
             ConditionExpression: "#state = :sending AND runToken = :run",
             ExpressionAttributeNames: stateAndCursorNames,
             ExpressionAttributeValues: values,
+            ReturnValues: "ALL_NEW",
           }
         : {
             Key: campaignKey(id),
@@ -1109,9 +1129,12 @@ export const campaignOperations = (
             ConditionExpression: "#state = :sending AND runToken = :run",
             ExpressionAttributeNames: stateAndCursorNames,
             ExpressionAttributeValues: { ...values, ":cursor": str(cursor) },
+            ReturnValues: "ALL_NEW",
           },
       superseded,
     );
+
+    return endedRunOf(yield* readCampaign("pauseRun", paused));
   });
 
   /**
