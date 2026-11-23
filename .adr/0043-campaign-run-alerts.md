@@ -14,7 +14,7 @@
 ## Decision
 
 - **The dispatcher publishes one message to the `Alerts` topic** each time a run it drives pauses or completes. `RunAlerts` (`sending/RunAlerts.ts`) binds `AWS.SNS.Publish` to the topic, which grants the dispatcher `sns:Publish` on it alone.
-- **The run's own write says what to report.** `pauseRun` and `completeRun` return the campaign they wrote (`ReturnValues: ALL_NEW`, free), so the alert carries the campaign's subject, ID, counters and pause reason as stored, with no further read.
+- **The run's own write says what to report.** `pauseRun` and `completeRun` return the campaign's ID, subject and counters as they wrote them (`ReturnValues: ALL_NEW`, free), so the alert needs no further read; the dispatcher adds the pause reason it wrote.
 - **The alert is plain text.** The SNS subject is ASCII and names only the event and reason (`emailer: campaign paused (daily-quota)`); the campaign's subject, which may hold any character, goes into the body with the counters, what the reason means and, for a pause, the `campaigns resume` command.
 - **A failed publish does not fail the slice.** The run's state is written by then, and a redelivered wake-up would only find the run superseded, so it is logged as a warning and the slice ends normally.
 - **Operators' own actions send nothing.** A pause through `campaigns cancel` happens in the API, which the operator is watching.
