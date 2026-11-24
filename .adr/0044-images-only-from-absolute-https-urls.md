@@ -18,7 +18,7 @@
 - **`validateParts` refuses an HTML part whose `<img>` has a `src` that does not start with `https://`** (case-insensitive). That covers relative and local paths, `file:`, `http:`, protocol-relative `//`, `data:`, `cid:`, an empty `src`, and a `src` that starts with a Liquid tag. A Liquid value after the scheme (`https://cdn.example.com/{{ contact.plan }}.png`) passes.
 - **The refusal is the existing `InvalidTemplate`**, with `part: "html"`, a reason quoting the value (`image "hero.png" must be an absolute https:// URL`), and the line and column of its `<img` tag. The CLI already prints it. The quoted value lets a Markdown author find the image in the source file, whose lines differ from the rendered HTML's.
 - **Only the save checks.** `compileCopy` does not, so the dispatcher, test sends, previews and checks run exactly as before.
-- **A regex finds the tags,** as the CLI's text rendering does for raw HTML. Only `<img src>` is checked, because it is what the Markdown renderer emits and what operator HTML uses. `srcset`, CSS `url()` and VML images are not checked.
+- **Two regexes read the tags as HTML tokenizes them,** as the CLI's text rendering does for raw HTML: an `<img>` tag up to the `>` outside quoted values, then its attributes one by one, so a `src=` or `>` inside another attribute's quoted value is never taken for the source. The first `src` wins, as in a browser. Only `<img src>` is checked, because it is what the Markdown renderer emits and what operator HTML uses. `srcset`, CSS `url()` and VML images are not checked.
 
 ## Alternatives considered
 

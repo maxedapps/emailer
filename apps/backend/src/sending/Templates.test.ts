@@ -225,6 +225,8 @@ describe("validateParts", () => {
     ['<img src="cid:hero">', "cid:hero"],
     ['<img src="">', ""],
     ['<img src="{{ contact.photo }}">', "{{ contact.photo }}"],
+    ['<img alt="Revenue > costs" src="hero.png">', "hero.png"],
+    ["<img alt=Hero src=hero.png/>", "hero.png/"],
   ] as const)("refuses the image in %s, naming its source and place", ([image, source]) =>
     Effect.gen(function* () {
       const error = yield* Effect.flip(
@@ -248,6 +250,9 @@ describe("validateParts", () => {
         '<img src="https://example.com/hero.png" alt="Hero">',
         "<IMG SRC='HTTPS://example.com/logo.png'>",
         '<img data-src="lazy.png" src="https://cdn.example.com/{{ contact.plan }}.png">',
+        '<img alt="Example src=hero.png" src="https://example.com/hero.png">',
+        "<img alt='Hero'>",
+        "<p>An <imgur> tag is no image</p>",
         htmlFooter,
       ].join("\n"),
     }),

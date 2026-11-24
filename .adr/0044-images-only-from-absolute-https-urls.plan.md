@@ -23,3 +23,5 @@ Task 4684. [ADR-0044](0044-images-only-from-absolute-https-urls.md) holds the de
 ## Hand check
 
 ## Settled findings
+
+- Codex review of e53f5c9 (medium): the single tag regex ignored quoted attribute boundaries, so `<img alt="Revenue > costs" src="hero.png">` passed and `src=hero.png` inside an `alt` was refused. Fixed by reading the tag, then its attributes, as HTML tokenizes them; both cases are unit tests. A parser dependency stays out (ADR-0044, alternative 5).

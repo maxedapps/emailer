@@ -229,10 +229,24 @@ const renderPart = (liquid: Liquid, part: CompiledPart, scope: Scope) =>
 
 const decodeSubject = Schema.decodeUnknownOption(Schemas.CampaignSubject);
 
-/** An `<img>` tag up to its `src` value, quoted or bare; the space before `src` skips `data-src`. */
-const imageSource = /<img\b[^>]*?\ssrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/gi;
+/** An `<img>` tag and its attributes, read past a `>` inside a quoted value. */
+const imageTag = /<img(?=[\s/>])((?:[^>"']|"[^"]*"|'[^']*')*)>/gi;
+
+/** One attribute of a tag, as HTML tokenizes it: a name, then an optional quoted or bare value. */
+const tagAttribute = /([^\s"'/=>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g;
 
 const hostedImage = /^https:\/\//i;
+
+/** The tag's `src` value, the first one winning as in a browser; `undefined` when it has none. */
+const sourceOf = (attributes: string) => {
+  for (const [, name, ...values] of attributes.matchAll(tagAttribute)) {
+    if (name?.toLowerCase() === "src") {
+      return values.find((value) => value !== undefined) ?? "";
+    }
+  }
+
+  return undefined;
+};
 
 /**
  * Refuses an HTML part with an image that loads from anything but an absolute https URL
@@ -240,10 +254,10 @@ const hostedImage = /^https:\/\//i;
  * attachment, and a value a Liquid tag decides cannot be checked before it is sent.
  */
 const refuseUnhostedImages = Effect.fnUntraced(function* (html: string) {
-  for (const match of html.matchAll(imageSource)) {
-    const source = match[1] ?? match[2] ?? match[3] ?? "";
+  for (const match of html.matchAll(imageTag)) {
+    const source = sourceOf(match[1] ?? "");
 
-    if (!hostedImage.test(source)) {
+    if (source !== undefined && !hostedImage.test(source)) {
       const before = html.slice(0, match.index);
 
       return yield* new InvalidTemplate({
