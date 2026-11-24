@@ -229,9 +229,37 @@ const renderPart = (liquid: Liquid, part: CompiledPart, scope: Scope) =>
 
 const decodeSubject = Schema.decodeUnknownOption(Schemas.CampaignSubject);
 
+/** An `<img>` tag up to its `src` value, quoted or bare; the space before `src` skips `data-src`. */
+const imageSource = /<img\b[^>]*?\ssrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/gi;
+
+const hostedImage = /^https:\/\//i;
+
+/**
+ * Refuses an HTML part with an image that loads from anything but an absolute https URL
+ * (ADR-0044): a relative or local path has no host, Gmail blocks `data:`, no mail carries a `cid:`
+ * attachment, and a value a Liquid tag decides cannot be checked before it is sent.
+ */
+const refuseUnhostedImages = Effect.fnUntraced(function* (html: string) {
+  for (const match of html.matchAll(imageSource)) {
+    const source = match[1] ?? match[2] ?? match[3] ?? "";
+
+    if (!hostedImage.test(source)) {
+      const before = html.slice(0, match.index);
+
+      return yield* new InvalidTemplate({
+        part: "html",
+        reason: `image "${source}" must be an absolute https:// URL`,
+        line: before.split("\n").length,
+        column: match.index - before.lastIndexOf("\n"),
+      });
+    }
+  }
+});
+
 /**
  * Checks each part a draft edit gives, as a save does: Liquid syntax, known filters and tags, known
- * variables, and the unsubscribe link and postal address in each body part.
+ * variables, the unsubscribe link and postal address in each body part, and hosted images in the
+ * HTML part. Only a save checks the images: every stored copy passed one, so sending never pays.
  */
 export const validateParts = Effect.fn("Templates.validateParts")(function* (parts: {
   readonly subject?: string | undefined;
@@ -250,6 +278,7 @@ export const validateParts = Effect.fn("Templates.validateParts")(function* (par
 
   if (parts.html !== undefined && parts.html !== null) {
     yield* parsePart(engine(Schemas.defaultLanguage, true), "html", parts.html);
+    yield* refuseUnhostedImages(parts.html);
   }
 });
 

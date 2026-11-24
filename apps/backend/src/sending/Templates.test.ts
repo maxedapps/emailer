@@ -1,3 +1,4 @@
+import { InvalidTemplate } from "@emailer/api/Errors";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect } from "effect";
 
@@ -211,6 +212,44 @@ describe("validateParts", () => {
         column,
       ]);
       expect(error.reason).toContain(reason);
+    }),
+  );
+
+  it.effect.each([
+    ['<img src="hero.png" alt="Hero" width="552">', "hero.png"],
+    ["<img alt='' src='./img/hero.png'>", "./img/hero.png"],
+    ["<img src=/img/hero.png>", "/img/hero.png"],
+    ['<img src="http://example.com/hero.png">', "http://example.com/hero.png"],
+    ['<img src="//example.com/hero.png">', "//example.com/hero.png"],
+    ['<img src="data:image/png;base64,iVBORw0KGgo=">', "data:image/png;base64,iVBORw0KGgo="],
+    ['<img src="cid:hero">', "cid:hero"],
+    ['<img src="">', ""],
+    ['<img src="{{ contact.photo }}">', "{{ contact.photo }}"],
+  ] as const)("refuses the image in %s, naming its source and place", ([image, source]) =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(
+        validateParts({ html: `<p>Hi</p>\n<p>News</p> ${image}${htmlFooter}` }),
+      );
+
+      expect(error).toStrictEqual(
+        new InvalidTemplate({
+          part: "html",
+          reason: `image "${source}" must be an absolute https:// URL`,
+          line: 2,
+          column: 13,
+        }),
+      );
+    }),
+  );
+
+  it.effect("accepts images from absolute https URLs, Liquid after the host included", () =>
+    validateParts({
+      html: [
+        '<img src="https://example.com/hero.png" alt="Hero">',
+        "<IMG SRC='HTTPS://example.com/logo.png'>",
+        '<img data-src="lazy.png" src="https://cdn.example.com/{{ contact.plan }}.png">',
+        htmlFooter,
+      ].join("\n"),
     }),
   );
 

@@ -279,7 +279,7 @@ Every command also accepts:
 
 8. Follow its progress with `pnpm emailer campaigns get <campaignId>`.
 
-**Writing in Markdown.** The CLI renders both parts from the same file: HTML with inline styles in a 600px layout, and plain text. Use absolute `https://` image URLs. Raw HTML passes through unstyled. The service stores only the rendered result, so keep your Markdown file. For your own design, pass `--text` and `--html` files instead of `--markdown`.
+**Writing in Markdown.** The CLI renders both parts from the same file: HTML with inline styles in a 600px layout, and plain text. Images must load from absolute `https://` URLs: saving a draft refuses any other `<img src>`, such as `hero.png`, and names it. Raw HTML passes through unstyled. The service stores only the rendered result, so keep your Markdown file. For your own design, pass `--text` and `--html` files instead of `--markdown`.
 
 ### Personalized templates
 

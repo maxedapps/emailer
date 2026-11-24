@@ -8,6 +8,7 @@
 - Amended: 2026-09-24, on the user's decision after reviewing PR #4. Raw HTML in the plain-text part reads as the HTML part shows it. A raw link keeps its URL as `label (url)`. `<br>`, block tags and table cells end a line; a `<br>` at the end of a source line ends only that line. `<style>`/`<script>` contents are dropped. Before, a raw link lost its URL and words on either side of those tags ran together.
 - Authority: On 2026-09-23 the user asked for Markdown authoring with email-conformant HTML output, and asked for MJML and other tools to be evaluated. After seeing the research, they followed the recommendation to use `marked` alone, in the CLI. See the plan (`work/drafting-and-preview.md`, in git history).
 - Amended by [ADR-0041](0041-personalized-templates.md): the backend no longer appends a footer below the card; a Markdown campaign writes `{{ unsubscribe_url }}` and `{{ postal_address }}` where it wants them, and Liquid tags pass through `marked` intact.
+- Amended by [ADR-0044](0044-images-only-from-absolute-https-urls.md): saving a draft refuses an HTML part with an `<img src>` that does not start with `https://`, so the consequence below is enforced, not advice.
 
 ## Context
 
