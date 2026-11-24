@@ -1,6 +1,6 @@
 # ADR-0044: A draft's images load only from absolute https URLs
 
-- Status: Proposed
+- Status: Accepted (2026-11-24, after a green landing gate)
 - Date: 2026-11-24
 - Authority: Task 4684. The analysis (artifact `emailer-4684-image-hosting`) proposed refusing image paths that break in every inbox, at draft save. Max chose "Build it" on 2026-11-24. Image hosting stays out of emailer: the launch emails' images are hosted elsewhere (task 2760).
 - Amends: [ADR-0019](0019-markdown-campaign-bodies.md), consequence "Images must be absolute https URLs": no longer advice, the API enforces it.

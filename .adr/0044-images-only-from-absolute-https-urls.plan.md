@@ -22,6 +22,14 @@ Task 4684. [ADR-0044](0044-images-only-from-absolute-https-urls.md) holds the de
 
 ## Hand check
 
+On a fresh test stage, through the CLI with a Markdown file holding `![x](hero.png)`:
+
+- `campaigns create --markdown` was refused: `InvalidTemplate`, part `html`, `image "hero.png" must be an absolute https:// URL`, line 20, column 29; the same body posted to the API answered 422;
+- the same file with `![x](https://example.com/images/hero.png)` was accepted as a draft;
+- `campaigns update --markdown` and `campaigns variants set --markdown` with the local image were refused the same way, and a variant with the https image was accepted.
+
+The landing gate ran all seven live groups green (43 tests) on its own stage, which it destroyed.
+
 ## Settled findings
 
 - Codex review of e53f5c9 (medium): the single tag regex ignored quoted attribute boundaries, so `<img alt="Revenue > costs" src="hero.png">` passed and `src=hero.png` inside an `alt` was refused. Fixed by reading the tag, then its attributes, as HTML tokenizes them; both cases are unit tests. A parser dependency stays out (ADR-0044, alternative 5).
