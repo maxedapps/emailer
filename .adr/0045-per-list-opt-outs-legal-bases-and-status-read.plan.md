@@ -35,6 +35,11 @@ Task 4797. [ADR-0045](0045-per-list-opt-outs-legal-bases-and-status-read.md) hol
   - `EMAILER_NEWSLETTER_LIST_ID`: dev → the dev newsletter stand-in; prod → today's `EMAILER_LIST_ID`.
   - `EMAILER_INFINITE_KEY`: dev → the dev key; prod → the prod key.
 
+## Rollout
+
+- 2026-11-25: landed as 732f8a2 and b5d8abf after a green gate (`pnpm check`, the full live suite 43/43), and deployed to prod with `--force` (27 resources updated). The migration then migrated 0 address items, as a strongly consistent count had found no item holding `rejoined`; the script and its test went in the next commit.
+- The lists, both single opt-in keys and the three variables in the product's dev and prod vaults are in place; a status read with each vault's own values answered `200` on both of its lists.
+
 ## Open questions
 
 - None: the Infinite orchestrator chose separate dev lists and the names above.
