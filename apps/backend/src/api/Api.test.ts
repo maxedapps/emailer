@@ -113,6 +113,8 @@ const record = {
   email,
   status: "mailable" as const,
   optOuts: [],
+  leftAllLists: false,
+  rejoined: [],
   transientBounces: [],
   consents: [],
   pending: [],
@@ -1013,21 +1015,21 @@ describe("subscriptions", () => {
     ],
     [
       "an address that left the list, on consent",
-      SubscriptionState.OptedOut(),
+      SubscriptionState.OptedOut({ leftAllLists: false }),
       {},
       201,
       `{"_tag":"Subscribed","listId":"${listId}"}`,
     ],
     [
       "an existing customer who left the list",
-      SubscriptionState.OptedOut(),
+      SubscriptionState.OptedOut({ leftAllLists: false }),
       { consent: { basis: "existingCustomer", source: "Checkout", wording: "Updates follow." } },
       409,
       `{"_tag":"AddressOptedOut","email":"${email}"}`,
     ],
     [
       "an account holder who left the list",
-      SubscriptionState.OptedOut(),
+      SubscriptionState.OptedOut({ leftAllLists: false }),
       { consent: { basis: "accountHolder", source: "Account sign-up" } },
       409,
       `{"_tag":"AddressOptedOut","email":"${email}"}`,
@@ -1109,7 +1111,10 @@ describe("subscriptions", () => {
   it.effect("answers a status read with the state, and 403 for a list outside the key", () =>
     Effect.gen(function* () {
       const { respond } = yield* api({
-        audience: { subscriptionState: () => Effect.succeed(SubscriptionState.OptedOut()) },
+        audience: {
+          subscriptionState: () =>
+            Effect.succeed(SubscriptionState.OptedOut({ leftAllLists: false })),
+        },
       });
 
       const reading = (target: string) =>

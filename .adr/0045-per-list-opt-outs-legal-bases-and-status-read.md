@@ -8,6 +8,7 @@
   - [ADR-0037](0037-single-opt-in-keys-and-integration-opt-out.md), decision 3: a single opt-in sign-up on the consent basis lifts that list's opt-out. Decision 2: the consent record gains the existing-customer shape and `ip` becomes optional.
   - [ADR-0027](0027-signup-api-scoped-keys-and-double-opt-in.md), decision 2: a scoped key may read an address's status on its lists.
 - Plan: [0045-per-list-opt-outs-legal-bases-and-status-read.plan.md](0045-per-list-opt-outs-legal-bases-and-status-read.plan.md)
+- Amended by [ADR-0047](0047-old-opt-outs-cover-every-list.md): an opt-out recorded before this decision's prod deploy covers every list, existing and future, until the address's own consent brings it back onto one.
 - Amended by [ADR-0046](0046-account-holder-basis-and-explicit-import-basis.md): a third basis, `accountHolder`, records `{ basis, listId, source, ip?, subscribedAt }` with no wording and, like an existing customer, never lifts an opt-out; an import's evidence always names its basis.
 
 ## Context

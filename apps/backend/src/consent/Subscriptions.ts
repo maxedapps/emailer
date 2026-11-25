@@ -18,6 +18,11 @@ import { AudienceStore } from "../storage/Audience.ts";
 import { SubscriptionState } from "../storage/Subscriptions.ts";
 import { hashSecret, IssuedSecret, issueSecret } from "../Tokens.ts";
 
+import type { Data } from "effect";
+
+/** How an address left a list it signs up for again. */
+type OptedOut = Data.TaggedEnum.Value<SubscriptionState, "OptedOut">;
+
 /**
  * The key's confirm page, with the link's token added to whatever query it already has. The token
  * is `<mailbox>.<listId>.<secret>`: what to confirm, and the proof that the mail was received.
@@ -89,11 +94,12 @@ const requestConfirmation = Effect.fn("Subscriptions.requestConfirmation")(funct
 
 /**
  * A single opt-in (ADR-0037): the subscriber joins at once, with the sign-up as the evidence of its
- * basis, and nothing is mailed. `rejoin` brings back an address that left the list (ADR-0045).
+ * basis, and nothing is mailed. `rejoin`, the opt-out the address left the list by, brings it back
+ * (ADR-0045).
  */
 const subscribeDirectly = Effect.fn("Subscriptions.subscribeDirectly")(function* (
   payload: Schemas.SubscribePayload,
-  rejoin: boolean,
+  rejoin: OptedOut | undefined,
 ) {
   const audience = yield* AudienceStore;
 
@@ -117,12 +123,15 @@ const subscribeDirectly = Effect.fn("Subscriptions.subscribeDirectly")(function*
  * or account holder stays out, since they objected, and buying again or keeping the account is no
  * new consent.
  */
-const rejoin = Effect.fn("Subscriptions.rejoin")(function* (payload: Schemas.SubscribePayload) {
+const rejoin = Effect.fn("Subscriptions.rejoin")(function* (
+  payload: Schemas.SubscribePayload,
+  optedOut: OptedOut,
+) {
   if (payload.consent.basis !== "consent") {
     return yield* new AddressOptedOut({ email: Schemas.mailboxKey(payload.email) });
   }
 
-  return yield* subscribeDirectly(payload, true);
+  return yield* subscribeDirectly(payload, optedOut);
 });
 
 /**
@@ -133,7 +142,7 @@ const join = Effect.fn("Subscriptions.join")(function* <A, E, R, BackA, BackE, B
   payload: Schemas.SubscribePayload,
   ways: {
     readonly fresh: Effect.Effect<A, E, R>;
-    readonly back: Effect.Effect<BackA, BackE, BackR>;
+    readonly back: (optedOut: OptedOut) => Effect.Effect<BackA, BackE, BackR>;
   },
 ) {
   const audience = yield* AudienceStore;
@@ -142,7 +151,7 @@ const join = Effect.fn("Subscriptions.join")(function* <A, E, R, BackA, BackE, B
   return yield* SubscriptionState.$match(state, {
     Undeliverable: ({ reason }) => Effect.fail(new AddressUndeliverable({ reason })),
     Subscribed: () => Effect.succeed(Schemas.AlreadySubscribed.make({})),
-    OptedOut: () => ways.back,
+    OptedOut: ways.back,
     NotSubscribed: () => ways.fresh,
   });
 });
@@ -171,10 +180,13 @@ export const subscribe = Effect.fn("Subscriptions.subscribe")(function* (
 
     const confirmation = requestConfirmation(payload, consent, integration.optIn.confirmUrl);
 
-    return yield* join(payload, { fresh: confirmation, back: confirmation });
+    return yield* join(payload, { fresh: confirmation, back: () => confirmation });
   }
 
-  return yield* join(payload, { fresh: subscribeDirectly(payload, false), back: rejoin(payload) });
+  return yield* join(payload, {
+    fresh: subscribeDirectly(payload, undefined),
+    back: (optedOut) => rejoin(payload, optedOut),
+  });
 });
 
 /** Each sign-up state as the status read names it. */

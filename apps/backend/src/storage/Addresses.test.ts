@@ -199,6 +199,36 @@ describe("addressStatus", () => {
     }),
   );
 
+  // ADR-0047: an opt-out from before ADR-0045 keeps every list away but those rejoined since.
+  it.effect(
+    "reports an address that left all lists as unsubscribed from any it did not rejoin",
+    () =>
+      Effect.gen(function* () {
+        const leftAll = stored({
+          ...optedOut,
+          leftAllLists: { BOOL: true },
+          rejoined: { SS: [otherListId] },
+        });
+
+        const statusOn = (list: string) =>
+          operationsFor(holding(leftAll)).addressStatus(email, list);
+
+        expect(yield* statusOn(listId)).toBe("unsubscribed");
+        expect(yield* statusOn(thirdListId)).toBe("unsubscribed");
+        expect(yield* statusOn(otherListId)).toBe("mailable");
+      }),
+  );
+
+  it.effect("keeps a list the address rejoined and then left again away", () =>
+    Effect.gen(function* () {
+      const table = holding(
+        stored({ ...optedOut, leftAllLists: { BOOL: true }, rejoined: { SS: [listId] } }),
+      );
+
+      expect(yield* operationsFor(table).addressStatus(email, listId)).toBe("unsubscribed");
+    }),
+  );
+
   it.effect("reports a mailbox nothing was ever recorded for as mailable", () =>
     Effect.gen(function* () {
       expect(
@@ -350,6 +380,8 @@ describe("addressRecord", () => {
           email: "User@Example.com",
           status: "suppressed",
           optOuts: [listId],
+          leftAllLists: false,
+          rejoined: [],
           suppression: { reason: "bounce", suppressedAt: createdAt, bounceSubType: "General" },
           transientBounces: occurrences,
           consents: [consent, directConsent, accountHolder],
@@ -368,6 +400,30 @@ describe("addressRecord", () => {
       }),
   );
 
+  it.effect("reports an address that left all lists and the lists it rejoined since", () =>
+    Effect.gen(function* () {
+      const table = scriptedTable({
+        query: [
+          Effect.succeed({
+            Items: [
+              stored({
+                ...optedOut,
+                leftAllLists: { BOOL: true },
+                rejoined: { SS: [otherListId] },
+              }),
+            ],
+          }),
+        ],
+      });
+
+      expect(yield* operationsFor(table).addressRecord(email)).toMatchObject({
+        optOuts: [listId],
+        leftAllLists: true,
+        rejoined: [otherListId],
+      });
+    }),
+  );
+
   it.effect("reports a mailbox nothing was recorded for as mailable and empty", () =>
     Effect.gen(function* () {
       expect(
@@ -376,6 +432,8 @@ describe("addressRecord", () => {
         email,
         status: "mailable",
         optOuts: [],
+        leftAllLists: false,
+        rejoined: [],
         transientBounces: [],
         consents: [],
         pending: [],

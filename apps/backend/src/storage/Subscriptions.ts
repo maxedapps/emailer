@@ -29,6 +29,7 @@ import {
 import { listKey } from "./Lists.ts";
 import { joinActions, memberKey } from "./Membership.ts";
 
+import type { OptOutState } from "./Addresses.ts";
 import type {
   Action,
   BatchPrimitives,
@@ -50,8 +51,11 @@ export type SubscriptionState = Data.TaggedEnum<{
   Undeliverable: { readonly reason: "suppressed" | "bouncing" };
   /** A member of the list who has not left it. */
   Subscribed: {};
-  /** The address left the list, whether or not its contact is still a member. */
-  OptedOut: {};
+  /**
+   * The address left the list, whether or not its contact is still a member: on its own, or with
+   * all lists (ADR-0047).
+   */
+  OptedOut: Pick<OptOutState, "leftAllLists">;
   NotSubscribed: {};
 }>;
 
@@ -62,7 +66,8 @@ export type SubscriptionRequest = Omit<PendingSubscription, "ttl">;
 
 /**
  * A single opt-in sign-up (ADR-0037): whom to add and how, its basis and evidence, the identifier a
- * new contact would take, and whether it brings the address back onto a list it left (ADR-0045).
+ * new contact would take, and, when it brings the address back onto a list it left, the opt-out it
+ * lifts (ADR-0045).
  */
 export interface DirectSubscription {
   readonly email: string;
@@ -73,7 +78,7 @@ export interface DirectSubscription {
   readonly ip?: string | undefined;
   readonly contactId: string;
   readonly subscribedAt: string;
-  readonly rejoin: boolean;
+  readonly rejoin: Pick<OptOutState, "leftAllLists"> | undefined;
 }
 
 /** A confirmation link used, and the identifier a new contact would take. */
@@ -117,7 +122,7 @@ export const subscriptionOperations = (
     }
 
     if (optedOutOf(address, listId)) {
-      return SubscriptionState.OptedOut();
+      return SubscriptionState.OptedOut({ leftAllLists: address.leftAllLists });
     }
 
     if (reservation.Item === undefined) {
@@ -220,7 +225,7 @@ export const subscriptionOperations = (
   /**
    * A single opt-in: joins the list and records its basis in one transaction, with no link to
    * confirm. The caller decides whether it may bring back an address that left the list; `rejoin`
-   * lifts that list's opt-out in the same transaction.
+   * lifts that opt-out from the list in the same transaction.
    */
   const subscribeDirectly = Effect.fn("Storage.subscribeDirectly")(function* (
     subscription: DirectSubscription,
@@ -255,7 +260,9 @@ export const subscriptionOperations = (
 
     return yield* transact(
       "subscribeDirectly",
-      subscription.rejoin ? [...joined, rejoinAction(email, listId)] : joined,
+      subscription.rejoin === undefined
+        ? joined
+        : [...joined, rejoinAction(email, listId, subscription.rejoin)],
     );
   }, retryLostRace);
 
@@ -308,7 +315,7 @@ export const subscriptionOperations = (
     );
 
     // The confirmed mail proves the mailbox's owner wants back onto this list.
-    const rejoin = optedOutOf(address, listId) ? [rejoinAction(email, listId)] : [];
+    const rejoin = optedOutOf(address, listId) ? [rejoinAction(email, listId, address)] : [];
 
     const actions: ReadonlyArray<Action<ConfirmationNotFound | ContactChanged>> = [
       {

@@ -103,6 +103,16 @@ const NumberAttribute = Schema.Struct({ N: Schema.FiniteFromString }).pipe(
   ),
 );
 
+const BooleanAttribute = Schema.Struct({ BOOL: Schema.Boolean }).pipe(
+  Schema.decodeTo(
+    Schema.Boolean,
+    SchemaTransformation.transform({
+      decode: (attribute: { readonly BOOL: boolean }) => attribute.BOOL,
+      encode: (value: boolean) => ({ BOOL: value }),
+    }),
+  ),
+);
+
 const StringMapAttribute = Schema.Struct({
   M: Schema.Record(Schema.String, StringAttribute),
 }).pipe(
@@ -126,13 +136,14 @@ const StringSetAttribute = Schema.Struct({ SS: Schema.NonEmptyArray(Schema.Strin
 );
 
 /**
- * The four attribute kinds this table stores, each as its plain value. A set is tried before a
+ * The five attribute kinds this table stores, each as its plain value. A set is tried before a
  * map, so an array is never written as a map, and an empty one, which DynamoDB refuses, is not
  * written at all.
  */
 const Attribute = Schema.Union([
   StringAttribute,
   NumberAttribute,
+  BooleanAttribute,
   StringSetAttribute,
   StringMapAttribute,
 ]);

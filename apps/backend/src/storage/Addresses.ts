@@ -16,7 +16,7 @@ import type { Action, QueryPrimitives, ReadPrimitives, UpdatePrimitives } from "
 
 /**
  * What is known about a mailbox independently of any contact, and outliving one: the lists its
- * owner opted out of, that the mail system reported it undeliverable, and its recent transient
+ * owner opted out of (every list, for an opt-out from before ADR-0045), that the mail system reported it undeliverable, and its recent transient
  * bounces. One item holds all three, so the status before each send is one read. It is keyed by
  * mailbox rather than by contact, so deleting and re-creating a contact escapes none of it. The
  * `EMAIL#` reservation is keyed by address too, but it is contact identity and belongs to
@@ -120,6 +120,8 @@ export interface AddressOptOut {
 const readStatus = itemReader(
   Schema.Struct({
     optOuts: Schema.optionalKey(Schema.Array(Schema.String)),
+    leftAllLists: Schema.optionalKey(Schema.Boolean),
+    rejoined: Schema.optionalKey(Schema.Array(Schema.String)),
     suppression: Schema.optionalKey(Schema.Unknown),
     transientBounces: Schema.optionalKey(Schema.Array(Schema.String)),
   }),
@@ -128,6 +130,8 @@ const readStatus = itemReader(
 /** The whole item, as `addresses status` reports it. */
 const AddressItem = Schema.Struct({
   optOuts: Schema.optionalKey(Schemas.AddressRecord.fields.optOuts),
+  leftAllLists: Schema.optionalKey(Schemas.AddressRecord.fields.leftAllLists),
+  rejoined: Schema.optionalKey(Schemas.AddressRecord.fields.rejoined),
   suppression: Schemas.AddressRecord.fields.suppression,
   transientBounces: Schema.optionalKey(Schema.Array(Schema.String)),
 });
@@ -251,31 +255,52 @@ export const optOutWrites = (primitives: Pick<UpdatePrimitives, "update">) => {
   return { optOut } as const;
 };
 
-/** The address item as a send or a sign-up decides on it: the lists it left, and its mailbox. */
-interface AddressState {
+/** What an address left: the lists it opted out of one by one, and every list (ADR-0047). */
+export interface OptOutState {
   readonly optOuts: ReadonlyArray<string>;
+  /** It opted out while an opt-out still covered every list, existing and future. */
+  readonly leftAllLists: boolean;
+  /** The lists it joined again on consent since it left all lists. */
+  readonly rejoined: ReadonlyArray<string>;
+}
+
+/** The address item as a send or a sign-up decides on it: what it left, and its mailbox. */
+interface AddressState extends OptOutState {
   readonly mailbox: Schemas.MailboxStatus;
 }
 
 /** A mailbox nothing was ever recorded for. */
-const unrecorded: AddressState = { optOuts: [], mailbox: "mailable" };
+const unrecorded: AddressState = {
+  optOuts: [],
+  leftAllLists: false,
+  rejoined: [],
+  mailbox: "mailable",
+};
 
 /**
- * An opt-out keeps the address off the list it left and no other (ADR-0045). Sends, test sends and
- * sign-ups all decide by this.
+ * An opt-out keeps the address off the list it left and no other (ADR-0045); one from before that
+ * keeps it off every list it has not joined again on consent since (ADR-0047). Sends, test sends
+ * and sign-ups all decide by this.
  */
-export const optedOutOf = (state: Pick<AddressState, "optOuts">, listId: string): boolean =>
-  state.optOuts.includes(listId);
+export const optedOutOf = (state: OptOutState, listId: string): boolean =>
+  state.optOuts.includes(listId) || (state.leftAllLists && !state.rejoined.includes(listId));
 
 /**
- * Brings an address back onto a list it left: the list leaves its opt-outs. Only a sign-up on
- * consent does this, inside its join transaction (ADR-0045).
+ * Brings an address back onto a list it left: the list leaves its opt-outs and, for an address that
+ * left all lists, joins the lists it rejoined. Only a consent does this, inside its join
+ * transaction (ADR-0045, ADR-0047).
  */
-export const rejoinAction = (email: string, listId: string): Action<never> => ({
+export const rejoinAction = (
+  email: string,
+  listId: string,
+  state: Pick<OptOutState, "leftAllLists">,
+): Action<never> => ({
   Update: {
     Table: tableLogicalId,
     Key: addressKey(email),
-    UpdateExpression: "DELETE optOuts :list",
+    UpdateExpression: state.leftAllLists
+      ? "DELETE optOuts :list ADD rejoined :list"
+      : "DELETE optOuts :list",
     ExpressionAttributeValues: { ":list": strSet([listId]) },
   },
 });
@@ -296,6 +321,8 @@ export const readAddressState = Effect.fnUntraced(function* (
 
   return {
     optOuts: stored.optOuts ?? [],
+    leftAllLists: stored.leftAllLists ?? false,
+    rejoined: stored.rejoined ?? [],
     mailbox: mailboxStatusOf(stored, yield* DateTime.now),
   } satisfies AddressState;
 });
@@ -350,6 +377,8 @@ export const addressReads = (primitives: ReadPrimitives & QueryPrimitives) => {
       email,
       status: mailboxStatusOf(stored, yield* DateTime.now),
       optOuts: stored.optOuts ?? [],
+      leftAllLists: stored.leftAllLists ?? false,
+      rejoined: stored.rejoined ?? [],
       transientBounces: stored.transientBounces ?? [],
       consents,
       pending,

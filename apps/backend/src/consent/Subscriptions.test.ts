@@ -305,7 +305,7 @@ describe("subscribe", () => {
 
   it.effect("mails a link to an address that left the list, so its owner may rejoin", () =>
     Effect.gen(function* () {
-      const fix = fixture({ state: SubscriptionState.OptedOut() });
+      const fix = fixture({ state: SubscriptionState.OptedOut({ leftAllLists: false }) });
 
       expect(yield* signingUp(fix)).toStrictEqual(Schemas.ConfirmationSent.make({}));
       expect(fix.requests).toHaveLength(1);
@@ -427,7 +427,7 @@ describe("subscribe with a single opt-in key", () => {
           ip: "203.0.113.7",
           contactId,
           subscribedAt: "2026-09-25T10:00:00.000Z",
-          rejoin: false,
+          rejoin: undefined,
         },
       ]);
       expect(fix.requests).toHaveLength(0);
@@ -444,13 +444,17 @@ describe("subscribe with a single opt-in key", () => {
     }),
   );
 
-  // ADR-0045: a signed-in user's new consent is the proof that they want back in.
-  it.effect("brings an address that left the list back on a new consent", () =>
+  // ADR-0045: a signed-in user's new consent is the proof that they want back in; ADR-0047: also
+  // after leaving all lists.
+  it.effect.each([
+    ["the list", false],
+    ["all lists", true],
+  ] as const)("brings an address that left %s back on a new consent", ([_label, leftAllLists]) =>
     Effect.gen(function* () {
-      const fix = single({ state: SubscriptionState.OptedOut() });
+      const fix = single({ state: SubscriptionState.OptedOut({ leftAllLists }) });
 
       expect(yield* signingUp(fix)).toStrictEqual(Schemas.Subscribed.make({ listId }));
-      expect(fix.joins).toMatchObject([{ consent: payload.consent, rejoin: true }]);
+      expect(fix.joins).toMatchObject([{ consent: payload.consent, rejoin: { leftAllLists } }]);
     }),
   );
 
@@ -462,7 +466,9 @@ describe("subscribe with a single opt-in key", () => {
       const fix = single();
 
       expect(yield* signingUp(fix, request)).toStrictEqual(Schemas.Subscribed.make({ listId }));
-      expect(fix.joins).toMatchObject([{ consent: request.consent, ip: undefined, rejoin: false }]);
+      expect(fix.joins).toMatchObject([
+        { consent: request.consent, ip: undefined, rejoin: undefined },
+      ]);
       expect(fix.sent).toHaveLength(0);
     }),
   );
@@ -470,13 +476,13 @@ describe("subscribe with a single opt-in key", () => {
   it.effect.each([
     [
       "an existing customer who left the list, who stays out",
-      { state: SubscriptionState.OptedOut() },
+      { state: SubscriptionState.OptedOut({ leftAllLists: false }) },
       customer,
       new Errors.AddressOptedOut({ email: "sam@example.com" }),
     ],
     [
       "an account holder who left the list, who stays out",
-      { state: SubscriptionState.OptedOut() },
+      { state: SubscriptionState.OptedOut({ leftAllLists: false }) },
       accountHolder,
       new Errors.AddressOptedOut({ email: "sam@example.com" }),
     ],
@@ -529,7 +535,7 @@ describe("status", () => {
   it.effect.each([
     [SubscriptionState.Subscribed(), "subscribed"],
     [SubscriptionState.NotSubscribed(), "notSubscribed"],
-    [SubscriptionState.OptedOut(), "optedOut"],
+    [SubscriptionState.OptedOut({ leftAllLists: false }), "optedOut"],
     [SubscriptionState.Undeliverable({ reason: "bouncing" }), "undeliverable"],
   ] as const)("answers %s as %s", ([state, expected]) =>
     Effect.gen(function* () {

@@ -482,7 +482,8 @@ describe("updateContact", () => {
                 ConditionCheck: {
                   Table: tableLogicalId,
                   Key: { pk: { S: `ADDRESS#${email}` }, sk: { S: "ADDRESS" } },
-                  ConditionExpression: "attribute_not_exists(optOuts)",
+                  ConditionExpression:
+                    "attribute_not_exists(optOuts) AND attribute_not_exists(leftAllLists)",
                 },
               },
               {

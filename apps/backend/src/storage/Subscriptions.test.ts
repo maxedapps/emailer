@@ -181,17 +181,40 @@ describe("subscriptionState", () => {
     [
       "a member who left the list",
       [addressItem({ optOuts: { SS: [listId] } }), reservation, membership],
-      SubscriptionState.OptedOut(),
+      SubscriptionState.OptedOut({ leftAllLists: false }),
     ],
     [
       "an address that left the list without a contact",
       [addressItem({ optOuts: { SS: [listId] } })],
-      SubscriptionState.OptedOut(),
+      SubscriptionState.OptedOut({ leftAllLists: false }),
     ],
     // ADR-0045: leaving one list keeps the others.
     [
       "a member who left another list",
       [addressItem({ optOuts: { SS: [otherListId] } }), reservation, membership],
+      SubscriptionState.Subscribed(),
+    ],
+    // ADR-0047: an opt-out from before ADR-0045 left every list.
+    [
+      "a member who left all lists",
+      [
+        addressItem({ optOuts: { SS: [otherListId] }, leftAllLists: { BOOL: true } }),
+        reservation,
+        membership,
+      ],
+      SubscriptionState.OptedOut({ leftAllLists: true }),
+    ],
+    [
+      "a member who left all lists and rejoined this one",
+      [
+        addressItem({
+          optOuts: { SS: [otherListId] },
+          leftAllLists: { BOOL: true },
+          rejoined: { SS: [listId] },
+        }),
+        reservation,
+        membership,
+      ],
       SubscriptionState.Subscribed(),
     ],
     [
@@ -369,6 +392,31 @@ describe("confirmSubscription", () => {
     }),
   );
 
+  it.effect("records the list as rejoined for an address that left all lists", () =>
+    Effect.gen(function* () {
+      const table = holding(
+        [
+          pendingItem,
+          list,
+          reservation,
+          addressItem({ optOuts: { SS: [otherListId] }, leftAllLists: { BOOL: true } }),
+        ],
+        [succeeded],
+      );
+
+      yield* confirming(table);
+
+      expect(table.transactionRequests[0]?.TransactItems?.at(-1)).toStrictEqual({
+        Update: {
+          Table: tableLogicalId,
+          Key: { pk: { S: addressPk }, sk: { S: "ADDRESS" } },
+          UpdateExpression: "DELETE optOuts :list ADD rejoined :list",
+          ExpressionAttributeValues: { ":list": { SS: [listId] } },
+        },
+      });
+    }),
+  );
+
   it.effect.each([
     ["a link never issued or already used", [list]],
     ["a link with another secret", [{ ...pendingItem, secretHash: { S: "0".repeat(64) } }, list]],
@@ -432,7 +480,7 @@ const subscription: DirectSubscription = {
   ip: "203.0.113.7",
   contactId: newContactId,
   subscribedAt,
-  rejoin: false,
+  rejoin: undefined,
 };
 
 const directConsentPut = {
@@ -544,7 +592,7 @@ describe("subscribeDirectly", () => {
       Effect.gen(function* () {
         const table = holding([list, reservation], [succeeded]);
 
-        yield* subscribing(table, { ...subscription, rejoin: true });
+        yield* subscribing(table, { ...subscription, rejoin: { leftAllLists: false } });
 
         expect(table.transactionRequests[0]?.TransactItems).toStrictEqual([
           ...heldJoin,
@@ -559,6 +607,23 @@ describe("subscribeDirectly", () => {
           },
         ]);
       }),
+  );
+
+  it.effect("records the list as rejoined when the address left all lists", () =>
+    Effect.gen(function* () {
+      const table = holding([list, reservation], [succeeded]);
+
+      yield* subscribing(table, { ...subscription, rejoin: { leftAllLists: true } });
+
+      expect(table.transactionRequests[0]?.TransactItems?.at(-1)).toStrictEqual({
+        Update: {
+          Table: tableLogicalId,
+          Key: { pk: { S: addressPk }, sk: { S: "ADDRESS" } },
+          UpdateExpression: "DELETE optOuts :list ADD rejoined :list",
+          ExpressionAttributeValues: { ":list": { SS: [listId] } },
+        },
+      });
+    }),
   );
 
   it.effect.each([

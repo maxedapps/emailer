@@ -29,15 +29,23 @@ describe("the item codec", () => {
         Schema.Struct({
           text: Schema.String,
           count: Schema.Int,
+          flag: Schema.Boolean,
           attributes: Schemas.ContactAttributes,
           occurrences: Schema.NonEmptyArray(Schema.String),
         }),
-      )({ text: "hello", count: 3, attributes: { tier: "gold" }, occurrences: ["a#1"] });
+      )({
+        text: "hello",
+        count: 3,
+        flag: true,
+        attributes: { tier: "gold" },
+        occurrences: ["a#1"],
+      });
 
       expect(written).toStrictEqual({
         v: { N: "1" },
         text: { S: "hello" },
         count: { N: "3" },
+        flag: { BOOL: true },
         attributes: { M: { tier: { S: "gold" } } },
         occurrences: { SS: ["a#1"] },
       });

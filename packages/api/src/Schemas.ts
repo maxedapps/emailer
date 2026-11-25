@@ -622,13 +622,16 @@ export type PendingConfirmation = typeof PendingConfirmation.Type;
 
 /**
  * Account-list presence is always reported: `null` means SES has no entry. `optOuts` names the
- * lists the address left, which may not mail it (ADR-0045). The local suppression is an optional
- * key because it may not exist.
+ * lists the address left, which may not mail it (ADR-0045). `leftAllLists` marks an address that
+ * opted out before that, which no list may mail but those in `rejoined`, joined again on consent
+ * since (ADR-0047). The local suppression is an optional key because it may not exist.
  */
 export const AddressRecord = Schema.Struct({
   email: ListedEmailAddress,
   status: MailboxStatus,
   optOuts: Schema.Array(EntityId),
+  leftAllLists: Schema.Boolean,
+  rejoined: Schema.Array(EntityId),
   suppression: Schema.optionalKey(
     Schema.Struct({
       reason: SuppressionReason,
