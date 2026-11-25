@@ -473,7 +473,13 @@ describe("lists", () => {
       const unnamed = yield* importing({ source: "Sign-up", wording: "Send me updates." });
       const holders = yield* importing({ basis: "accountHolder", source: "Account sign-up" });
 
-      expect([unnamed.status, holders.status]).toStrictEqual([400, 200]);
+      const worded = yield* importing({
+        basis: "accountHolder",
+        source: "Account sign-up",
+        wording: "Nothing was shown.",
+      });
+
+      expect([unnamed.status, holders.status, worded.status]).toStrictEqual([400, 200, 400]);
       expect(calls.map((call) => call[3])).toStrictEqual([
         { basis: "accountHolder", source: "Account sign-up" },
       ]);
@@ -1066,7 +1072,23 @@ describe("subscriptions", () => {
 
       const holder = yield* signingUp({ basis: "accountHolder", source: "Account sign-up" });
 
-      expect([consented.status, customer.status, holder.status]).toStrictEqual([201, 201, 201]);
+      // ADR-0046: an account holder was shown nothing, so a wording is refused, not dropped.
+      const worded = yield* respond(
+        send(
+          "POST",
+          "/subscriptions",
+          JSON.stringify({
+            listId,
+            email,
+            consent: { basis: "accountHolder", source: "Account sign-up", wording: "Updates." },
+          }),
+          scoped,
+        ),
+      );
+
+      expect([consented.status, customer.status, holder.status, worded.status]).toStrictEqual([
+        201, 201, 201, 400,
+      ]);
       expect(subscriptions.map((subscription) => subscription.ip)).toStrictEqual([
         undefined,
         undefined,

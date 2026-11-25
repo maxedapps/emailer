@@ -16,7 +16,7 @@
 ## Decision
 
 1. **A third basis, `accountHolder`, with its own record.** `{ basis: "accountHolder", listId, source, ip?, subscribedAt }`: where the account was opened (or the import that brought it), from which address when the caller saw one, and when. It holds no `wording`, since nothing was agreed to or shown. Records of the other bases are unchanged.
-2. **The basis block is a union by basis.** `consent` and `existingCustomer` take `{ basis, source, wording }`; `accountHolder` takes `{ basis, source }`, and a `wording` sent with it is ignored, as any unknown field is.
+2. **The basis block is a union by basis.** `consent` and `existingCustomer` take `{ basis, source, wording }`; `accountHolder` takes `{ basis, source }`, and a `wording` sent with it is refused (`400`), as the API refuses any field it does not know, so no caller believes it recorded one.
 3. **A sign-up treats an account holder as an existing customer.** Only a single opt-in key enrols one (`403 Forbidden` for a double opt-in key, whose confirmation would turn it into consent). It never lifts an opt-out: an address that left the list answers `409 AddressOptedOut` and stays out. It mails nothing, as no single opt-in sign-up does.
 4. **An import always names its basis.** `POST /lists/:listId/contacts` takes `consent: { basis, source, wording? }` with `basis` required. `lists import` requires `--basis` once any evidence flag is given, `--source` with every basis, `--wording` with `consent` and `existingCustomer` and never with `accountHolder`; the CLI refuses any other mix before the first request.
 5. **A sign-up keeps `consent` as its default basis.** A public double opt-in form can name no other, and the live one sends none.

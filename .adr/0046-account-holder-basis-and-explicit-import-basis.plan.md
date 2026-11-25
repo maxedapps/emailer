@@ -26,3 +26,7 @@ Task 4797, part 3. [ADR-0046](0046-account-holder-basis-and-explicit-import-basi
 ## Ops after landing
 
 - Prod deploy. On emailer prod, the account lists (prod and dev), new single opt-in keys covering the product's three lists each, stored with the list ids in the product's vaults; the old keys stay valid until the product runs the new ones.
+
+## Settled findings
+
+- **Codex review of 5584472, medium: an account holder's `wording` answers 400, though ADR-0046 and the README said it is ignored.** Real, and the stage hand check saw the same. The API refuses unknown fields everywhere (`onExcessProperty: "error"`), and the CLI refuses the flag, so the contract changed to match: a wording with `accountHolder` is refused (`400`), so no caller believes it was recorded. ADR-0046 decision 2 and the README say so; `Api.test.ts` checks the 400 on both the sign-up and the import.
