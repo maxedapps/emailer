@@ -1,6 +1,6 @@
 # ADR-0045: Per-list opt-outs, legal bases and a status read for integrations
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-11-25
 - Authority: On 2026-11-25 (task 4797) the operator approved a list that a product site enrols people into through the API, with the emailer as the only store of its membership, evidence and opt-outs. He decided that an opt-out applies to its own list only, reversing his decision of 2026-11-18 (task 4068); that a single opt-in sign-up with a consent record lifts that list's opt-out, with no double opt-in to rejoin; that an existing customer enrolled after a purchase is recorded as its own legal basis and never lifts an opt-out; that a scoped key may read an address's status on its lists; and that an import may carry its evidence.
 - Amends:

@@ -40,3 +40,6 @@ Task 4797. [ADR-0045](0045-per-list-opt-outs-legal-bases-and-status-read.md) hol
 - None: the Infinite orchestrator chose separate dev lists and the names above.
 
 ## Settled findings
+
+- medium bug: deploying before the migration lets an opt-out between the deploy and the migration be undone, since the migration deletes the item's legacy `rejoined` lists from `optOuts` — investigated: a strongly consistent count over prod's whole table found no item holding `rejoined` before the deploy, and the new code never writes it, so the migration has nothing to undo; its run after the deploy confirms the count.
+- medium bug: import evidence rests on an unguarded membership read, so two overlapping imports of one contact into one list can both record a join, and a membership removed mid-import comes back without evidence — dropped: only the operator's CLI imports, one batch after another; a condition and retry for concurrent imports of the same contact guard a case that does not occur.
