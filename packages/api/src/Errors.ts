@@ -35,7 +35,7 @@ export class ApiKeyNotFound extends Schema.TaggedError<
   }
 }
 
-/** A scoped key may not act on the list the request names. */
+/** A scoped key may not act on the list the request names, or not in the way it asks. */
 export class Forbidden extends Schema.TaggedError<Forbidden, { readonly brand: unique symbol }>()(
   "Forbidden",
   {},
@@ -83,8 +83,8 @@ export class EmailAlreadyUsed extends Schema.TaggedError<
 }
 
 /**
- * The address left a list: the contact holding it may not move to another address, and a single
- * opt-in sign-up may not rejoin the list it left (ADR-0037).
+ * The address left a list: the contact holding it may not move to another address, and an existing
+ * customer may not be enrolled back onto the list it left (ADR-0045).
  */
 export class AddressOptedOut extends Schema.TaggedError<
   AddressOptedOut,

@@ -39,6 +39,7 @@ import { unusedAudience, unusedCampaigns } from "../storage/Testing.ts";
 
 import type { ApiKeyOperations, StoredApiKey } from "../storage/ApiKeys.ts";
 import type { AudienceOperations } from "../storage/Audience.ts";
+import type { DirectSubscription } from "../storage/Subscriptions.ts";
 import type { CampaignControl, CampaignStoreOperations } from "../storage/Campaigns.ts";
 
 /**
@@ -112,7 +113,6 @@ const record = {
   email,
   status: "mailable" as const,
   optOuts: [],
-  rejoined: [],
   transientBounces: [],
   consents: [],
   pending: [],
@@ -858,7 +858,9 @@ describe("keys", () => {
 describe("subscriptions", () => {
   const scoped = { authorization: `Bearer ${scopedKey}` };
 
-  const subscribing = (fields: { readonly listId?: string; readonly consent?: undefined } = {}) =>
+  const subscribing = (
+    fields: { readonly listId?: string; readonly consent?: object | undefined } = {},
+  ) =>
     send(
       "POST",
       "/subscriptions",
@@ -971,24 +973,95 @@ describe("subscriptions", () => {
     [
       "a new subscriber",
       SubscriptionState.NotSubscribed(),
+      {},
       201,
       `{"_tag":"Subscribed","listId":"${listId}"}`,
     ],
     [
-      "an address that left the list",
+      "an address that left the list, on consent",
       SubscriptionState.OptedOut(),
+      {},
+      201,
+      `{"_tag":"Subscribed","listId":"${listId}"}`,
+    ],
+    [
+      "an existing customer who left the list",
+      SubscriptionState.OptedOut(),
+      { consent: { basis: "existingCustomer", source: "Checkout", wording: "Updates follow." } },
       409,
       `{"_tag":"AddressOptedOut","email":"${email}"}`,
     ],
   ] as const)(
     "answers a single opt-in sign-up of %s with its status and body",
-    ([_label, state, status, body]) =>
+    ([_label, state, fields, status, body]) =>
       Effect.gen(function* () {
         const { respond } = yield* api(signUpDirectly(state));
-        const response = yield* respond(subscribing());
+        const response = yield* respond(subscribing(fields));
 
         expect([response.status, response.body]).toStrictEqual([status, body]);
       }),
+  );
+
+  it.effect("reads a sign-up without basis or IP as consent, and one as an existing customer", () =>
+    Effect.gen(function* () {
+      const subscriptions: Array<DirectSubscription> = [];
+      const { confirmUrl: _, ...singleKey } = storedKey;
+
+      const { respond } = yield* api({
+        keys: { getKey: () => Effect.succeed(singleKey) },
+        audience: {
+          subscriptionState: () => Effect.succeed(SubscriptionState.NotSubscribed()),
+          subscribeDirectly: (subscription) =>
+            Effect.sync(() => {
+              subscriptions.push(subscription);
+            }),
+        },
+      });
+
+      const signingUp = (consent: typeof Schemas.Consent.Encoded) =>
+        respond(send("POST", "/subscriptions", JSON.stringify({ listId, email, consent }), scoped));
+
+      const consented = yield* signingUp({ source: "Settings", wording: "Send me updates." });
+
+      const customer = yield* signingUp({
+        basis: "existingCustomer",
+        source: "Checkout",
+        wording: "We will send you updates; object at any time.",
+      });
+
+      expect([consented.status, customer.status]).toStrictEqual([201, 201]);
+      expect(subscriptions.map((subscription) => subscription.ip)).toStrictEqual([
+        undefined,
+        undefined,
+      ]);
+      expect(subscriptions.map((subscription) => subscription.consent)).toStrictEqual([
+        { basis: "consent", source: "Settings", wording: "Send me updates." },
+        {
+          basis: "existingCustomer",
+          source: "Checkout",
+          wording: "We will send you updates; object at any time.",
+        },
+      ]);
+    }),
+  );
+
+  it.effect("answers a status read with the state, and 403 for a list outside the key", () =>
+    Effect.gen(function* () {
+      const { respond } = yield* api({
+        audience: { subscriptionState: () => Effect.succeed(SubscriptionState.OptedOut()) },
+      });
+
+      const reading = (target: string) =>
+        respond(
+          send("POST", "/subscriptions/status", JSON.stringify({ listId: target, email }), scoped),
+        );
+
+      const read = yield* reading(listId);
+      const refused = yield* reading(campaignId);
+
+      expect([read.status, read.body]).toStrictEqual([200, `{"status":"optedOut"}`]);
+      expect([refused.status, refused.body]).toStrictEqual([403, `{"_tag":"Forbidden"}`]);
+    }),
   );
 
   it.effect("opts out with 204, and answers 403 for a list outside the key", () =>
@@ -1058,7 +1131,11 @@ describe("subscriptions", () => {
             payload: {
               listId,
               email,
-              consent: { source: "Website footer", wording: "Send me the newsletter." },
+              consent: {
+                basis: "consent",
+                source: "Website footer",
+                wording: "Send me the newsletter.",
+              },
               ip: "203.0.113.7",
             },
           }),

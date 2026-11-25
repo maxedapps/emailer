@@ -7,15 +7,16 @@ import {
 import * as Schemas from "@emailer/api/Schemas";
 import { Data, DateTime, Duration, Effect } from "effect";
 
-import { itemWriter, str, strSet, tableLogicalId } from "./Items.ts";
+import { itemWriter, str, tableLogicalId } from "./Items.ts";
 import {
   PendingSubscription,
-  addressKey,
   consentKey,
+  joinedAtOnce,
   pendingKey,
   optedOutOf,
   readAddressState,
   readPending,
+  rejoinAction,
   writeConsent,
 } from "./Addresses.ts";
 import {
@@ -60,13 +61,20 @@ export const SubscriptionState = Data.taggedEnum<SubscriptionState>();
 export type SubscriptionRequest = Omit<PendingSubscription, "ttl">;
 
 /**
- * A single opt-in sign-up (ADR-0037): whom to add and how, the consent evidence, and the identifier
- * a new contact would take.
+ * A single opt-in sign-up (ADR-0037): whom to add and how, its basis and evidence, the identifier a
+ * new contact would take, and whether it brings the address back onto a list it left (ADR-0045).
  */
-export type DirectSubscription = Omit<SubscriptionRequest, "requestedAt" | "secretHash"> & {
+export interface DirectSubscription {
+  readonly email: string;
+  readonly listId: string;
+  readonly name?: string | undefined;
+  readonly attributes?: Schemas.ContactAttributes | undefined;
+  readonly consent: Schemas.Consent;
+  readonly ip?: string | undefined;
   readonly contactId: string;
   readonly subscribedAt: string;
-};
+  readonly rejoin: boolean;
+}
 
 /** A confirmation link used, and the identifier a new contact would take. */
 export interface SubscriptionConfirmation {
@@ -210,8 +218,9 @@ export const subscriptionOperations = (
   });
 
   /**
-   * A single opt-in: joins the list and records the consent in one transaction, with no link to
-   * confirm. It never lifts an opt-out; the caller refuses an address that left the list.
+   * A single opt-in: joins the list and records its basis in one transaction, with no link to
+   * confirm. The caller decides whether it may bring back an address that left the list; `rejoin`
+   * lifts that list's opt-out in the same transaction.
    */
   const subscribeDirectly = Effect.fn("Storage.subscribeDirectly")(function* (
     subscription: DirectSubscription,
@@ -238,21 +247,21 @@ export const subscriptionOperations = (
       subscribedAt,
     );
 
+    const joined = yield* consentedJoin(
+      candidate,
+      holders,
+      joinedAtOnce(listId, subscription.consent, subscription.ip, subscribedAt),
+    );
+
     return yield* transact(
       "subscribeDirectly",
-      yield* consentedJoin(candidate, holders, {
-        listId,
-        source: subscription.source,
-        wording: subscription.wording,
-        ip: subscription.ip,
-        subscribedAt,
-      }),
+      subscription.rejoin ? [...joined, rejoinAction(email, listId)] : joined,
     );
   }, retryLostRace);
 
   /**
    * Joins the pending subscriber to the list as an import would, records the consent, consumes the
-   * link and lifts the list's opt-out, in one transaction.
+   * link and lifts the list's opt-out if it has one, in one transaction.
    *
    * The pending item is deleted first, conditioned on the secret: a link used twice, even at once,
    * joins once, and the second use answers `ConfirmationNotFound`, which is not retried. An expired
@@ -298,19 +307,8 @@ export const subscriptionOperations = (
       confirmedAt,
     );
 
-    // The opt-outs stay as evidence; the confirmed list alone is let back in.
-    const rejoin: Array<Action<never>> = optedOutOf(address, listId)
-      ? [
-          {
-            Update: {
-              Table: tableLogicalId,
-              Key: addressKey(email),
-              UpdateExpression: "ADD rejoined :list",
-              ExpressionAttributeValues: { ":list": strSet([listId]) },
-            },
-          },
-        ]
-      : [];
+    // The confirmed mail proves the mailbox's owner wants back onto this list.
+    const rejoin = optedOutOf(address, listId) ? [rejoinAction(email, listId)] : [];
 
     const actions: ReadonlyArray<Action<ConfirmationNotFound | ContactChanged>> = [
       {

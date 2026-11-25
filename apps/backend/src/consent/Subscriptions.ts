@@ -87,11 +87,12 @@ const requestConfirmation = Effect.fn("Subscriptions.requestConfirmation")(funct
 });
 
 /**
- * A single opt-in (ADR-0037): the subscriber joins at once, with the sign-up as the consent
- * evidence.
+ * A single opt-in (ADR-0037): the subscriber joins at once, with the sign-up as the evidence of its
+ * basis. `rejoin` brings back an address that left the list (ADR-0045).
  */
 const subscribeDirectly = Effect.fn("Subscriptions.subscribeDirectly")(function* (
   payload: Schemas.SubscribePayload,
+  rejoin: boolean,
 ) {
   const audience = yield* AudienceStore;
 
@@ -100,29 +101,35 @@ const subscribeDirectly = Effect.fn("Subscriptions.subscribeDirectly")(function*
     listId: payload.listId,
     name: payload.name,
     attributes: payload.attributes,
-    source: payload.consent.source,
-    wording: payload.consent.wording,
+    consent: payload.consent,
     ip: payload.ip,
     contactId: yield* newIdentifier,
     subscribedAt: yield* nowIso,
+    rejoin,
   });
 
   return Schemas.Subscribed.make({ listId: payload.listId });
 });
 
 /**
- * A site's sign-up, as its key opts in. A double opt-in key starts the confirmation: nothing joins
- * the list here; the subscriber does, once they use the mailed link, which also takes them back
- * after they left. A single opt-in key joins them at once, but never back onto a list they left:
- * anyone can type an address into a form, and only the mailbox's owner may undo its opt-out.
+ * A site's sign-up, as its key opts in and on the basis it names (ADR-0045). A double opt-in key
+ * starts the confirmation: nothing joins the list here; the subscriber does, once they use the
+ * mailed link, which also takes them back after they left. A single opt-in key joins them at once;
+ * on consent that brings back an address that left the list too. An existing customer never comes
+ * back that way: they objected, and buying again is no new consent. Only a single opt-in key
+ * enrols one, since a confirmation would turn it into consent.
  */
 export const subscribe = Effect.fn("Subscriptions.subscribe")(function* (
   payload: Schemas.SubscribePayload,
 ) {
   const integration = yield* Integration;
   const audience = yield* AudienceStore;
+  const existingCustomer = payload.consent.basis === "existingCustomer";
 
-  if (!integration.lists.includes(payload.listId)) {
+  if (
+    !integration.lists.includes(payload.listId) ||
+    (existingCustomer && OptIn.$is("Double")(integration.optIn))
+  ) {
     return yield* new Forbidden();
   }
 
@@ -135,14 +142,43 @@ export const subscribe = Effect.fn("Subscriptions.subscribe")(function* (
       OptIn.$match(integration.optIn, {
         Double: ({ confirmUrl }) => requestConfirmation(payload, confirmUrl),
         Single: () =>
-          Effect.fail(new AddressOptedOut({ email: Schemas.mailboxKey(payload.email) })),
+          existingCustomer
+            ? Effect.fail(new AddressOptedOut({ email: Schemas.mailboxKey(payload.email) }))
+            : subscribeDirectly(payload, true),
       }),
     NotSubscribed: () =>
       OptIn.$match(integration.optIn, {
         Double: ({ confirmUrl }) => requestConfirmation(payload, confirmUrl),
-        Single: () => subscribeDirectly(payload),
+        Single: () => subscribeDirectly(payload, false),
       }),
   });
+});
+
+/** Each sign-up state as the status read names it. */
+const statusOf = {
+  Undeliverable: "undeliverable",
+  Subscribed: "subscribed",
+  OptedOut: "optedOut",
+  NotSubscribed: "notSubscribed",
+} as const satisfies Record<SubscriptionState["_tag"], Schemas.SubscriptionStatus["status"]>;
+
+/**
+ * Where an address stands with one of the key's lists, as a sign-up would find it (ADR-0045): for a
+ * signed-in user's own settings, read server to server, never from a public form.
+ */
+export const status = Effect.fn("Subscriptions.status")(function* (
+  payload: Schemas.ListAddressPayload,
+) {
+  const integration = yield* Integration;
+  const audience = yield* AudienceStore;
+
+  if (!integration.lists.includes(payload.listId)) {
+    return yield* new Forbidden();
+  }
+
+  const state = yield* audience.subscriptionState(payload.listId, payload.email);
+
+  return Schemas.SubscriptionStatus.make({ status: statusOf[state._tag] });
 });
 
 /** A confirmation link's token: `<mailbox>.<listId>.<secret>`. */
@@ -193,7 +229,9 @@ export const confirm = Effect.fn("Subscriptions.confirm")(function* (
  * An opt-out from the site's own unsubscribe link (ADR-0037): the same write as the service's
  * signed link, so repeating it changes nothing.
  */
-export const optOut = Effect.fn("Subscriptions.optOut")(function* (payload: Schemas.OptOutPayload) {
+export const optOut = Effect.fn("Subscriptions.optOut")(function* (
+  payload: Schemas.ListAddressPayload,
+) {
   const integration = yield* Integration;
   const audience = yield* AudienceStore;
 

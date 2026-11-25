@@ -188,19 +188,10 @@ describe("subscriptionState", () => {
       [addressItem({ optOuts: { SS: [listId] } })],
       SubscriptionState.OptedOut(),
     ],
-    // ADR-0041: leaving any list keeps every list away, until a confirmed sign-up rejoins it.
+    // ADR-0045: leaving one list keeps the others.
     [
       "a member who left another list",
       [addressItem({ optOuts: { SS: [otherListId] } }), reservation, membership],
-      SubscriptionState.OptedOut(),
-    ],
-    [
-      "a member who left another list and rejoined this one",
-      [
-        addressItem({ optOuts: { SS: [otherListId] }, rejoined: { SS: [listId] } }),
-        reservation,
-        membership,
-      ],
       SubscriptionState.Subscribed(),
     ],
     [
@@ -338,46 +329,44 @@ describe("confirmSubscription", () => {
       }),
   );
 
-  it.effect(
-    "joins the contact holding the address, and rejoins only this list, keeping the opt-outs",
-    () =>
-      Effect.gen(function* () {
-        const table = holding(
-          [pendingItem, list, reservation, addressItem({ optOuts: { SS: [listId, otherListId] } })],
-          [succeeded],
-        );
+  it.effect("joins the contact holding the address, and lifts this list's opt-out alone", () =>
+    Effect.gen(function* () {
+      const table = holding(
+        [pendingItem, list, reservation, addressItem({ optOuts: { SS: [listId, otherListId] } })],
+        [succeeded],
+      );
 
-        yield* confirming(table);
+      yield* confirming(table);
 
-        expect(table.transactionRequests[0]?.TransactItems).toStrictEqual([
-          pendingDelete,
-          {
-            ConditionCheck: {
-              Table: tableLogicalId,
-              Key: { pk: { S: `CONTACT#${contactId}` }, sk: { S: "META" } },
-              ConditionExpression: "attribute_exists(pk)",
-            },
+      expect(table.transactionRequests[0]?.TransactItems).toStrictEqual([
+        pendingDelete,
+        {
+          ConditionCheck: {
+            Table: tableLogicalId,
+            Key: { pk: { S: `CONTACT#${contactId}` }, sk: { S: "META" } },
+            ConditionExpression: "attribute_exists(pk)",
           },
-          {
-            ConditionCheck: {
-              Table: tableLogicalId,
-              Key: { pk: { S: `EMAIL#${email}` }, sk: { S: "META" } },
-              ConditionExpression: "contactId = :holder",
-              ExpressionAttributeValues: { ":holder": { S: contactId } },
-            },
+        },
+        {
+          ConditionCheck: {
+            Table: tableLogicalId,
+            Key: { pk: { S: `EMAIL#${email}` }, sk: { S: "META" } },
+            ConditionExpression: "contactId = :holder",
+            ExpressionAttributeValues: { ":holder": { S: contactId } },
           },
-          ...joins(contactId),
-          consentPut,
-          {
-            Update: {
-              Table: tableLogicalId,
-              Key: { pk: { S: addressPk }, sk: { S: "ADDRESS" } },
-              UpdateExpression: "ADD rejoined :list",
-              ExpressionAttributeValues: { ":list": { SS: [listId] } },
-            },
+        },
+        ...joins(contactId),
+        consentPut,
+        {
+          Update: {
+            Table: tableLogicalId,
+            Key: { pk: { S: addressPk }, sk: { S: "ADDRESS" } },
+            UpdateExpression: "DELETE optOuts :list",
+            ExpressionAttributeValues: { ":list": { SS: [listId] } },
           },
-        ]);
-      }),
+        },
+      ]);
+    }),
   );
 
   it.effect.each([
@@ -435,11 +424,15 @@ const subscription: DirectSubscription = {
   listId,
   name: "Sam",
   attributes: { page_path: "/waitlist" },
-  source: "Website footer",
-  wording: "Send me the monthly newsletter.",
+  consent: {
+    basis: "consent",
+    source: "Website footer",
+    wording: "Send me the monthly newsletter.",
+  },
   ip: "203.0.113.7",
   contactId: newContactId,
   subscribedAt,
+  rejoin: false,
 };
 
 const directConsentPut = {
@@ -459,7 +452,28 @@ const directConsentPut = {
   },
 };
 
-const subscribing = (table: Table) => operationsFor(table).subscribeDirectly(subscription);
+const subscribing = (table: Table, request = subscription) =>
+  operationsFor(table).subscribeDirectly(request);
+
+/** The writes that join the contact holding the address, before its consent record. */
+const heldJoin = [
+  {
+    ConditionCheck: {
+      Table: tableLogicalId,
+      Key: { pk: { S: `CONTACT#${contactId}` }, sk: { S: "META" } },
+      ConditionExpression: "attribute_exists(pk)",
+    },
+  },
+  {
+    ConditionCheck: {
+      Table: tableLogicalId,
+      Key: { pk: { S: `EMAIL#${email}` }, sk: { S: "META" } },
+      ConditionExpression: "contactId = :holder",
+      ExpressionAttributeValues: { ":holder": { S: contactId } },
+    },
+  },
+  ...joins(contactId, subscribedAt),
+];
 
 describe("subscribeDirectly", () => {
   it.effect("creates the contact with its attributes, joins it and records the consent", () =>
@@ -518,23 +532,66 @@ describe("subscribeDirectly", () => {
       yield* subscribing(table);
 
       expect(table.transactionRequests[0]?.TransactItems).toStrictEqual([
-        {
-          ConditionCheck: {
-            Table: tableLogicalId,
-            Key: { pk: { S: `CONTACT#${contactId}` }, sk: { S: "META" } },
-            ConditionExpression: "attribute_exists(pk)",
-          },
-        },
-        {
-          ConditionCheck: {
-            Table: tableLogicalId,
-            Key: { pk: { S: `EMAIL#${email}` }, sk: { S: "META" } },
-            ConditionExpression: "contactId = :holder",
-            ExpressionAttributeValues: { ":holder": { S: contactId } },
-          },
-        },
-        ...joins(contactId, subscribedAt),
+        ...heldJoin,
         directConsentPut,
+      ]);
+    }),
+  );
+
+  it.effect(
+    "lifts the list's opt-out in the same transaction when it brings the address back",
+    () =>
+      Effect.gen(function* () {
+        const table = holding([list, reservation], [succeeded]);
+
+        yield* subscribing(table, { ...subscription, rejoin: true });
+
+        expect(table.transactionRequests[0]?.TransactItems).toStrictEqual([
+          ...heldJoin,
+          directConsentPut,
+          {
+            Update: {
+              Table: tableLogicalId,
+              Key: { pk: { S: addressPk }, sk: { S: "ADDRESS" } },
+              UpdateExpression: "DELETE optOuts :list",
+              ExpressionAttributeValues: { ":list": { SS: [listId] } },
+            },
+          },
+        ]);
+      }),
+  );
+
+  it.effect("records an existing customer's basis, with no IP when none was seen", () =>
+    Effect.gen(function* () {
+      const table = holding([list, reservation], [succeeded]);
+      const { ip: _ip, ...withoutIp } = subscription;
+
+      yield* subscribing(table, {
+        ...withoutIp,
+        consent: {
+          basis: "existingCustomer",
+          source: "Checkout",
+          wording: "Updates; object any time.",
+        },
+      });
+
+      expect(table.transactionRequests[0]?.TransactItems).toStrictEqual([
+        ...heldJoin,
+        {
+          Put: {
+            ...directConsentPut.Put,
+            Item: {
+              pk: { S: addressPk },
+              sk: { S: `CONSENT#${listId}#${subscribedAt}` },
+              v: { N: "1" },
+              basis: { S: "existingCustomer" },
+              listId: { S: listId },
+              source: { S: "Checkout" },
+              wording: { S: "Updates; object any time." },
+              subscribedAt: { S: subscribedAt },
+            },
+          },
+        },
       ]);
     }),
   );

@@ -7,7 +7,7 @@ import { DateTime, Duration, Effect, Layer, Schema } from "effect";
 import { TestClock } from "effect/testing";
 import { createHash } from "node:crypto";
 
-import { confirm, optOut, subscribe } from "./Subscriptions.ts";
+import { confirm, optOut, status, subscribe } from "./Subscriptions.ts";
 import { Mail, Mailer, SendRejected, SubmissionUncertain } from "../sending/Mailer.ts";
 import { recentAllowance, SendGuard } from "../sending/SendGuard.ts";
 import { AudienceStore } from "../storage/Audience.ts";
@@ -34,8 +34,23 @@ const payload: Schemas.SubscribePayload = {
   listId,
   email: "Sam@example.com",
   name: "Sam",
-  consent: { source: "Website footer", wording: "Send me the monthly newsletter." },
+  consent: {
+    basis: "consent",
+    source: "Website footer",
+    wording: "Send me the monthly newsletter.",
+  },
   ip: "203.0.113.7",
+};
+
+/** A buyer enrolled after checkout, server to server, so with no IP (ADR-0045). */
+const customer: Schemas.SubscribePayload = {
+  listId,
+  email: "Sam@example.com",
+  consent: {
+    basis: "existingCustomer",
+    source: "Checkout",
+    wording: "We will send you product updates; object at any time.",
+  },
 };
 
 interface Scenario {
@@ -401,11 +416,11 @@ describe("subscribe with a single opt-in key", () => {
           listId,
           name: "Sam",
           attributes: { page_path: "/waitlist" },
-          source: "Website footer",
-          wording: "Send me the monthly newsletter.",
+          consent: payload.consent,
           ip: "203.0.113.7",
           contactId,
           subscribedAt: "2026-09-25T10:00:00.000Z",
+          rejoin: false,
         },
       ]);
       expect(fix.requests).toHaveLength(0);
@@ -422,11 +437,32 @@ describe("subscribe with a single opt-in key", () => {
     }),
   );
 
+  // ADR-0045: a signed-in user's new consent is the proof that they want back in.
+  it.effect("brings an address that left the list back on a new consent", () =>
+    Effect.gen(function* () {
+      const fix = single({ state: SubscriptionState.OptedOut() });
+
+      expect(yield* signingUp(fix)).toStrictEqual(Schemas.Subscribed.make({ listId }));
+      expect(fix.joins).toMatchObject([{ consent: payload.consent, rejoin: true }]);
+    }),
+  );
+
+  it.effect("enrols an existing customer without an IP", () =>
+    Effect.gen(function* () {
+      const fix = single();
+
+      expect(yield* signingUp(fix, customer)).toStrictEqual(Schemas.Subscribed.make({ listId }));
+      expect(fix.joins).toMatchObject([
+        { consent: customer.consent, ip: undefined, rejoin: false },
+      ]);
+    }),
+  );
+
   it.effect.each([
     [
-      "an address that left the list, which stays out",
+      "an existing customer who left the list, who stays out",
       { state: SubscriptionState.OptedOut() },
-      payload,
+      customer,
       new Errors.AddressOptedOut({ email: "sam@example.com" }),
     ],
     [
@@ -447,14 +483,59 @@ describe("subscribe with a single opt-in key", () => {
       const fix = single(scenario);
 
       expect(yield* Effect.flip(signingUp(fix, request))).toStrictEqual(error);
+      expect(fix.joins).toHaveLength(0);
       expect(fix.requests).toHaveLength(0);
       expect(fix.sent).toHaveLength(0);
     }),
   );
 });
 
+describe("subscribe an existing customer with a double opt-in key", () => {
+  it.effect("refuses, since a confirmation would turn the enrolment into consent", () =>
+    Effect.gen(function* () {
+      const fix = fixture();
+
+      expect(yield* Effect.flip(signingUp(fix, customer))).toStrictEqual(new Errors.Forbidden());
+      expect(fix.requests).toHaveLength(0);
+      expect(fix.sent).toHaveLength(0);
+    }),
+  );
+});
+
+describe("status", () => {
+  const reading = (fix: ReturnType<typeof fixture>, request: Schemas.ListAddressPayload) =>
+    status(request).pipe(Effect.provide(fix.layer));
+
+  it.effect.each([
+    [SubscriptionState.Subscribed(), "subscribed"],
+    [SubscriptionState.NotSubscribed(), "notSubscribed"],
+    [SubscriptionState.OptedOut(), "optedOut"],
+    [SubscriptionState.Undeliverable({ reason: "bouncing" }), "undeliverable"],
+  ] as const)("answers %s as %s", ([state, expected]) =>
+    Effect.gen(function* () {
+      const fix = fixture({ state });
+
+      expect(yield* reading(fix, { listId, email: "Sam@example.com" })).toStrictEqual({
+        status: expected,
+      });
+    }),
+  );
+
+  it.effect("refuses a list the key does not cover", () =>
+    Effect.gen(function* () {
+      const fix = fixture({ state: SubscriptionState.Subscribed() });
+
+      expect(
+        yield* Effect.flip(
+          reading(fix, { listId: "0195f0a0-1111-4222-8333-44444444309e", email: "a@example.com" }),
+        ),
+      ).toStrictEqual(new Errors.Forbidden());
+    }),
+  );
+});
+
 describe("optOut", () => {
-  const optingOut = (fix: ReturnType<typeof fixture>, request: Schemas.OptOutPayload) =>
+  const optingOut = (fix: ReturnType<typeof fixture>, request: Schemas.ListAddressPayload) =>
     optOut(request).pipe(Effect.provide(fix.layer));
 
   it.effect("opts the address out of a list the key covers", () =>

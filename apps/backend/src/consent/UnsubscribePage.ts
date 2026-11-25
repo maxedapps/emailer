@@ -32,13 +32,13 @@ ${body}
 const confirmation = HttpServerResponse.html(
   page(
     "Unsubscribe",
-    `<p>Confirm that you no longer want to receive any emails from us.</p>
+    `<p>Confirm that you no longer want to receive emails from this list.</p>
 <form method="post"><button type="submit">Unsubscribe me</button></form>`,
   ),
 );
 
 const confirmed = HttpServerResponse.html(
-  page("You are unsubscribed", "<p>You will not receive emails from us again.</p>"),
+  page("You are unsubscribed", "<p>You will not receive emails from this list again.</p>"),
 );
 
 const notFound = HttpServerResponse.text(page("Link not valid", "<p>This link is not valid.</p>"), {

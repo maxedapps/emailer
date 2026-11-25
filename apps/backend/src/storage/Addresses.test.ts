@@ -157,7 +157,7 @@ describe("optOut", () => {
         {
           Key: key,
           UpdateExpression:
-            "SET v = if_not_exists(v, :v), email = if_not_exists(email, :email) ADD optOuts :list REMOVE rejoined",
+            "SET v = if_not_exists(v, :v), email = if_not_exists(email, :email) ADD optOuts :list",
           ExpressionAttributeValues: { ...stampValues, ":list": { SS: [listId] } },
         },
       ]);
@@ -188,22 +188,13 @@ describe("addressStatus", () => {
     }),
   );
 
-  // ADR-0041: leaving one list keeps every list away, until a confirmed sign-up rejoins one.
-  it.effect(
-    "reports an address that left another list as unsubscribed, unless it rejoined this one",
-    () =>
-      Effect.gen(function* () {
-        const left = operationsFor(holding(stored(optedOut)));
-
-        expect(yield* left.addressStatus(email, otherListId)).toBe("unsubscribed");
-
-        // The table answers one read each.
-        const rejoined = () =>
-          operationsFor(holding(stored({ ...optedOut, rejoined: { SS: [otherListId] } })));
-
-        expect(yield* rejoined().addressStatus(email, otherListId)).toBe("mailable");
-        expect(yield* rejoined().addressStatus(email, listId)).toBe("unsubscribed");
-      }),
+  // ADR-0045: leaving one list keeps that list away and no other.
+  it.effect("reports an address that left another list only as mailable", () =>
+    Effect.gen(function* () {
+      expect(
+        yield* operationsFor(holding(stored(optedOut))).addressStatus(email, otherListId),
+      ).toBe("mailable");
+    }),
   );
 
   it.effect("reports a mailbox nothing was ever recorded for as mailable", () =>
@@ -349,7 +340,6 @@ describe("addressRecord", () => {
           email: "User@Example.com",
           status: "suppressed",
           optOuts: [listId],
-          rejoined: [],
           suppression: { reason: "bounce", suppressedAt: createdAt, bounceSubType: "General" },
           transientBounces: occurrences,
           consents: [consent, directConsent],
@@ -376,7 +366,6 @@ describe("addressRecord", () => {
         email,
         status: "mailable",
         optOuts: [],
-        rejoined: [],
         transientBounces: [],
         consents: [],
         pending: [],

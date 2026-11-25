@@ -353,9 +353,10 @@ class KeysGroup extends HttpApiGroup.make("keys")
 
 /**
  * What an integrating site calls with its scoped key: a sign-up, which a double opt-in key confirms
- * through the link it mails and a single opt-in key joins at once, and an opt-out from the site's
- * own unsubscribe link. A site can show one message for every sign-up answer, so its form never
- * tells a visitor whether an address is subscribed.
+ * through the link it mails and a single opt-in key joins at once; an opt-out from the site's own
+ * unsubscribe link or settings; and a status read for a signed-in user's own address. A public
+ * form shows one message for every sign-up answer and never reads the status, so it never tells a
+ * visitor whether an address is subscribed.
  */
 class SubscriptionsGroup extends HttpApiGroup.make("subscriptions")
   .add(
@@ -367,7 +368,8 @@ class SubscriptionsGroup extends HttpApiGroup.make("subscriptions")
         Schemas.AlreadySubscribed,
       ],
       // A confirmation mail checks the account and its reputation alarms before it goes out; a
-      // single opt-in joins as a confirmation does.
+      // single opt-in joins as a confirmation does. `Forbidden` also answers an existing customer
+      // sent through a double opt-in key.
       error: [
         ...storage,
         Errors.Forbidden,
@@ -396,8 +398,14 @@ class SubscriptionsGroup extends HttpApiGroup.make("subscriptions")
     }),
     // The same opt-out as the unsubscribe link in the service's own mail, and as idempotent.
     HttpApiEndpoint.post("optOut", "/opt-out", {
-      payload: Schemas.OptOutPayload,
+      payload: Schemas.ListAddressPayload,
       success: HttpApiSchema.NoContent,
+      error: [...storage, Errors.Forbidden],
+    }),
+    // A POST, so the address stays out of URLs and access logs.
+    HttpApiEndpoint.post("status", "/status", {
+      payload: Schemas.ListAddressPayload,
+      success: Schemas.SubscriptionStatus,
       error: [...storage, Errors.Forbidden],
     }),
   )

@@ -1,10 +1,11 @@
 import * as Schemas from "@emailer/api/Schemas";
-import { Effect, FileSystem, Schema } from "effect";
+import { Effect, FileSystem, Option, Schema } from "effect";
 import { CliError, Command, Flag } from "effect/cli";
 
 import { inBatches, report, withClient } from "../Client.ts";
 import { decodeCsvContacts } from "../CsvContacts.ts";
 import { entityPageFlags, idArgument, memberPageFlags, pageQuery } from "../Flags.ts";
+import { refuse } from "../Terminal.ts";
 
 const listsCreate = Command.make(
   "create",
@@ -145,15 +146,51 @@ const importFile = Flag.File("file", { mustExist: true }).pipe(
   ),
 );
 
-/** A file of any size, several batches at a time, as `inBatches` sends it. */
+/**
+ * A file of any size, several batches at a time, as `inBatches` sends it. Every batch carries the
+ * evidence, if given, which the list records for each contact newly added to it (ADR-0045).
+ */
 const listsImport = Command.make(
   "import",
-  { listId: idArgument("listId"), file: importFile },
+  {
+    listId: idArgument("listId"),
+    file: importFile,
+    source: Flag.String("source").pipe(
+      Flag.withDescription("Evidence: where these contacts agreed, such as a sign-up form"),
+      Flag.withSchema(Schemas.EntityName),
+      Flag.optional,
+    ),
+    wording: Flag.String("wording").pipe(
+      Flag.withDescription("Evidence: the exact text they agreed to or were shown"),
+      Flag.withSchema(Schemas.ConsentWording),
+      Flag.optional,
+    ),
+    basis: Flag.Literals("basis", ["consent", "existingCustomer"]).pipe(
+      Flag.withDescription("Evidence: their legal basis, consent unless given"),
+      Flag.optional,
+    ),
+  },
   Effect.fn(function* (input) {
+    const evidence = Option.all({ source: input.source, wording: input.wording });
+
+    if (Option.isNone(evidence) && [input.source, input.wording, input.basis].some(Option.isSome)) {
+      return yield* refuse("Pass --source and --wording together to record evidence");
+    }
+
+    const consent = Option.match(evidence, {
+      onNone: () => ({}),
+      onSome: (given) => ({
+        consent: { basis: Option.getOrElse(input.basis, () => "consent" as const), ...given },
+      }),
+    });
+
     const contacts = yield* inBatches(
       input.file.contacts,
       (client, batch) =>
-        client.lists.import({ params: { listId: input.listId }, payload: { contacts: batch } }),
+        client.lists.import({
+          params: { listId: input.listId },
+          payload: { contacts: batch, ...consent },
+        }),
       "Imported",
     );
 
@@ -170,6 +207,11 @@ const listsImport = Command.make(
       command: "emailer lists import 0195f0a0-1111-4222-8333-44444444109e --file export.csv",
       description:
         "Load a CSV export: an email column, an optional name, other columns as attributes",
+    },
+    {
+      command:
+        'emailer lists import 0195f0a0-1111-4222-8333-44444444109e --file customers.csv --basis existingCustomer --source "Checkout" --wording "We send customers product updates; object at any time."',
+      description: "Load contacts and record the evidence of each one newly added to the list",
     },
   ]),
 );

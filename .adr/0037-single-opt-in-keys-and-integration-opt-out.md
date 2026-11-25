@@ -6,6 +6,7 @@
 - Amends [ADR-0027](0027-signup-api-scoped-keys-and-double-opt-in.md): decision 3 (double opt-in only) and the scoped key's shape in decision 2.
 - Plan: [0037-single-opt-in-keys-and-integration-opt-out.plan.md](0037-single-opt-in-keys-and-integration-opt-out.plan.md)
 - Amended by [ADR-0041](0041-personalized-templates.md): `POST /subscriptions/opt-out` keeps the address from every list's campaigns, as a campaign's unsubscribe link does.
+- Amended by [ADR-0045](0045-per-list-opt-outs-legal-bases-and-status-read.md): an opt-out keeps the address from its own list only; a single opt-in sign-up on consent lifts that list's opt-out (decision 3); the consent record gains an existing-customer shape and `ip` is optional (decision 2).
 
 ## Context
 

@@ -568,13 +568,23 @@ describe("importContacts", () => {
   const listFound = Effect.succeed({ Item: listKey });
 
   /** The list is there for the first read and for the one a raced import retries with. */
-  const importInto = (replies: ScriptedReplies, candidates: ReadonlyArray<Schemas.Contact>) => {
+  const importInto = (
+    replies: ScriptedReplies,
+    candidates: ReadonlyArray<Schemas.Contact>,
+    consent?: Schemas.Consent,
+  ) => {
     const table = scriptedTable({ getItem: [listFound, listFound], ...replies });
 
     return {
       table,
-      run: operationsFor(table).importContacts(listId, candidates, createdAt),
+      run: operationsFor(table).importContacts(listId, candidates, createdAt, consent),
     };
+  };
+
+  const evidence: Schemas.Consent = {
+    basis: "existingCustomer",
+    source: "Customer import",
+    wording: "Customers get product updates and may object at any time.",
   };
 
   it.effect("creates a contact, reserves its address and joins it, in one transaction", () =>
@@ -706,7 +716,7 @@ describe("importContacts", () => {
       }),
   );
 
-  it.effect("stays inside the transaction action limit at a full batch", () =>
+  it.effect("stays inside the transaction action limit at a full batch with evidence", () =>
     Effect.gen(function* () {
       const candidates = Array.from({ length: Schemas.maxBatchEntries }, (_, index) =>
         candidate(
@@ -718,6 +728,7 @@ describe("importContacts", () => {
       const { table, run } = importInto(
         { batchGetItem: [succeeded], transactWriteItems: [succeeded] },
         candidates,
+        evidence,
       );
 
       yield* run;
@@ -725,8 +736,80 @@ describe("importContacts", () => {
       const actions = table.transactionRequests[0]?.TransactItems ?? [];
 
       // DynamoDB refuses a transaction of more than 100 actions.
-      expect(actions).toHaveLength(Schemas.maxBatchEntries * 4);
+      expect(actions).toHaveLength(Schemas.maxBatchEntries * 5);
       expect(actions.length).toBeLessThanOrEqual(100);
+    }),
+  );
+
+  it.effect("records the evidence of each new member, and none for one already on the list", () =>
+    Effect.gen(function* () {
+      const memberId = "0195f0a0-1111-4222-8333-44444444c003";
+
+      const { table, run } = importInto(
+        {
+          batchGetItem: [
+            Effect.succeed({
+              Responses: {
+                [physicalName]: [
+                  reservationFor("held@example.com", otherContactId),
+                  reservationFor("member@example.com", memberId),
+                ],
+              },
+            }),
+            Effect.succeed({ Responses: { [physicalName]: [memberRow(listId, memberId)] } }),
+          ],
+          transactWriteItems: [succeeded],
+        },
+        [
+          candidate(contactId, "new@example.com"),
+          candidate("0195f0a0-1111-4222-8333-44444444c004", "held@example.com"),
+          candidate("0195f0a0-1111-4222-8333-44444444c005", "member@example.com"),
+        ],
+        evidence,
+      );
+
+      yield* run;
+
+      // Only the contacts that already hold their address are looked up on the list.
+      expect(table.batchGetItemRequests[1]?.RequestItems[tableLogicalId]?.Keys).toStrictEqual([
+        { pk: { S: `LIST#${listId}` }, sk: { S: `MEMBER#${otherContactId}` } },
+        { pk: { S: `LIST#${listId}` }, sk: { S: `MEMBER#${memberId}` } },
+      ]);
+
+      const records = (table.transactionRequests[0]?.TransactItems ?? []).flatMap((action) =>
+        action.Put?.Item?.["sk"]?.S?.startsWith("CONSENT#") === true ? [action.Put] : [],
+      );
+
+      expect(records).toStrictEqual(
+        ["new@example.com", "held@example.com"].map((email) => ({
+          Table: tableLogicalId,
+          Item: {
+            pk: { S: `ADDRESS#${email}` },
+            sk: { S: `CONSENT#${listId}#${createdAt}` },
+            v: { N: "1" },
+            basis: { S: "existingCustomer" },
+            listId: { S: listId },
+            source: { S: evidence.source },
+            wording: { S: evidence.wording },
+            subscribedAt: { S: createdAt },
+          },
+          ConditionExpression: "attribute_not_exists(pk)",
+        })),
+      );
+    }),
+  );
+
+  it.effect("records no evidence for an import that carries none", () =>
+    Effect.gen(function* () {
+      const { table, run } = importInto(
+        { batchGetItem: [succeeded], transactWriteItems: [succeeded] },
+        [candidate(contactId, "sam@example.com")],
+      );
+
+      yield* run;
+
+      expect(table.batchGetItemRequests).toHaveLength(1);
+      expect(table.transactionRequests[0]?.TransactItems).toHaveLength(4);
     }),
   );
 

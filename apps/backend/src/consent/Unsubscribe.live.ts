@@ -86,8 +86,8 @@ export const unsubscribeSuite = (test: LiveTest) => {
 
         expect(repeated.status).toBe(200);
 
-        // ADR-0041: the opt-out keeps every list's campaigns away, not only this one's.
-        expect(yield* storage.addressStatus(address, yield* newIdentifier)).toBe("unsubscribed");
+        // ADR-0045: the opt-out keeps this list's campaigns away, and no other list's.
+        expect(yield* storage.addressStatus(address, yield* newIdentifier)).toBe("mailable");
 
         // Moving the contact to another mailbox would escape the opt-out, so it is refused.
         const moved = yield* Effect.result(

@@ -13,7 +13,6 @@ const local = {
   email,
   status: "suppressed" as const,
   optOuts: [],
-  rejoined: [],
   transientBounces: [],
   consents: [],
   pending: [],

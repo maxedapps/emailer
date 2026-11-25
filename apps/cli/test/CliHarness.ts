@@ -141,6 +141,7 @@ export const fakeService = (seed: Seed = {}) => {
       subscribe: unused("subscriptions.subscribe"),
       confirm: unused("subscriptions.confirm"),
       optOut: unused("subscriptions.optOut"),
+      status: unused("subscriptions.status"),
     }),
   );
 
@@ -346,7 +347,6 @@ export const fakeService = (seed: Seed = {}) => {
             email: request.query.email,
             status: "suppressed" as const,
             optOuts: [listId],
-            rejoined: [],
             suppression: { reason: "bounce" as const, suppressedAt: createdAt },
             transientBounces: [],
             consents: [],
@@ -360,7 +360,6 @@ export const fakeService = (seed: Seed = {}) => {
             email: request.payload.email,
             status: "mailable" as const,
             optOuts: [],
-            rejoined: [],
             transientBounces: [],
             consents: [],
             pending: [],

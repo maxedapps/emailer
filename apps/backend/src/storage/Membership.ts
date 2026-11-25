@@ -4,6 +4,7 @@ import * as Schemas from "@emailer/api/Schemas";
 import { Effect, Schema } from "effect";
 
 import { corrupt } from "../Errors.ts";
+import { consentKey, joinedAtOnce, writeConsent } from "./Addresses.ts";
 import {
   contactItem,
   contactKey,
@@ -451,7 +452,54 @@ export const membershipOperations = (
   });
 
   /**
-   * Loads a batch of contacts into a list in one transaction, joined as `joinActions` joins them.
+   * The consent records an import with evidence writes: one for each contact it newly adds to the
+   * list, dated by the import, and none for a member already there, so a repeated import records
+   * nothing new (ADR-0045). Each is append-only, as a sign-up's is.
+   */
+  const importEvidence = Effect.fnUntraced(function* (
+    listId: string,
+    candidates: ReadonlyArray<Schemas.Contact>,
+    holders: ReadonlyMap<string, string>,
+    consent: Schemas.Consent,
+    addedAt: string,
+  ) {
+    const holderOf = (candidate: Schemas.Contact) =>
+      holders.get(Schemas.mailboxKey(candidate.email));
+
+    const members = new Set<string>();
+
+    const held = candidates.flatMap((candidate) => holderOf(candidate) ?? []);
+
+    for (const item of yield* readItems(
+      "importContacts",
+      held.map((contactId) => memberKey(listId, contactId)),
+    )) {
+      members.add((yield* readMember("importContacts", item)).contactId);
+    }
+
+    const record = yield* writeConsent(joinedAtOnce(listId, consent, undefined, addedAt));
+
+    return candidates.flatMap((candidate): ReadonlyArray<Action<ContactChanged>> => {
+      const contactId = holderOf(candidate);
+
+      return contactId !== undefined && members.has(contactId)
+        ? []
+        : [
+            {
+              Put: {
+                Table: tableLogicalId,
+                Item: { ...consentKey(candidate.email, listId, addedAt), ...record },
+                ConditionExpression: "attribute_not_exists(pk)",
+              },
+              refused: () => new ContactChanged(),
+            },
+          ];
+    });
+  });
+
+  /**
+   * Loads a batch of contacts into a list in one transaction, joined as `joinActions` joins them,
+   * with the evidence of each new member when the import carries it (`importEvidence`).
    *
    * The list is read, not checked inside the transaction. Its `META` shares a partition with every
    * member item, so a transactional check would lock the one partition a large import already
@@ -466,6 +514,7 @@ export const membershipOperations = (
     listId: string,
     candidates: ReadonlyArray<Schemas.Contact>,
     addedAt: string,
+    consent?: Schemas.Consent,
   ) {
     const [list, holders] = yield* Effect.all(
       [
@@ -500,7 +549,12 @@ export const membershipOperations = (
     const updates = yield* contactUpdates(candidates, holders, records);
     const joined = yield* joinActions(listId, candidates, holders, updates, addedAt);
 
-    yield* transact("importContacts", joined.actions);
+    const evidence =
+      consent === undefined
+        ? []
+        : yield* importEvidence(listId, candidates, holders, consent, addedAt);
+
+    yield* transact("importContacts", [...joined.actions, ...evidence]);
 
     return joined.result;
   }, retryLostRace);

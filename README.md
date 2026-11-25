@@ -11,8 +11,8 @@ Self-hosted marketing email over Amazon SES. Deploy it to your own AWS account, 
 - **Variants:** up to 50 alternate copies in one campaign, sent by contact attribute or as a random or weighted split ([Different copies for different members](#different-copies-for-different-members)).
 - **Drafting:** preview links that open on any device, the copy one contact would get, `[Test]` copies to up to 20 addresses, and a dry run that renders every recipient without sending.
 - **Delivery:** send now or schedule for later; cancel a pending send and resume a paused one.
-- **Sign-ups:** an API for your website's newsletter form, with double or single opt-in per key, stored consent evidence and an opt-out endpoint for the site's own unsubscribe links, reached with scoped keys ([Sign-ups from your website](#sign-ups-from-your-website)).
-- **Compliance:** one-click unsubscribe (`List-Unsubscribe` and `List-Unsubscribe-Post`) that keeps every list's campaigns away, and your postal address in every message.
+- **Sign-ups:** an API for your website's newsletter form or account settings, with double or single opt-in per key, consent or existing-customer evidence, a status read and an opt-out endpoint for the site's own unsubscribe links, reached with scoped keys ([Sign-ups from your website](#sign-ups-from-your-website)).
+- **Compliance:** one-click unsubscribe (`List-Unsubscribe` and `List-Unsubscribe-Post`) that keeps the list's campaigns away, and your postal address in every message.
 - **Opens:** unique and total opens per campaign and per copy, and who opened when ([Opens](#opens)).
 - **List hygiene:** bounced and complaining addresses are suppressed automatically. A campaign pauses itself when its list bounces or complains too much, and all sending stops when the whole SES account's reputation alarms fire or SES puts the account under review.
 - **Pacing:** sends stay within your SES rate and daily quota, with an optional daily cap of your own.
@@ -359,17 +359,17 @@ Each command below is run as `pnpm emailer <command>`. `[…]` marks an optional
 
 **Lists**
 
-| Command                                                    | What it does                                                               |
-| ---------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `lists create --name <name>`                               | Create a list                                                              |
-| `lists get <listId>`                                       | Show a list                                                                |
-| `lists list [--limit <n>] [--cursor <cursor>]`             | List lists in the order they were created                                  |
-| `lists members <listId> [--limit <n>] [--cursor <cursor>]` | List a list's contacts                                                     |
-| `lists rename <listId> --name <name>`                      | Rename a list                                                              |
-| `lists add-contact <listId> <contactId>`                   | Add a contact to a list; repeating it changes nothing                      |
-| `lists remove-contact <listId> <contactId>`                | Remove a contact from a list; repeating it changes nothing                 |
-| `lists import <listId> --file <file>`                      | Create or find the contacts in a JSON or CSV file and add them to the list |
-| `lists delete <listId>`                                    | Delete a list and its memberships; its contacts stay                       |
+| Command                                                                                      | What it does                                                                                                           |
+| -------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `lists create --name <name>`                                                                 | Create a list                                                                                                          |
+| `lists get <listId>`                                                                         | Show a list                                                                                                            |
+| `lists list [--limit <n>] [--cursor <cursor>]`                                               | List lists in the order they were created                                                                              |
+| `lists members <listId> [--limit <n>] [--cursor <cursor>]`                                   | List a list's contacts                                                                                                 |
+| `lists rename <listId> --name <name>`                                                        | Rename a list                                                                                                          |
+| `lists add-contact <listId> <contactId>`                                                     | Add a contact to a list; repeating it changes nothing                                                                  |
+| `lists remove-contact <listId> <contactId>`                                                  | Remove a contact from a list; repeating it changes nothing                                                             |
+| `lists import <listId> --file <file> [--source <source> --wording <text> [--basis <basis>]]` | Create or find the contacts in a JSON or CSV file and add them to the list, recording the evidence for each new member |
+| `lists delete <listId>`                                                                      | Delete a list and its memberships; its contacts stay                                                                   |
 
 **Campaigns**
 
@@ -427,9 +427,9 @@ Each command below is run as `pnpm emailer <command>`. `[…]` marks an optional
   - `uncertain`: SES's answer was lost.
 - **`campaigns preview`:** `{ url, expiresAt }`; with `--as`, `{ copy, subject, text, html? }`.
 - **`campaigns check`:** `{ members, filteredOut, skipped, rendered, failures, fallbacks, oddValues, showOne }`. `skipped` counts `unsubscribed`, `suppressed` and `bouncing`; `rendered` counts per copy; `failures` lists `{ email, copy, message }`; `fallbacks` maps `"<copy>: contact.<field>"` to the addresses it falls back for; `oddValues` lists `{ email, copy, field, problem }`; `showOne` is the command that shows one recipient's copy.
-- **`addresses status` / `unsuppress`:** `{ email, status, optOuts, rejoined, suppression?, transientBounces, consents, pending, accountSuppression }`.
-  - `status` is the mailbox's: `mailable`, `suppressed` or `bouncing`. `optOuts` lists the lists the address left, and `rejoined` the lists it confirmed a double opt-in to since. While `optOuts` has an entry, only the `rejoined` lists' campaigns mail it, whatever `status` says.
-  - `consents` holds one record per opt-in: a confirmed double opt-in as `{ listId, source, wording, ip, requestedAt, confirmedAt, confirmIp }`, a single opt-in as `{ listId, source, wording, ip, subscribedAt }`. `pending` holds the sign-ups still waiting for confirmation: `{ listId, requestedAt, expiresAt }`.
+- **`addresses status` / `unsuppress`:** `{ email, status, optOuts, suppression?, transientBounces, consents, pending, accountSuppression }`.
+  - `status` is the mailbox's: `mailable`, `suppressed` or `bouncing`. `optOuts` lists the lists the address left; their campaigns don't mail it, whatever `status` says.
+  - `consents` holds one record per opt-in: a confirmed double opt-in as `{ listId, source, wording, ip?, requestedAt, confirmedAt, confirmIp }`, a single opt-in or an import on consent as `{ listId, source, wording, ip?, subscribedAt }`, an existing customer as `{ basis: "existingCustomer", listId, source, wording, ip?, subscribedAt }`. `pending` holds the sign-ups still waiting for confirmation: `{ listId, requestedAt, expiresAt }`.
 - **`keys create`:** `{ id, name, lists, confirmUrl, createdAt, key }`, without `confirmUrl` for a single opt-in key. `keys list` prints the same without `key`. **`keys revoke`:** `{ id, revoked: true }`.
 - **A failure** goes to stderr as the error the API answered, named by its `_tag`, and the command exits non-zero:
   - **400** for a request the contract refuses, including a value over a limit below;
@@ -465,7 +465,8 @@ Each command below is run as `pnpm emailer <command>`. `[…]` marks an optional
 - `lists import` sends the file 20 contacts per call, 4 calls at a time: about 250 contacts a second into one list, near the most DynamoDB takes for one list without throttling. A call that fails in transit, times out or answers 408, 429 or 5xx is sent again for about two minutes. Progress goes to stderr every 1,000 contacts. If the import stops, stderr says how many contacts went in; running the same file again completes it.
 - A `.csv` file is read as CSV. The header's `email` and `name` columns match in any case, and every other column becomes an attribute named by its header, so delete export columns you don't want first. Empty cells are left out. A missing `email` column or a column named twice is rejected, and a row that fails the checks is named by its line.
 - `--filter` keeps members whose attributes equal every `key=value` (AND). Omit it for the whole list. Members that don't match are left out entirely and are not counted in `skipped`.
-- An opt-out keeps every list's campaigns away: a campaign's unsubscribe link records the campaign's list as left, and from then on no campaign or test send mails the address, whatever list it goes to. It holds the address, not the contact, so deleting the contact and creating another at the same address does not make it mailable. While an address has an opt-out from any list, moving its contact onto a different address answers **409** `AddressOptedOut`. Imports, the CLI and single opt-in sign-ups never lift an opt-out; only the address's own confirmed (double opt-in) sign-up to a list does, for that list alone, until the next opt-out.
+- An opt-out keeps its own list's campaigns away ([ADR-0045](.adr/0045-per-list-opt-outs-legal-bases-and-status-read.md)): a campaign's unsubscribe link records the campaign's list as left, and from then on no campaign or test send to that list mails the address; other lists still do. It holds the address, not the contact, so deleting the contact and creating another at the same address does not make it mailable there. While an address has an opt-out from any list, moving its contact onto a different address answers **409** `AddressOptedOut`. Imports and the CLI never lift an opt-out; only the address's own sign-up to that list on consent does: a confirmed double opt-in, or a single opt-in sign-up. An existing customer's sign-up never does.
+- `lists import` with `--source` and `--wording` records that evidence for each contact the import newly adds to the list, with `--basis consent` (the default) or `existingCustomer`; a contact already on the list gets none, so running the file again records nothing new.
 - `addresses unsuppress` clears local suppression, the transient-bounce window and the SES **account** suppression list (one list per account and Region, shared with every other sender there). Redrive failed feedback first (see [Operate](#operate)): older feedback processed after the clear can restore the suppression or the transient-bounce window. SES stores suppression entries case-sensitively, so pass the address in the case SES stored it: as the contact holds it (`contacts by-email` shows it) or as `aws sesv2 list-suppressed-destinations` lists it. `addresses status` echoes the address you pass, so another case shows no account entry rather than an error. It never clears an opt-out.
 - Deleting a contact removes it from every list; deleting a list removes every membership in it. Neither deletes the other side. A delete that times out on a large list is safe to repeat.
 - Listings page in created order. A page's `nextCursor` is absent when there is nothing more; a full last page may still carry one that leads to an empty page.
@@ -486,7 +487,7 @@ Every campaign and test message carries the unsubscribe link and postal address 
 Your site's newsletter form can add subscribers. The site calls the API server to server with a scoped key, and the key decides how a sign-up opts in ([ADR-0037](.adr/0037-single-opt-in-keys-and-integration-opt-out.md)):
 
 - **Double opt-in** (a key with `--confirm-url`): the emailer mails a confirmation link, and the subscriber joins once they use it. The site hosts both the form and the confirm page.
-- **Single opt-in** (a key with `--single-opt-in`): the subscriber joins at once and no mail goes out. Use it only where the sign-up itself is the consent you need.
+- **Single opt-in** (a key with `--single-opt-in`): the subscriber joins at once and no mail goes out, even when the address left the list before. Use it only where the sign-up itself is the consent you need, such as a signed-in user's own settings; a public form without sign-in should use double opt-in, since anyone can type any address into it.
 
 Both store the consent evidence. Check for bots on your side (for example with a CAPTCHA) before calling.
 
@@ -499,7 +500,7 @@ pnpm emailer keys create --name "Waitlist" --list <listId> --single-opt-in
 
 - `keys create` takes exactly one of `--confirm-url <https-url>` (double opt-in) and `--single-opt-in`. A key's mode never changes; to switch, create a new key and revoke the old one.
 - The output's `key` (`emk.<id>.<secret>`) is shown **once**. Store it as the site's secret. The service keeps only its hash.
-- A key reaches only the sign-up endpoints below, only for its `--list`s (repeat the flag for several), and a double opt-in key's links point to its `--confirm-url`. The admin token is refused there, and a key is refused everywhere else.
+- A key reaches only the sign-up, status and opt-out endpoints below, only for its `--list`s (repeat the flag for several), and a double opt-in key's links point to its `--confirm-url`. The admin token is refused there, and a key is refused everywhere else.
 - Keys neither expire nor change. To rotate one, create a new key, switch the site to it, then `keys revoke <keyId>`. A revoked key stops working at once.
 
 ### Sign up: `POST /subscriptions`
@@ -513,6 +514,7 @@ Send the key as `Authorization: Bearer <key>` and a JSON body:
   "name": "Ada",
   "attributes": { "plan": "pro" },
   "consent": {
+    "basis": "consent",
     "source": "Website footer",
     "wording": "Send me the monthly newsletter. I can unsubscribe at any time."
   },
@@ -520,7 +522,7 @@ Send the key as `Authorization: Bearer <key>` and a JSON body:
 }
 ```
 
-`name` and `attributes` are optional. Attributes are stored only on a new contact; an address that already has one keeps its own, so a public form never overwrites what you set. `consent.wording` is the text the subscriber agreed to, `consent.source` names the form, and `ip` is the subscriber's address as your server saw it. All three are stored as consent evidence.
+`name`, `attributes` and `ip` are optional. Attributes are stored only on a new contact; an address that already has one keeps its own, so a public form never overwrites what you set. `consent.basis` is the legal basis: `consent` (the default when left out), or `existingCustomer` for a buyer enrolled after a purchase whose checkout told them so and offered to object. `consent.wording` is the text the subscriber agreed to or was shown, `consent.source` names the form or flow, and `ip` is the subscriber's address as your server saw it. All are stored as evidence.
 
 | Status | `_tag`                                                                                  | Meaning                                                                                            |
 | ------ | --------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
@@ -529,17 +531,17 @@ Send the key as `Authorization: Bearer <key>` and a JSON body:
 | 200    | `AlreadySubscribed`                                                                     | The address is already on the list; no mail went out                                               |
 | 400    |                                                                                         | The body breaks the contract, for example a missing `consent` or a value over a limit              |
 | 401    | `Unauthorized`                                                                          | A missing, wrong or revoked key                                                                    |
-| 403    | `Forbidden`                                                                             | The list is not one of the key's                                                                   |
+| 403    | `Forbidden`                                                                             | The list is not one of the key's, or `existingCustomer` through a double opt-in key                |
 | 404    | `ListNotFound`                                                                          | The list is gone                                                                                   |
-| 409    | `AddressOptedOut`                                                                       | Single opt-in: the address left this list, and stays out                                           |
+| 409    | `AddressOptedOut`                                                                       | `existingCustomer`: the address left this list, and stays out                                      |
 | 409    | `ContactChanged`                                                                        | Single opt-in: the contact changed while joining; try again                                        |
 | 422    | `AddressUndeliverable`                                                                  | The address is `suppressed` or `bouncing` (`reason`) until the operator unsuppresses it            |
 | 429    | `ConfirmationRecentlySent`                                                              | Double opt-in: a confirmation for this address and list went out within the hour; see `retryAfter` |
 | 503    | `SendingPaused`, `EmailServiceUnavailable`, `AlarmsUnavailable` or `StorageUnavailable` | Try again later                                                                                    |
 
-Show one "check your inbox" message for 202, 200 and 429 (double opt-in), or one "you're on the list" message for 201, 200 and `AddressOptedOut` (single opt-in), so the form never tells a visitor whether an address is subscribed or left.
+Show one "check your inbox" message for 202, 200 and 429 (double opt-in), or one "you're on the list" message for 201 and 200 (single opt-in), so the form never tells a visitor whether an address is subscribed.
 
-A single opt-in sign-up joins the list as an import does, creating the contact (with `name` and `attributes`) if no one holds the address, and records the consent (`source`, `wording`, `ip`, `subscribedAt`), which `addresses status` shows. It never lifts an opt-out: anyone can type an address into a form, so an address that left the list rejoins only through a double opt-in key.
+A single opt-in sign-up joins the list as an import does, creating the contact (with `name` and `attributes`) if no one holds the address, and records the evidence (`basis` for an existing customer, `source`, `wording`, `ip`, `subscribedAt`), which `addresses status` shows. On consent it also lifts the address's opt-out from that list, so a user who turns a list back on in their settings receives it again. An existing customer is enrolled only through a single opt-in key and never lifts an opt-out: one who left the list answers 409 and stays out.
 
 The double opt-in confirmation mail is neutral and in English. It names the list and links to the key's confirm page with a `token` query parameter added (the page's own query is kept). The link works for 7 days; the mail says to ignore it if the reader did not sign up, and carries your postal address.
 
@@ -580,7 +582,23 @@ For the unsubscribe links in mail your site sends itself: any key, of either mod
 | 403    | `Forbidden`          | The list is not one of the key's     |
 | 503    | `StorageUnavailable` | Try again later                      |
 
-It is the same opt-out as a campaign's unsubscribe link: it keeps every list's campaigns from mailing the address, whether or not it was a member and even after an import adds it again, and only the address's own confirmed double opt-in sign-up to a list makes it mailable there again. Repeating it changes nothing and still answers 204.
+It is the same opt-out as a campaign's unsubscribe link: it keeps that list's campaigns from mailing the address, whether or not it was a member and even after an import adds it again, and only the address's own sign-up to that list on consent makes it mailable there again. Repeating it changes nothing and still answers 204.
+
+### Status: `POST /subscriptions/status`
+
+For a signed-in user's own settings page: where an address stands with one of the key's lists, as a sign-up would find it. Call it server to server with any key, never from a public form, since it tells whether an address is on a list:
+
+```json
+{ "listId": "<listId>", "email": "ada@example.com" }
+```
+
+| Status | `_tag`               | Meaning                                                                                                                      |
+| ------ | -------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| 200    |                      | `{ "status": … }`: `subscribed`, `notSubscribed`, `optedOut` (left the list) or `undeliverable` (`suppressed` or `bouncing`) |
+| 400    |                      | The body breaks the contract                                                                                                 |
+| 401    | `Unauthorized`       | A missing, wrong or revoked key                                                                                              |
+| 403    | `Forbidden`          | The list is not one of the key's                                                                                             |
+| 503    | `StorageUnavailable` | Try again later                                                                                                              |
 
 ### Example: a single opt-in waitlist
 

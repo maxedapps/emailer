@@ -11,6 +11,7 @@
   - [ADR-0028](0028-campaign-variants-and-attribute-merge.md): import merges name and attributes into an existing contact.
 - Plan: [0041-personalized-templates.plan.md](0041-personalized-templates.plan.md)
 - Amended by [ADR-0042](0042-open-tracking.md), decision 7: links still carry no per-person code, but campaign mail now carries SES's open pixel, and who opened is recorded.
+- Amended by [ADR-0045](0045-per-list-opt-outs-legal-bases-and-status-read.md), decision 4: an opt-out keeps the address from its own list only, and `rejoined` is gone.
 
 ## Context
 

@@ -40,5 +40,5 @@ export const importContacts = Effect.fn("Lists.importContacts")(function* (
     ),
   );
 
-  return yield* storage.importContacts(listId, candidates, addedAt);
+  return yield* storage.importContacts(listId, candidates, addedAt, payload.consent);
 });

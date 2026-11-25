@@ -120,6 +120,80 @@ describe("list management from the command line", () => {
     }),
   );
 
+  it.effect("sends the import's evidence with every batch", () =>
+    Effect.gen(function* () {
+      const service = fakeService({ lists: [readers] });
+
+      const run = yield* runCli(service, [
+        "lists",
+        "import",
+        listId,
+        "--file",
+        yield* importFile(subscribers(Schemas.maxBatchEntries + 1)),
+        "--basis",
+        "existingCustomer",
+        "--source",
+        "Checkout",
+        "--wording",
+        "Customers get product updates.",
+      ]);
+
+      const consent = {
+        basis: "existingCustomer",
+        source: "Checkout",
+        wording: "Customers get product updates.",
+      };
+
+      expect(Exit.isSuccess(run.exit)).toBe(true);
+      expect(service.payloadsOf("lists.import")).toMatchObject([{ consent }, { consent }]);
+    }),
+  );
+
+  it.effect("records consent unless the evidence names another basis", () =>
+    Effect.gen(function* () {
+      const service = fakeService({ lists: [readers] });
+
+      const run = yield* runCli(service, [
+        "lists",
+        "import",
+        listId,
+        "--file",
+        yield* importFile(subscribers(1)),
+        "--source",
+        "Sign-up form",
+        "--wording",
+        "Send me the newsletter.",
+      ]);
+
+      expect(Exit.isSuccess(run.exit)).toBe(true);
+      expect(service.payloadsOf("lists.import")).toMatchObject([
+        { consent: { basis: "consent", source: "Sign-up form" } },
+      ]);
+    }),
+  );
+
+  it.effect("refuses evidence without both its source and its wording, before any request", () =>
+    Effect.gen(function* () {
+      const service = fakeService({ lists: [readers] });
+
+      const run = yield* runCli(service, [
+        "lists",
+        "import",
+        listId,
+        "--file",
+        yield* importFile(subscribers(1)),
+        "--basis",
+        "existingCustomer",
+        "--source",
+        "Checkout",
+      ]);
+
+      expect(Exit.isFailure(run.exit)).toBe(true);
+      expect(run.stderr).toContain("Pass --source and --wording together");
+      expect(service.payloadsOf("lists.import")).toHaveLength(0);
+    }),
+  );
+
   // Live: the retry backs off on the clock, from half a second.
   it.live("sends a call again when the service could not complete it", () =>
     Effect.gen(function* () {

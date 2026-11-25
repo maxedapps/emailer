@@ -1,4 +1,4 @@
-import { DateTime, Option, Schema, SchemaTransformation } from "effect";
+import { DateTime, Effect, Option, Schema, SchemaTransformation } from "effect";
 
 export const maxNameLength = 200;
 
@@ -483,10 +483,7 @@ export const MailboxStatus = Schema.Literals(["mailable", "suppressed", "bouncin
 
 export type MailboxStatus = typeof MailboxStatus.Type;
 
-/**
- * Whether a mailbox takes mail from one list: `unsubscribed` means it opted out of some list and has
- * not confirmed this one since (ADR-0041).
- */
+/** Whether a mailbox takes mail from one list: `unsubscribed` means it opted out of that list. */
 export const AddressStatus = Schema.Literals([
   "mailable",
   "unsubscribed",
@@ -527,12 +524,33 @@ export const ConsentWording = Schema.String.check(
 /** An address as the calling site saw it, kept as consent evidence rather than parsed. */
 export const IpAddress = Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(maxIpLength));
 
-/** What the subscriber agreed to, where, and from which address, whichever way they joined. */
+/**
+ * Why a member may be mailed (ADR-0045): they agreed (`consent`), or they bought and were told they
+ * may object (`existingCustomer`, §7(3) UWG). Only consent brings back an address that left a list.
+ */
+const ConsentBasis = Schema.Literals(["consent", "existingCustomer"]);
+
+/**
+ * The basis of a sign-up or an import, where it happened (the form, page or checkout the caller
+ * names) and the wording shown, exactly. The basis is `consent` unless named.
+ */
+export const Consent = Schema.Struct({
+  basis: ConsentBasis.pipe(Schema.withDecodingDefaultKey(Effect.succeed("consent"))),
+  source: EntityName,
+  wording: ConsentWording,
+});
+
+export type Consent = typeof Consent.Type;
+
+/**
+ * What the member agreed to or was told, where, and from which address when the caller saw one,
+ * whichever way they joined.
+ */
 const consentEvidence = {
   listId: EntityId,
   source: EntityName,
   wording: ConsentWording,
-  ip: IpAddress,
+  ip: Schema.optional(IpAddress),
 };
 
 /** A double opt-in: asked for on the site, then confirmed through the mailed link. */
@@ -543,11 +561,25 @@ const DoubleOptInConsent = Schema.Struct({
   confirmIp: IpAddress,
 });
 
-/** A single opt-in: the site's sign-up joined the list at once (ADR-0037). */
+/** A single opt-in, or an import on consent: the member joined at once (ADR-0037). */
 const SingleOptInConsent = Schema.Struct({ ...consentEvidence, subscribedAt: Timestamp });
 
-/** The evidence of one opt-in. Each way of joining has its own timestamps, which tell them apart. */
-export const ConsentRecord = Schema.Union([DoubleOptInConsent, SingleOptInConsent]);
+/** An existing customer enrolled after a purchase, or imported as one (ADR-0045). */
+const ExistingCustomerRecord = Schema.Struct({
+  basis: Schema.Literal("existingCustomer"),
+  ...consentEvidence,
+  subscribedAt: Timestamp,
+});
+
+/**
+ * The evidence a member may be mailed. Each way of joining has its own shape, which tells them
+ * apart; the existing customer's comes first, since it holds a single opt-in's fields too.
+ */
+export const ConsentRecord = Schema.Union([
+  ExistingCustomerRecord,
+  DoubleOptInConsent,
+  SingleOptInConsent,
+]);
 
 export type ConsentRecord = typeof ConsentRecord.Type;
 
@@ -562,15 +594,13 @@ export type PendingConfirmation = typeof PendingConfirmation.Type;
 
 /**
  * Account-list presence is always reported: `null` means SES has no entry. `optOuts` names the
- * lists the address left, and `rejoined` the lists it confirmed by double opt-in since its latest
- * opt-out: while it has an opt-out, only those lists may mail it (ADR-0041). The local suppression
- * is an optional key because it may not exist.
+ * lists the address left, which may not mail it (ADR-0045). The local suppression is an optional
+ * key because it may not exist.
  */
 export const AddressRecord = Schema.Struct({
   email: ListedEmailAddress,
   status: MailboxStatus,
   optOuts: Schema.Array(EntityId),
-  rejoined: Schema.Array(EntityId),
   suppression: Schema.optionalKey(
     Schema.Struct({
       reason: SuppressionReason,
@@ -715,8 +745,13 @@ const eachMailboxOnce = Schema.makeFilter(
 /** A whole import file as the CLI reads it, of any size; it sends the file in payloads. */
 export const ImportContactsFile = Schema.Struct({ contacts: importEntries }).check(eachMailboxOnce);
 
+/**
+ * One batch of an import. `consent`, when given, is recorded for each contact the batch newly adds
+ * to the list (ADR-0045).
+ */
 export const ImportContactsPayload = Schema.Struct({
   contacts: importEntries.check(Schema.isMaxLength(maxBatchEntries)),
+  consent: Schema.optionalKey(Consent),
 }).check(eachMailboxOnce);
 
 export type ImportContactsPayload = typeof ImportContactsPayload.Type;
@@ -878,12 +913,9 @@ export const CreatedApiKey = Schema.Struct({ ...ApiKey.fields, key: Schema.Strin
 
 export type CreatedApiKey = typeof CreatedApiKey.Type;
 
-/** What the subscriber agreed to, and where: the form, page or campaign the site names. */
-const Consent = Schema.Struct({ source: EntityName, wording: ConsentWording });
-
 /**
  * A sign-up from an integrating site. `ip` is the subscriber's address as the site saw it, kept as
- * consent evidence.
+ * evidence; a server-side enrolment that saw none leaves it out.
  */
 export const SubscribePayload = Schema.Struct({
   listId: EntityId,
@@ -891,7 +923,7 @@ export const SubscribePayload = Schema.Struct({
   name: Schema.optional(EntityName),
   attributes: Schema.optional(ContactAttributes),
   consent: Consent,
-  ip: IpAddress,
+  ip: Schema.optional(IpAddress),
 });
 
 export type SubscribePayload = typeof SubscribePayload.Type;
@@ -922,10 +954,20 @@ export type ConfirmPayload = typeof ConfirmPayload.Type;
 /** The subscriber is on the list. */
 export const Subscribed = Schema.TaggedStruct("Subscribed", { listId: EntityId });
 
-/** An opt-out the site received through its own unsubscribe link, for one of the key's lists. */
-export const OptOutPayload = Schema.Struct({ listId: EntityId, email: EmailAddress });
+/** An address on one of the key's lists: to opt out, or to read its status. */
+export const ListAddressPayload = Schema.Struct({ listId: EntityId, email: EmailAddress });
 
-export type OptOutPayload = typeof OptOutPayload.Type;
+export type ListAddressPayload = typeof ListAddressPayload.Type;
+
+/**
+ * Where an address stands with a list, as a sign-up would find it. `undeliverable` (suppressed or
+ * bouncing) answers ahead of `optedOut`.
+ */
+export const SubscriptionStatus = Schema.Struct({
+  status: Schema.Literals(["subscribed", "notSubscribed", "optedOut", "undeliverable"]),
+});
+
+export type SubscriptionStatus = typeof SubscriptionStatus.Type;
 
 /** Where a campaign check continues: after the member it last read. */
 export const CheckPayload = Schema.Struct({ cursor: Schema.optional(EntityId) });
