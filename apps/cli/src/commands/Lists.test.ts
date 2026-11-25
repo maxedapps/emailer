@@ -149,30 +149,7 @@ describe("list management from the command line", () => {
     }),
   );
 
-  it.effect("records consent unless the evidence names another basis", () =>
-    Effect.gen(function* () {
-      const service = fakeService({ lists: [readers] });
-
-      const run = yield* runCli(service, [
-        "lists",
-        "import",
-        listId,
-        "--file",
-        yield* importFile(subscribers(1)),
-        "--source",
-        "Sign-up form",
-        "--wording",
-        "Send me the newsletter.",
-      ]);
-
-      expect(Exit.isSuccess(run.exit)).toBe(true);
-      expect(service.payloadsOf("lists.import")).toMatchObject([
-        { consent: { basis: "consent", source: "Sign-up form" } },
-      ]);
-    }),
-  );
-
-  it.effect("refuses evidence without both its source and its wording, before any request", () =>
+  it.effect("records an account holder's basis with its source and no wording", () =>
     Effect.gen(function* () {
       const service = fakeService({ lists: [readers] });
 
@@ -183,13 +160,52 @@ describe("list management from the command line", () => {
         "--file",
         yield* importFile(subscribers(1)),
         "--basis",
-        "existingCustomer",
+        "accountHolder",
         "--source",
-        "Checkout",
+        "Account sign-up",
+      ]);
+
+      expect(Exit.isSuccess(run.exit)).toBe(true);
+      expect(service.payloadsOf("lists.import")).toStrictEqual([
+        {
+          contacts: [expect.anything()],
+          consent: { basis: "accountHolder", source: "Account sign-up" },
+        },
+      ]);
+    }),
+  );
+
+  const refusals = [
+    {
+      case: "no basis, which would claim consent nobody chose",
+      flags: ["--source", "Account sign-up", "--wording", "Send me updates."],
+    },
+    {
+      case: "a basis without its wording",
+      flags: ["--basis", "existingCustomer", "--source", "Checkout"],
+    },
+    { case: "a basis without its source", flags: ["--basis", "accountHolder"] },
+    {
+      case: "wording for an account holder, who was shown none",
+      flags: ["--basis", "accountHolder", "--source", "Account sign-up", "--wording", "Updates."],
+    },
+  ];
+
+  it.effect.each(refusals)("refuses evidence with $case, before any request", ({ flags }) =>
+    Effect.gen(function* () {
+      const service = fakeService({ lists: [readers] });
+
+      const run = yield* runCli(service, [
+        "lists",
+        "import",
+        listId,
+        "--file",
+        yield* importFile(subscribers(1)),
+        ...flags,
       ]);
 
       expect(Exit.isFailure(run.exit)).toBe(true);
-      expect(run.stderr).toContain("Pass --source and --wording together");
+      expect(run.stderr).toContain("Evidence needs --basis and --source");
       expect(service.payloadsOf("lists.import")).toHaveLength(0);
     }),
   );

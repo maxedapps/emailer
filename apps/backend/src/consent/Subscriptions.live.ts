@@ -139,7 +139,7 @@ export const subscriptionsSuite = (test: LiveTest) => {
     );
 
     test(
-      "adds subscribers directly through a single opt-in key on either basis, reads their status, and opts out per list",
+      "adds subscribers directly through a single opt-in key on each basis, reads their status, and opts out per list",
       Effect.gen(function* () {
         const settings = yield* configuration;
         const admin = yield* makeEmailerClient(settings.apiUrl, settings.token);
@@ -147,10 +147,11 @@ export const subscriptionsSuite = (test: LiveTest) => {
         const runId = yield* newIdentifier;
         const list = yield* admin.lists.create({ payload: { name: `waitlist-${runId}` } });
         const updates = yield* admin.lists.create({ payload: { name: `updates-${runId}` } });
+        const accounts = yield* admin.lists.create({ payload: { name: `accounts-${runId}` } });
         const foreign = yield* admin.lists.create({ payload: { name: `foreign-${runId}` } });
 
         const created = yield* admin.keys.create({
-          payload: { name: `live-single-${runId}`, lists: [list.id, updates.id] },
+          payload: { name: `live-single-${runId}`, lists: [list.id, updates.id, accounts.id] },
         });
 
         expect(created).not.toHaveProperty("confirmUrl");
@@ -263,6 +264,36 @@ export const subscriptionsSuite = (test: LiveTest) => {
           wording: customer.consent.wording,
         });
         expect(enrolled).not.toHaveProperty("ip");
+
+        // ADR-0046: an account holder joins with no wording, and stays out once they left.
+        const holder = {
+          listId: accounts.id,
+          email: probe,
+          consent: { basis: "accountHolder", source: "Live suite account" },
+        } as const;
+
+        expect(yield* site.subscriptions.subscribe({ payload: holder })).toStrictEqual(
+          Schemas.Subscribed.make({ listId: accounts.id }),
+        );
+
+        const held = (yield* storage.addressRecord(probe)).consents.find(
+          (record) => record.listId === accounts.id,
+        );
+
+        expect(held).toMatchObject({
+          basis: "accountHolder",
+          listId: accounts.id,
+          source: holder.consent.source,
+        });
+        expect(held).not.toHaveProperty("wording");
+        expect(held).not.toHaveProperty("ip");
+
+        yield* site.subscriptions.optOut({ payload: { listId: accounts.id, email: probe } });
+
+        expect(yield* Effect.flip(site.subscriptions.subscribe({ payload: holder }))).toStrictEqual(
+          new Errors.AddressOptedOut({ email: probe }),
+        );
+        expect(yield* statusOf(accounts.id)).toBe("optedOut");
 
         expect(
           yield* Effect.flip(

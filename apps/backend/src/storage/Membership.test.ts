@@ -571,7 +571,7 @@ describe("importContacts", () => {
   const importInto = (
     replies: ScriptedReplies,
     candidates: ReadonlyArray<Schemas.Contact>,
-    consent?: Schemas.Consent,
+    consent?: Schemas.LegalBasis,
   ) => {
     const table = scriptedTable({ getItem: [listFound, listFound], ...replies });
 
@@ -581,7 +581,7 @@ describe("importContacts", () => {
     };
   };
 
-  const evidence: Schemas.Consent = {
+  const evidence: Schemas.LegalBasis = {
     basis: "existingCustomer",
     source: "Customer import",
     wording: "Customers get product updates and may object at any time.",

@@ -69,7 +69,7 @@ export interface DirectSubscription {
   readonly listId: string;
   readonly name?: string | undefined;
   readonly attributes?: Schemas.ContactAttributes | undefined;
-  readonly consent: Schemas.Consent;
+  readonly consent: Schemas.LegalBasis;
   readonly ip?: string | undefined;
   readonly contactId: string;
   readonly subscribedAt: string;

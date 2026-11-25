@@ -1,5 +1,5 @@
 import * as Schemas from "@emailer/api/Schemas";
-import { Effect, FileSystem, Option, Schema } from "effect";
+import { Effect, FileSystem, Option, Record, Schema } from "effect";
 import { CliError, Command, Flag } from "effect/cli";
 
 import { inBatches, report, withClient } from "../Client.ts";
@@ -146,6 +146,36 @@ const importFile = Flag.File("file", { mustExist: true }).pipe(
   ),
 );
 
+const decodeEvidence = Schema.decodeUnknownOption(Schemas.LegalBasis, {
+  onExcessProperty: "error",
+});
+
+/**
+ * The basis an import records, once any evidence flag is given: always named, with exactly the
+ * evidence that basis takes (ADR-0046), so no import is recorded on a basis nobody chose.
+ */
+const importEvidence = (flags: {
+  readonly basis: Option.Option<Schemas.LegalBasis["basis"]>;
+  readonly source: Option.Option<string>;
+  readonly wording: Option.Option<string>;
+}) => {
+  const given = Record.getSomes(flags);
+
+  if (Record.isEmptyRecord(given)) {
+    return Effect.succeed({});
+  }
+
+  return Option.match(decodeEvidence(given), {
+    onNone: () =>
+      Effect.fail(
+        refuse(
+          "Evidence needs --basis and --source, and --wording unless the basis is accountHolder, which takes none",
+        ),
+      ),
+    onSome: (consent) => Effect.succeed({ consent }),
+  });
+};
+
 /**
  * A file of any size, several batches at a time, as `inBatches` sends it. Every batch carries the
  * evidence, if given, which the list records for each contact newly added to it (ADR-0045).
@@ -155,41 +185,32 @@ const listsImport = Command.make(
   {
     listId: idArgument("listId"),
     file: importFile,
+    basis: Flag.Literals("basis", ["consent", "existingCustomer", "accountHolder"]).pipe(
+      Flag.withDescription("Evidence: their legal basis, required with any evidence"),
+      Flag.optional,
+    ),
     source: Flag.String("source").pipe(
-      Flag.withDescription("Evidence: where these contacts agreed, such as a sign-up form"),
+      Flag.withDescription("Evidence: where they agreed, bought or opened their account"),
       Flag.withSchema(Schemas.EntityName),
       Flag.optional,
     ),
     wording: Flag.String("wording").pipe(
-      Flag.withDescription("Evidence: the exact text they agreed to or were shown"),
+      Flag.withDescription(
+        "Evidence: the exact text they agreed to or were shown; none for accountHolder",
+      ),
       Flag.withSchema(Schemas.ConsentWording),
-      Flag.optional,
-    ),
-    basis: Flag.Literals("basis", ["consent", "existingCustomer"]).pipe(
-      Flag.withDescription("Evidence: their legal basis, consent unless given"),
       Flag.optional,
     ),
   },
   Effect.fn(function* (input) {
-    const evidence = Option.all({ source: input.source, wording: input.wording });
-
-    if (Option.isNone(evidence) && [input.source, input.wording, input.basis].some(Option.isSome)) {
-      return yield* refuse("Pass --source and --wording together to record evidence");
-    }
-
-    const consent = Option.match(evidence, {
-      onNone: () => ({}),
-      onSome: (given) => ({
-        consent: { basis: Option.getOrElse(input.basis, () => "consent" as const), ...given },
-      }),
-    });
+    const evidence = yield* importEvidence(input);
 
     const contacts = yield* inBatches(
       input.file.contacts,
       (client, batch) =>
         client.lists.import({
           params: { listId: input.listId },
-          payload: { contacts: batch, ...consent },
+          payload: { contacts: batch, ...evidence },
         }),
       "Imported",
     );
@@ -212,6 +233,11 @@ const listsImport = Command.make(
       command:
         'emailer lists import 0195f0a0-1111-4222-8333-44444444109e --file customers.csv --basis existingCustomer --source "Checkout" --wording "We send customers product updates; object at any time."',
       description: "Load contacts and record the evidence of each one newly added to the list",
+    },
+    {
+      command:
+        'emailer lists import 0195f0a0-1111-4222-8333-44444444109e --file accounts.csv --basis accountHolder --source "Account sign-up"',
+      description: "Load account holders, who may get service notices only, recording no wording",
     },
   ]),
 );

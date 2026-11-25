@@ -53,6 +53,13 @@ const customer: Schemas.SubscribePayload = {
   },
 };
 
+/** An account holder enrolled with their account, for service notices: no wording (ADR-0046). */
+const accountHolder: Schemas.SubscribePayload = {
+  listId,
+  email: "Sam@example.com",
+  consent: { basis: "accountHolder", source: "Account sign-up" },
+};
+
 interface Scenario {
   readonly optIn?: OptIn;
   readonly state?: SubscriptionState;
@@ -447,14 +454,16 @@ describe("subscribe with a single opt-in key", () => {
     }),
   );
 
-  it.effect("enrols an existing customer without an IP", () =>
+  it.effect.each([
+    ["an existing customer", customer],
+    ["an account holder", accountHolder],
+  ] as const)("enrols %s without an IP, mailing nothing", ([_label, request]) =>
     Effect.gen(function* () {
       const fix = single();
 
-      expect(yield* signingUp(fix, customer)).toStrictEqual(Schemas.Subscribed.make({ listId }));
-      expect(fix.joins).toMatchObject([
-        { consent: customer.consent, ip: undefined, rejoin: false },
-      ]);
+      expect(yield* signingUp(fix, request)).toStrictEqual(Schemas.Subscribed.make({ listId }));
+      expect(fix.joins).toMatchObject([{ consent: request.consent, ip: undefined, rejoin: false }]);
+      expect(fix.sent).toHaveLength(0);
     }),
   );
 
@@ -463,6 +472,12 @@ describe("subscribe with a single opt-in key", () => {
       "an existing customer who left the list, who stays out",
       { state: SubscriptionState.OptedOut() },
       customer,
+      new Errors.AddressOptedOut({ email: "sam@example.com" }),
+    ],
+    [
+      "an account holder who left the list, who stays out",
+      { state: SubscriptionState.OptedOut() },
+      accountHolder,
       new Errors.AddressOptedOut({ email: "sam@example.com" }),
     ],
     [
@@ -490,15 +505,20 @@ describe("subscribe with a single opt-in key", () => {
   );
 });
 
-describe("subscribe an existing customer with a double opt-in key", () => {
-  it.effect("refuses, since a confirmation would turn the enrolment into consent", () =>
-    Effect.gen(function* () {
-      const fix = fixture();
+describe("subscribe on a basis other than consent with a double opt-in key", () => {
+  it.effect.each([
+    ["an existing customer", customer],
+    ["an account holder", accountHolder],
+  ] as const)(
+    "refuses %s, since a confirmation would turn the enrolment into consent",
+    ([_label, request]) =>
+      Effect.gen(function* () {
+        const fix = fixture();
 
-      expect(yield* Effect.flip(signingUp(fix, customer))).toStrictEqual(new Errors.Forbidden());
-      expect(fix.requests).toHaveLength(0);
-      expect(fix.sent).toHaveLength(0);
-    }),
+        expect(yield* Effect.flip(signingUp(fix, request))).toStrictEqual(new Errors.Forbidden());
+        expect(fix.requests).toHaveLength(0);
+        expect(fix.sent).toHaveLength(0);
+      }),
   );
 });
 

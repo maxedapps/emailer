@@ -50,6 +50,8 @@ const optOut: AddressOptOut = { email: "User@Example.com", listId };
 
 const otherListId = "0195f0a0-1111-4222-8333-44444444209e";
 
+const thirdListId = "0195f0a0-1111-4222-8333-44444444309e";
+
 const now = Date.parse("2026-09-15T00:00:00.000Z");
 
 const day = 86_400_000;
@@ -301,6 +303,13 @@ describe("addressRecord", () => {
           subscribedAt: "2026-09-12T08:00:00.000Z",
         };
 
+        const accountHolder = {
+          basis: "accountHolder",
+          listId: thirdListId,
+          source: "Account sign-up",
+          subscribedAt: "2026-09-13T08:00:00.000Z",
+        };
+
         const consentItem = (record: Record<string, string>, at: string) => ({
           pk: key.pk,
           sk: { S: `CONSENT#${record["listId"]}#${at}` },
@@ -317,6 +326,7 @@ describe("addressRecord", () => {
                 stored({ ...optedOut, ...suppressed, ...bounces(...occurrences) }),
                 consentItem(consent, consent.confirmedAt),
                 consentItem(directConsent, directConsent.subscribedAt),
+                consentItem(accountHolder, accountHolder.subscribedAt),
                 {
                   pk: key.pk,
                   sk: { S: `PENDING#${otherListId}` },
@@ -342,7 +352,7 @@ describe("addressRecord", () => {
           optOuts: [listId],
           suppression: { reason: "bounce", suppressedAt: createdAt, bounceSubType: "General" },
           transientBounces: occurrences,
-          consents: [consent, directConsent],
+          consents: [consent, directConsent, accountHolder],
           pending: [
             { listId: otherListId, requestedAt: createdAt, expiresAt: "2026-09-18T10:00:00.000Z" },
           ],

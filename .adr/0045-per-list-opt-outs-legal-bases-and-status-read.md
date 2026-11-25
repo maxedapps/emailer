@@ -8,6 +8,7 @@
   - [ADR-0037](0037-single-opt-in-keys-and-integration-opt-out.md), decision 3: a single opt-in sign-up on the consent basis lifts that list's opt-out. Decision 2: the consent record gains the existing-customer shape and `ip` becomes optional.
   - [ADR-0027](0027-signup-api-scoped-keys-and-double-opt-in.md), decision 2: a scoped key may read an address's status on its lists.
 - Plan: [0045-per-list-opt-outs-legal-bases-and-status-read.plan.md](0045-per-list-opt-outs-legal-bases-and-status-read.plan.md)
+- Amended by [ADR-0046](0046-account-holder-basis-and-explicit-import-basis.md): a third basis, `accountHolder`, records `{ basis, listId, source, ip?, subscribedAt }` with no wording and, like an existing customer, never lifts an opt-out; an import's evidence always names its basis.
 
 ## Context
 
@@ -26,7 +27,7 @@
    - **Consent, double opt-in key:** unchanged: the confirmation mail, and the confirmed link removes the list from `optOuts`.
    - **Existing customer:** only a single opt-in key may enrol one (`403 Forbidden` for a double opt-in key, whose confirmation would turn it into consent). It never lifts an opt-out: an address that left the list answers `409 AddressOptedOut` and stays out.
 4. **`POST /subscriptions/status { listId, email }`** answers `{ status }`: `subscribed`, `notSubscribed`, `optedOut` or `undeliverable`, exactly the sign-up's own `subscriptionState`. Any scoped key, limited to its lists (`403` otherwise). It is meant for a signed-in user's own address, read server to server; a public form must not call it, since it tells whether an address is on a list. `POST` keeps the address out of URLs and logs.
-5. **An import may carry its evidence.** `POST /lists/:id/import` takes an optional `consent: { basis?, source, wording }`; each contact the import newly adds to the list gets a record of that basis, with no `ip`, dated by the import. A contact already on the list gets none, so a repeated import writes nothing new. An import still never lifts an opt-out. The CLI takes `--source`, `--wording` and `--basis`.
+5. **An import may carry its evidence.** `POST /lists/:listId/contacts` takes an optional `consent: { basis?, source, wording }`; each contact the import newly adds to the list gets a record of that basis, with no `ip`, dated by the import. A contact already on the list gets none, so a repeated import writes nothing new. An import still never lifts an opt-out. The CLI takes `--source`, `--wording` and `--basis`.
 6. **Prod's address items move over in a one-off migration**: an item holding `rejoined` loses those lists from `optOuts` and the attribute itself.
 
 ## Alternatives

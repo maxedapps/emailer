@@ -43,6 +43,7 @@ const confirmationLink = (
  */
 const requestConfirmation = Effect.fn("Subscriptions.requestConfirmation")(function* (
   payload: Schemas.SubscribePayload,
+  shown: { readonly source: string; readonly wording: string },
   confirmPage: string,
 ) {
   const audience = yield* AudienceStore;
@@ -62,8 +63,8 @@ const requestConfirmation = Effect.fn("Subscriptions.requestConfirmation")(funct
     listId: payload.listId,
     name: payload.name,
     attributes: payload.attributes,
-    source: payload.consent.source,
-    wording: payload.consent.wording,
+    source: shown.source,
+    wording: shown.wording,
     ip: payload.ip,
     requestedAt: yield* nowIso,
     secretHash: yield* hashSecret(secret),
@@ -88,7 +89,7 @@ const requestConfirmation = Effect.fn("Subscriptions.requestConfirmation")(funct
 
 /**
  * A single opt-in (ADR-0037): the subscriber joins at once, with the sign-up as the evidence of its
- * basis. `rejoin` brings back an address that left the list (ADR-0045).
+ * basis, and nothing is mailed. `rejoin` brings back an address that left the list (ADR-0045).
  */
 const subscribeDirectly = Effect.fn("Subscriptions.subscribeDirectly")(function* (
   payload: Schemas.SubscribePayload,
@@ -112,46 +113,68 @@ const subscribeDirectly = Effect.fn("Subscriptions.subscribeDirectly")(function*
 });
 
 /**
- * A site's sign-up, as its key opts in and on the basis it names (ADR-0045). A double opt-in key
- * starts the confirmation: nothing joins the list here; the subscriber does, once they use the
- * mailed link, which also takes them back after they left. A single opt-in key joins them at once;
- * on consent that brings back an address that left the list too. An existing customer never comes
- * back that way: they objected, and buying again is no new consent. Only a single opt-in key
- * enrols one, since a confirmation would turn it into consent.
+ * A single opt-in for an address that left the list: consent brings it back; an existing customer
+ * or account holder stays out, since they objected, and buying again or keeping the account is no
+ * new consent.
  */
-export const subscribe = Effect.fn("Subscriptions.subscribe")(function* (
-  payload: Schemas.SubscribePayload,
-) {
-  const integration = yield* Integration;
-  const audience = yield* AudienceStore;
-  const existingCustomer = payload.consent.basis === "existingCustomer";
-
-  if (
-    !integration.lists.includes(payload.listId) ||
-    (existingCustomer && OptIn.$is("Double")(integration.optIn))
-  ) {
-    return yield* new Forbidden();
+const rejoin = Effect.fn("Subscriptions.rejoin")(function* (payload: Schemas.SubscribePayload) {
+  if (payload.consent.basis !== "consent") {
+    return yield* new AddressOptedOut({ email: Schemas.mailboxKey(payload.email) });
   }
 
+  return yield* subscribeDirectly(payload, true);
+});
+
+/**
+ * The address joins as its state with the list allows: `fresh` when it never left, `back` when it
+ * did. One already on the list or undeliverable is answered without either.
+ */
+const join = Effect.fn("Subscriptions.join")(function* <A, E, R, BackA, BackE, BackR>(
+  payload: Schemas.SubscribePayload,
+  ways: {
+    readonly fresh: Effect.Effect<A, E, R>;
+    readonly back: Effect.Effect<BackA, BackE, BackR>;
+  },
+) {
+  const audience = yield* AudienceStore;
   const state = yield* audience.subscriptionState(payload.listId, payload.email);
 
   return yield* SubscriptionState.$match(state, {
     Undeliverable: ({ reason }) => Effect.fail(new AddressUndeliverable({ reason })),
     Subscribed: () => Effect.succeed(Schemas.AlreadySubscribed.make({})),
-    OptedOut: () =>
-      OptIn.$match(integration.optIn, {
-        Double: ({ confirmUrl }) => requestConfirmation(payload, confirmUrl),
-        Single: () =>
-          existingCustomer
-            ? Effect.fail(new AddressOptedOut({ email: Schemas.mailboxKey(payload.email) }))
-            : subscribeDirectly(payload, true),
-      }),
-    NotSubscribed: () =>
-      OptIn.$match(integration.optIn, {
-        Double: ({ confirmUrl }) => requestConfirmation(payload, confirmUrl),
-        Single: () => subscribeDirectly(payload, false),
-      }),
+    OptedOut: () => ways.back,
+    NotSubscribed: () => ways.fresh,
   });
+});
+
+/**
+ * A site's sign-up, as its key opts in and on the basis it names (ADR-0045, ADR-0046). A double
+ * opt-in key takes consent only, since a confirmation would turn any other basis into consent: it
+ * starts the confirmation, and the subscriber joins once they use the mailed link, which also takes
+ * them back after they left. A single opt-in key joins them at once, mailing nothing, and brings
+ * back an address that left the list on consent only.
+ */
+export const subscribe = Effect.fn("Subscriptions.subscribe")(function* (
+  payload: Schemas.SubscribePayload,
+) {
+  const integration = yield* Integration;
+  const { consent } = payload;
+
+  if (!integration.lists.includes(payload.listId)) {
+    return yield* new Forbidden();
+  }
+
+  if (OptIn.$is("Double")(integration.optIn)) {
+    if (consent.basis !== "consent") {
+      return yield* new Forbidden();
+    }
+
+    const confirmation = requestConfirmation(payload, consent, integration.optIn.confirmUrl);
+
+    return yield* join(payload, { fresh: confirmation, back: confirmation });
+  }
+
+  return yield* join(payload, { fresh: subscribeDirectly(payload, false), back: rejoin(payload) });
 });
 
 /** Each sign-up state as the status read names it. */

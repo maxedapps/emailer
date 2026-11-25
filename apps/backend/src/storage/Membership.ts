@@ -460,7 +460,7 @@ export const membershipOperations = (
     listId: string,
     candidates: ReadonlyArray<Schemas.Contact>,
     holders: ReadonlyMap<string, string>,
-    consent: Schemas.Consent,
+    consent: Schemas.LegalBasis,
     addedAt: string,
   ) {
     const holderOf = (candidate: Schemas.Contact) =>
@@ -514,7 +514,7 @@ export const membershipOperations = (
     listId: string,
     candidates: ReadonlyArray<Schemas.Contact>,
     addedAt: string,
-    consent?: Schemas.Consent,
+    consent?: Schemas.LegalBasis,
   ) {
     const [list, holders] = yield* Effect.all(
       [

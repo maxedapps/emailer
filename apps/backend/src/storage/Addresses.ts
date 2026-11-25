@@ -70,20 +70,18 @@ export const writeConsent = itemWriter(Schemas.ConsentRecord);
 
 /**
  * The record of a member who joined at once, on the basis the caller named: a sign-up through a
- * single opt-in key, or an import with evidence. `ip` is the one the caller saw, if any.
+ * single opt-in key, or an import with evidence. `ip` is the one the caller saw, if any. A consent
+ * record names no basis, as every consent record did before the others existed.
  */
 export const joinedAtOnce = (
   listId: string,
-  consent: Schemas.Consent,
+  consent: Schemas.LegalBasis,
   ip: string | undefined,
   subscribedAt: string,
-): Schemas.ConsentRecord => {
-  const evidence = { listId, source: consent.source, wording: consent.wording, ip, subscribedAt };
-
-  return consent.basis === "existingCustomer"
-    ? { basis: "existingCustomer", ...evidence }
-    : evidence;
-};
+): Schemas.ConsentRecord =>
+  consent.basis === "consent"
+    ? { listId, source: consent.source, wording: consent.wording, ip, subscribedAt }
+    : { ...consent, listId, ip, subscribedAt };
 
 const readConsent = itemReader(Schemas.ConsentRecord);
 

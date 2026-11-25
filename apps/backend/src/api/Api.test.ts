@@ -451,6 +451,34 @@ describe("lists", () => {
       expect(calls[3]?.[0]).toBe(listId);
     }),
   );
+
+  // ADR-0046: an import records no basis nobody named.
+  it.effect("imports evidence only with its basis, and an account holder's with no wording", () =>
+    Effect.gen(function* () {
+      const calls: Array<ReadonlyArray<unknown>> = [];
+
+      const { respond } = yield* api({
+        audience: { importContacts: recording(calls, { contacts: [] }) },
+      });
+
+      const importing = (consent: Readonly<Record<string, string>>) =>
+        respond(
+          send(
+            "POST",
+            `/lists/${listId}/contacts`,
+            JSON.stringify({ contacts: [{ email }], consent }),
+          ),
+        );
+
+      const unnamed = yield* importing({ source: "Sign-up", wording: "Send me updates." });
+      const holders = yield* importing({ basis: "accountHolder", source: "Account sign-up" });
+
+      expect([unnamed.status, holders.status]).toStrictEqual([400, 200]);
+      expect(calls.map((call) => call[3])).toStrictEqual([
+        { basis: "accountHolder", source: "Account sign-up" },
+      ]);
+    }),
+  );
 });
 
 describe("campaigns", () => {
@@ -991,6 +1019,13 @@ describe("subscriptions", () => {
       409,
       `{"_tag":"AddressOptedOut","email":"${email}"}`,
     ],
+    [
+      "an account holder who left the list",
+      SubscriptionState.OptedOut(),
+      { consent: { basis: "accountHolder", source: "Account sign-up" } },
+      409,
+      `{"_tag":"AddressOptedOut","email":"${email}"}`,
+    ],
   ] as const)(
     "answers a single opt-in sign-up of %s with its status and body",
     ([_label, state, fields, status, body]) =>
@@ -1002,7 +1037,7 @@ describe("subscriptions", () => {
       }),
   );
 
-  it.effect("reads a sign-up without basis or IP as consent, and one as an existing customer", () =>
+  it.effect("reads a sign-up without basis or IP as consent, and the other bases as named", () =>
     Effect.gen(function* () {
       const subscriptions: Array<DirectSubscription> = [];
       const { confirmUrl: _, ...singleKey } = storedKey;
@@ -1018,7 +1053,7 @@ describe("subscriptions", () => {
         },
       });
 
-      const signingUp = (consent: typeof Schemas.Consent.Encoded) =>
+      const signingUp = (consent: typeof Schemas.SignUpBasis.Encoded) =>
         respond(send("POST", "/subscriptions", JSON.stringify({ listId, email, consent }), scoped));
 
       const consented = yield* signingUp({ source: "Settings", wording: "Send me updates." });
@@ -1029,8 +1064,11 @@ describe("subscriptions", () => {
         wording: "We will send you updates; object at any time.",
       });
 
-      expect([consented.status, customer.status]).toStrictEqual([201, 201]);
+      const holder = yield* signingUp({ basis: "accountHolder", source: "Account sign-up" });
+
+      expect([consented.status, customer.status, holder.status]).toStrictEqual([201, 201, 201]);
       expect(subscriptions.map((subscription) => subscription.ip)).toStrictEqual([
+        undefined,
         undefined,
         undefined,
       ]);
@@ -1041,6 +1079,7 @@ describe("subscriptions", () => {
           source: "Checkout",
           wording: "We will send you updates; object at any time.",
         },
+        { basis: "accountHolder", source: "Account sign-up" },
       ]);
     }),
   );

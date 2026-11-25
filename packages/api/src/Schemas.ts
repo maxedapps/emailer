@@ -525,33 +525,53 @@ export const ConsentWording = Schema.String.check(
 export const IpAddress = Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(maxIpLength));
 
 /**
- * Why a member may be mailed (ADR-0045): they agreed (`consent`), or they bought and were told they
- * may object (`existingCustomer`, §7(3) UWG). Only consent brings back an address that left a list.
+ * Why a member may be mailed, where it happened (the form, page or checkout the caller names) and,
+ * where something was shown, the wording, exactly (ADR-0045, ADR-0046). On `consent` they agreed;
+ * an `existingCustomer` bought and was told they may object (§7(3) UWG); an `accountHolder` has an
+ * account, which only service notices may go to, so no wording is claimed. Only consent brings back
+ * an address that left a list.
  */
-const ConsentBasis = Schema.Literals(["consent", "existingCustomer"]);
+const shown = { source: EntityName, wording: ConsentWording };
 
-/**
- * The basis of a sign-up or an import, where it happened (the form, page or checkout the caller
- * names) and the wording shown, exactly. The basis is `consent` unless named.
- */
-export const Consent = Schema.Struct({
-  basis: ConsentBasis.pipe(Schema.withDecodingDefaultKey(Effect.succeed("consent"))),
-  source: EntityName,
-  wording: ConsentWording,
+const ConsentBasis = Schema.Struct({ basis: Schema.Literal("consent"), ...shown });
+
+const ExistingCustomerBasis = Schema.Struct({
+  basis: Schema.Literal("existingCustomer"),
+  ...shown,
 });
 
-export type Consent = typeof Consent.Type;
+const AccountHolderBasis = Schema.Struct({
+  basis: Schema.Literal("accountHolder"),
+  source: EntityName,
+});
+
+/** The basis an import names for each member it adds: always explicit (ADR-0046). */
+export const LegalBasis = Schema.Union([ConsentBasis, ExistingCustomerBasis, AccountHolderBasis]);
+
+export type LegalBasis = typeof LegalBasis.Type;
 
 /**
- * What the member agreed to or was told, where, and from which address when the caller saw one,
- * whichever way they joined.
+ * The basis a sign-up names. It is `consent` unless named, the only one a double opt-in key takes,
+ * which is what a public sign-up form sends.
  */
-const consentEvidence = {
+export const SignUpBasis = Schema.Union([
+  Schema.Struct({
+    basis: Schema.Literal("consent").pipe(Schema.withDecodingDefaultKey(Effect.succeed("consent"))),
+    ...shown,
+  }),
+  ExistingCustomerBasis,
+  AccountHolderBasis,
+]);
+
+/** Where the member joined, from which address when the caller saw one. */
+const joinEvidence = {
   listId: EntityId,
   source: EntityName,
-  wording: ConsentWording,
   ip: Schema.optional(IpAddress),
 };
+
+/** What the member agreed to or was told, whichever way they joined. */
+const consentEvidence = { ...joinEvidence, wording: ConsentWording };
 
 /** A double opt-in: asked for on the site, then confirmed through the mailed link. */
 const DoubleOptInConsent = Schema.Struct({
@@ -571,12 +591,20 @@ const ExistingCustomerRecord = Schema.Struct({
   subscribedAt: Timestamp,
 });
 
+/** An account holder enrolled with their account, or imported as one (ADR-0046). */
+const AccountHolderRecord = Schema.Struct({
+  basis: Schema.Literal("accountHolder"),
+  ...joinEvidence,
+  subscribedAt: Timestamp,
+});
+
 /**
  * The evidence a member may be mailed. Each way of joining has its own shape, which tells them
  * apart; the existing customer's comes first, since it holds a single opt-in's fields too.
  */
 export const ConsentRecord = Schema.Union([
   ExistingCustomerRecord,
+  AccountHolderRecord,
   DoubleOptInConsent,
   SingleOptInConsent,
 ]);
@@ -746,12 +774,12 @@ const eachMailboxOnce = Schema.makeFilter(
 export const ImportContactsFile = Schema.Struct({ contacts: importEntries }).check(eachMailboxOnce);
 
 /**
- * One batch of an import. `consent`, when given, is recorded for each contact the batch newly adds
- * to the list (ADR-0045).
+ * One batch of an import. `consent`, when given, is the basis recorded for each contact the batch
+ * newly adds to the list (ADR-0045, ADR-0046).
  */
 export const ImportContactsPayload = Schema.Struct({
   contacts: importEntries.check(Schema.isMaxLength(maxBatchEntries)),
-  consent: Schema.optionalKey(Consent),
+  consent: Schema.optionalKey(LegalBasis),
 }).check(eachMailboxOnce);
 
 export type ImportContactsPayload = typeof ImportContactsPayload.Type;
@@ -922,7 +950,7 @@ export const SubscribePayload = Schema.Struct({
   email: EmailAddress,
   name: Schema.optional(EntityName),
   attributes: Schema.optional(ContactAttributes),
-  consent: Consent,
+  consent: SignUpBasis,
   ip: Schema.optional(IpAddress),
 });
 

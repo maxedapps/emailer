@@ -561,19 +561,27 @@ describe("subscribeDirectly", () => {
       }),
   );
 
-  it.effect("records an existing customer's basis, with no IP when none was seen", () =>
+  it.effect.each([
+    [
+      "an existing customer's basis",
+      { basis: "existingCustomer", source: "Checkout", wording: "Updates; object any time." },
+      {
+        basis: { S: "existingCustomer" },
+        source: { S: "Checkout" },
+        wording: { S: "Updates; object any time." },
+      },
+    ],
+    [
+      "an account holder's basis, with no wording",
+      { basis: "accountHolder", source: "Account sign-up" },
+      { basis: { S: "accountHolder" }, source: { S: "Account sign-up" } },
+    ],
+  ] as const)("records %s, with no IP when none was seen", ([_label, consent, recorded]) =>
     Effect.gen(function* () {
       const table = holding([list, reservation], [succeeded]);
       const { ip: _ip, ...withoutIp } = subscription;
 
-      yield* subscribing(table, {
-        ...withoutIp,
-        consent: {
-          basis: "existingCustomer",
-          source: "Checkout",
-          wording: "Updates; object any time.",
-        },
-      });
+      yield* subscribing(table, { ...withoutIp, consent });
 
       expect(table.transactionRequests[0]?.TransactItems).toStrictEqual([
         ...heldJoin,
@@ -584,10 +592,8 @@ describe("subscribeDirectly", () => {
               pk: { S: addressPk },
               sk: { S: `CONSENT#${listId}#${subscribedAt}` },
               v: { N: "1" },
-              basis: { S: "existingCustomer" },
+              ...recorded,
               listId: { S: listId },
-              source: { S: "Checkout" },
-              wording: { S: "Updates; object any time." },
               subscribedAt: { S: subscribedAt },
             },
           },
