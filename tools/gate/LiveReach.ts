@@ -39,6 +39,7 @@ const rules: ReadonlyArray<readonly [Reach, ReadonlyArray<string>]> = [
       "**/*.test.ts",
       backend("storage/Testing.ts"),
       "apps/cli/**",
+      "apps/backend/scripts/**",
       "stacks/**",
       backend("identity/SendingDns.ts"),
       "tools/**",

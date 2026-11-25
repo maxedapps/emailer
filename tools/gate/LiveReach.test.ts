@@ -17,6 +17,7 @@ describe("reach", () => {
     "tools/stages/TestStage.test.ts",
     "apps/backend/src/storage/Testing.ts",
     "apps/cli/src/commands/Campaigns.ts",
+    "apps/backend/scripts/MigrateAddressItems.ts",
     "stacks/sending-identity.ts",
     "apps/backend/src/identity/SendingDns.ts",
     "tools/stages/main.ts",

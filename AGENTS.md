@@ -24,18 +24,18 @@ Run `pnpm gate` once on the merged result before landing ([ADR-0033](.adr/0033-l
 
 The live suite is the only slow suite. Its groups are Vitest tags (`apps/backend/test/LiveGroups.ts`): `api`, `cancellation`, `drafting`, `variants`, `unsubscribe`, `subscriptions`, `feedback`. The map is `tools/gate/LiveReach.ts`; first match wins (`src/` is `apps/backend/src/`):
 
-| Paths                                                                                                                                                                   | Reach                             |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
-| `**/*.md`, `.adr/**`, `LICENSE`, `.gitattributes`                                                                                                                       | none                              |
-| `alchemy.run.ts`, `apps/backend/test/**`, `tools/stages/TestStage.ts`, `vitest.config.ts`, `tsconfig*.json`, `**/package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml` | all                               |
-| unit tests (`**/*.test.ts`), `src/storage/Testing.ts`, `apps/cli/**`, `stacks/**`, `src/identity/SendingDns.ts`, `tools/**`, lint, format and knip config               | none                              |
-| each `src/**/*.live.ts`                                                                                                                                                 | its own group                     |
-| `src/campaigns/TestSends.ts`                                                                                                                                            | drafting                          |
-| `src/campaigns/Previews.ts`, `PreviewPage.ts`, `Copies.ts`                                                                                                              | drafting, variants                |
-| `src/consent/UnsubscribePage.ts`                                                                                                                                        | unsubscribe                       |
-| `src/consent/Subscriptions.ts`                                                                                                                                          | subscriptions                     |
-| `src/feedback/Feedback.ts`, `FeedbackClassification.ts`                                                                                                                 | api, drafting, variants, feedback |
-| anything else (other backend modules, `packages/api`, new paths)                                                                                                        | all                               |
+| Paths                                                                                                                                                                                                     | Reach                             |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
+| `**/*.md`, `.adr/**`, `LICENSE`, `.gitattributes`                                                                                                                                                         | none                              |
+| `alchemy.run.ts`, `apps/backend/test/**`, `tools/stages/TestStage.ts`, `vitest.config.ts`, `tsconfig*.json`, `**/package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`                                   | all                               |
+| unit tests (`**/*.test.ts`), `src/storage/Testing.ts`, `apps/cli/**`, `apps/backend/scripts/**` (one-off migrations), `stacks/**`, `src/identity/SendingDns.ts`, `tools/**`, lint, format and knip config | none                              |
+| each `src/**/*.live.ts`                                                                                                                                                                                   | its own group                     |
+| `src/campaigns/TestSends.ts`                                                                                                                                                                              | drafting                          |
+| `src/campaigns/Previews.ts`, `PreviewPage.ts`, `Copies.ts`                                                                                                                                                | drafting, variants                |
+| `src/consent/UnsubscribePage.ts`                                                                                                                                                                          | unsubscribe                       |
+| `src/consent/Subscriptions.ts`                                                                                                                                                                            | subscriptions                     |
+| `src/feedback/Feedback.ts`, `FeedbackClassification.ts`                                                                                                                                                   | api, drafting, variants, feedback |
+| anything else (other backend modules, `packages/api`, new paths)                                                                                                                                          | all                               |
 
 A new live suite adds its group to `LiveGroups.ts` and its suite to the live file. A module that only some groups exercise gets a narrow rule here and in `LiveReach.ts`; when unsure, leave it reaching all.
 
