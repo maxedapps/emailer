@@ -1,6 +1,6 @@
 # ADR-0046: The account-holder basis, and an import names its basis
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-11-25
 - Authority: On 2026-11-25 (task 4797) the operator decided that a product site keeps a second list holding every account, for service notices only, filled through the API and by one import, and that no mail of any kind goes out for it. The orchestrator's brief asks for an `accountHolder` basis with its own record shape and no consent claim, blocked by an opt-out as an existing customer is, and for the basis to be explicit wherever an import gives evidence.
 - Amends: [ADR-0045](0045-per-list-opt-outs-legal-bases-and-status-read.md), decisions 2, 3 and 5.

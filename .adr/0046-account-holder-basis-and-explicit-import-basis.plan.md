@@ -30,3 +30,7 @@ Task 4797, part 3. [ADR-0046](0046-account-holder-basis-and-explicit-import-basi
 ## Settled findings
 
 - **Codex review of 5584472, medium: an account holder's `wording` answers 400, though ADR-0046 and the README said it is ignored.** Real, and the stage hand check saw the same. The API refuses unknown fields everywhere (`onExcessProperty: "error"`), and the CLI refuses the flag, so the contract changed to match: a wording with `accountHolder` is refused (`400`), so no caller believes it was recorded. ADR-0046 decision 2 and the README say so; `Api.test.ts` checks the 400 on both the sign-up and the import.
+
+## Rollout
+
+- 2026-11-25: gate green on 9ced31b (`pnpm check` 1,075 unit tests; the full live suite 43/43 on its own stage, destroyed afterwards); stage hand check on test-2611251003-a8te, with SES's 24-hour send count unchanged across it.
