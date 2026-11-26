@@ -1,10 +1,13 @@
+import * as Cloudflare from "@alchemy.run/cloudflare";
 import { describe, expect, it } from "@effect/vitest";
 import * as Output from "alchemy/Output";
-import { Cause, ConfigProvider, Effect, Exit, Option, Result } from "effect";
+import { Cause, ConfigProvider, Effect, Exit, Layer, Option, Redacted, Result } from "effect";
+import { HttpClient, HttpClientResponse } from "effect/http";
 
 import {
   DkimRecordsUnavailable,
   DmarcReports,
+  DmarcReportsNeedZoneApex,
   IgnoredDnsSetting,
   dkimRecords,
   dmarcRecord,
@@ -12,6 +15,7 @@ import {
   dnsSettings,
   identitySpfRecord,
   mailFromRecords,
+  dmarcReportsZoneOf,
 } from "./SendingDns.ts";
 
 describe("mailFromRecords", () => {
@@ -234,6 +238,79 @@ describe("dnsSettings", () => {
         "EMAILER_DMARC_POLICY",
         "EMAILER_DMARC_REPORTS=cloudflare",
       ]);
+    }),
+  );
+});
+
+describe("dmarcReportsZoneOf", () => {
+  const accountId = "0123456789abcdef0123456789abcdef";
+  const apiToken = Redacted.make("test-token");
+
+  /** A Cloudflare account holding only the zone `example.com`. */
+  const accountWithZoneExampleCom = Layer.mergeAll(
+    Layer.succeed(
+      Cloudflare.CloudflareEnvironment,
+      Effect.succeed({ type: "apiToken", apiToken, accountId, source: { type: "env" } }),
+    ),
+    Layer.succeed(
+      Cloudflare.Credentials,
+      Effect.succeed({
+        type: "apiToken",
+        apiToken,
+        apiBaseUrl: "https://api.cloudflare.com/client/v4",
+        accountId,
+      }),
+    ),
+    Layer.succeed(
+      HttpClient.HttpClient,
+      HttpClient.make((request) => {
+        const name = new URL(request.url).searchParams.get("name");
+
+        const result =
+          name === "example.com" ? [{ id: "f".repeat(32), name, account: { id: accountId } }] : [];
+
+        return Effect.succeed(
+          HttpClientResponse.fromWeb(
+            request,
+            Response.json({
+              success: true,
+              errors: [],
+              messages: [],
+              result,
+              result_info: {
+                page: 1,
+                per_page: 1,
+                count: result.length,
+                total_count: result.length,
+              },
+            }),
+          ),
+        );
+      }),
+    ),
+  );
+
+  it.effect("finds the zone of an apex identity", () =>
+    Effect.gen(function* () {
+      const zoneId = yield* dmarcReportsZoneOf("Example.com").pipe(
+        Effect.provide(accountWithZoneExampleCom),
+      );
+
+      expect(zoneId).toBe("f".repeat(32));
+    }),
+  );
+
+  it.effect("refuses a subdomain identity instead of picking its parent zone", () =>
+    Effect.gen(function* () {
+      const exit = yield* Effect.exit(dmarcReportsZoneOf("Mail.Example.com")).pipe(
+        Effect.provide(accountWithZoneExampleCom),
+      );
+
+      const defect = Exit.isFailure(exit) ? Cause.findDefect(exit.cause) : undefined;
+
+      expect(
+        defect !== undefined && Result.isSuccess(defect) ? defect.success : undefined,
+      ).toStrictEqual(new DmarcReportsNeedZoneApex({ domain: "mail.example.com" }));
     }),
   );
 });

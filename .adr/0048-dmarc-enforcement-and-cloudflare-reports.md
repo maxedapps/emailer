@@ -1,13 +1,11 @@
 # ADR-0048: Configurable DMARC policy, Cloudflare report handling and the From domain's SPF
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-11-26
 - Authority: On 2026-11-26 the user chose to move the domain's DMARC policy towards enforcement. They chose:
   - aggregate reports go to Cloudflare DMARC Management instead of a mailbox, declared with Alchemy;
   - the identity stack also owns the From domain's own SPF record;
   - the policy stays `p=none` for now, and each step to `quarantine` and `reject` waits for their go.
-
-  See the plan ([0048-dmarc-enforcement-and-cloudflare-reports.plan.md](0048-dmarc-enforcement-and-cloudflare-reports.plan.md)).
 - Supersedes in part:
   - [ADR-0018](0018-optional-dns-management.md): `EMAILER_DMARC_REPORT_EMAIL` and its fixed `p=none` record.
   - [ADR-0017](0017-adopted-root-domain-sending-identity.md): the mailbox as the report destination.
@@ -28,6 +26,7 @@ The DMARC record at the organizational domain reported to a shared mailbox, as A
 - **`EMAILER_DMARC_REPORTS`** replaces `EMAILER_DMARC_REPORT_EMAIL` and still opts into the DMARC record.
   - A mailbox address sends the reports there.
   - `cloudflare` (only with `EMAILER_DNS=cloudflare`) makes the identity stack declare `Cloudflare.Email.DmarcReports` for the zone. The DMARC record waits for its `ruaPrefix` and then writes the whole value with Cloudflare's address alone. The stack stays the record's only owner.
+  - Reports are enabled only for the zone named exactly like the identity. A subdomain identity dies (`DmarcReportsNeedZoneApex`) before anything is enabled: its enclosing zone's DMARC Management would rewrite the parent domain's `_dmarc` record, which this stack doesn't own.
 - **`EMAILER_DMARC_POLICY`**, `none` (default), `quarantine` or `reject`, sets `p=`. Moving the policy changes one setting and redeploys the identity stack.
 - **`EMAILER_IDENTITY_SPF`** publishes the From domain's own SPF record, its value verbatim from the configuration. The value names the operator's mailbox provider, so it stays out of the repository. SES keeps its own SPF at `bounce.<identity>`.
 - **A setting nothing would publish dies at construction** (`IgnoredDnsSetting`): reports or SPF without `EMAILER_DNS`, a policy without reports, Cloudflare reports outside a Cloudflare zone.

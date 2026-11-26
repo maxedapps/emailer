@@ -316,6 +316,26 @@ export const publisherFor = (mode: DnsMode, domain: string) =>
     Match.exhaustive,
   );
 
+/**
+ * Cloudflare DMARC Management covers only a zone's apex: for a subdomain identity, enabling it
+ * would rewrite the parent domain's `_dmarc` record, which this stack doesn't own.
+ */
+export class DmarcReportsNeedZoneApex extends Data.TaggedError("DmarcReportsNeedZoneApex")<{
+  readonly domain: string;
+}> {}
+
+/** The Cloudflare zone DMARC Management reports for: named exactly like the identity, never an enclosing one. */
+export const dmarcReportsZoneOf = (domain: string) =>
+  Effect.gen(function* () {
+    const { accountId } = yield* yield* Cloudflare.CloudflareEnvironment;
+    const name = domain.toLowerCase();
+    const zone = yield* Cloudflare.Zone.findZoneByName({ accountId, name });
+
+    return zone === undefined
+      ? yield* Effect.die(new DmarcReportsNeedZoneApex({ domain: name }))
+      : zone.id;
+  }).pipe(Effect.orDie);
+
 class CloudflareReportAddressUnavailable extends Data.TaggedError(
   "CloudflareReportAddressUnavailable",
 )<{
@@ -332,7 +352,7 @@ const cloudflareReportHost = "dmarc-reports.cloudflare.net";
  */
 const cloudflareReportAddress = (domain: string) =>
   Effect.gen(function* () {
-    const zoneId = yield* cloudflareZoneOf(domain);
+    const zoneId = yield* dmarcReportsZoneOf(domain);
 
     const reports = yield* Cloudflare.Email.DmarcReports("DmarcReports", { zone: zoneId }).pipe(
       RemovalPolicy.retain(),
