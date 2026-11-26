@@ -22,9 +22,11 @@ import {
   dmarcRecord,
   dnsMode,
   dnsSettings,
+  identitySpfRecord,
   mailFromDomainOf,
   mailFromRecords,
   publisherFor,
+  reportAddressOf,
 } from "../apps/backend/src/identity/SendingDns.ts";
 import {
   senderLogicalId,
@@ -90,8 +92,15 @@ export default Stack(
       yield* publish(dkimRecordAt(dkim, index));
     }
 
-    if (Option.isSome(dns.reportEmail)) {
-      yield* publish(dmarcRecord(emailIdentity, dns.reportEmail.value));
+    if (Option.isSome(dns.identitySpf)) {
+      yield* publish(identitySpfRecord(emailIdentity, dns.identitySpf.value));
+    }
+
+    if (Option.isSome(dns.dmarc)) {
+      const { policy, reports } = dns.dmarc.value;
+      const reportAddress = yield* reportAddressOf(reports, emailIdentity);
+
+      yield* publish(dmarcRecord(emailIdentity, policy, reportAddress));
     }
 
     return { emailIdentity: identity.emailIdentity, dkimRecords: dkim };

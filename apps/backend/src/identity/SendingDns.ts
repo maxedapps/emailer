@@ -4,7 +4,7 @@ import { RemovalPolicy } from "alchemy";
 import * as AWS from "@alchemy.run/aws";
 import * as Cloudflare from "@alchemy.run/cloudflare";
 import * as Output from "alchemy/Output";
-import { Config, Data, Effect, Match, Option } from "effect";
+import { Config, Data, Effect, Match, Option, Schema } from "effect";
 
 import type { Input } from "alchemy";
 
@@ -18,27 +18,95 @@ export type DnsMode = "route53" | "cloudflare";
 
 export const dnsMode = Config.option(Config.Literals(["route53", "cloudflare"], "EMAILER_DNS"));
 
-export class DmarcRequiresDnsMode extends Data.TaggedError("DmarcRequiresDnsMode")<{
-  readonly reportEmail: string;
+export type DmarcPolicy = "none" | "quarantine" | "reject";
+
+/** Where aggregate DMARC reports go: a mailbox, or Cloudflare DMARC Management on the zone. */
+export type DmarcReports = Data.TaggedEnum<{
+  Mailbox: { readonly address: string };
+  Cloudflare: {};
+}>;
+
+export const DmarcReports = Data.taggedEnum<DmarcReports>();
+
+export interface DmarcSettings {
+  readonly policy: DmarcPolicy;
+  readonly reports: DmarcReports;
+}
+
+/** A setting that would be silently ignored without the one it requires. */
+export class IgnoredDnsSetting extends Data.TaggedError("IgnoredDnsSetting")<{
+  readonly setting: string;
+  readonly requires: string;
 }> {}
+
+const dmarcReportsConfig = Config.schema(
+  Schema.Union([Schema.Literal("cloudflare"), Schemas.EmailAddress]),
+  "EMAILER_DMARC_REPORTS",
+);
+
+const dmarcPolicyConfig = Config.Literals(["none", "quarantine", "reject"], "EMAILER_DMARC_POLICY");
+
+const spfPattern = /^v=spf1( |$)/;
+
+const identitySpfConfig = Config.schema(
+  Schema.Trim.pipe(
+    Schema.decodeTo(
+      Schema.String.check(Schema.isPattern(spfPattern, { message: "Expected v=spf1 …" })),
+    ),
+  ),
+  "EMAILER_IDENTITY_SPF",
+);
 
 /**
  * DMARC is a policy for the whole domain and often exists already, so the stack publishes it only
- * on request — and only where it publishes the other records. A report address without a mode
- * would be silently ignored, so it fails construction instead.
+ * when `EMAILER_DMARC_REPORTS` names where its reports go — and only where it publishes the other
+ * records. The From domain's own SPF record serves its other senders, so it too is opt-in. A
+ * setting that would be silently ignored fails construction instead.
  */
 export const dnsSettings = Effect.gen(function* () {
   const mode = yield* dnsMode;
+  const reports = yield* Config.option(dmarcReportsConfig);
+  const policy = yield* Config.option(dmarcPolicyConfig);
+  const identitySpf = yield* Config.option(identitySpfConfig);
 
-  const reportEmail = yield* Config.option(
-    Config.schema(Schemas.EmailAddress, "EMAILER_DMARC_REPORT_EMAIL"),
-  );
+  const ignored = [
+    {
+      setting: "EMAILER_DMARC_REPORTS",
+      requires: "EMAILER_DNS",
+      when: Option.isSome(reports) && Option.isNone(mode),
+    },
+    {
+      setting: "EMAILER_IDENTITY_SPF",
+      requires: "EMAILER_DNS",
+      when: Option.isSome(identitySpf) && Option.isNone(mode),
+    },
+    {
+      setting: "EMAILER_DMARC_POLICY",
+      requires: "EMAILER_DMARC_REPORTS",
+      when: Option.isSome(policy) && Option.isNone(reports),
+    },
+    {
+      setting: "EMAILER_DMARC_REPORTS=cloudflare",
+      requires: "EMAILER_DNS=cloudflare",
+      when: Option.contains(reports, "cloudflare") && !Option.contains(mode, "cloudflare"),
+    },
+  ].find(({ when }) => when);
 
-  if (Option.isNone(mode) && Option.isSome(reportEmail)) {
-    return yield* Effect.die(new DmarcRequiresDnsMode({ reportEmail: reportEmail.value }));
+  if (ignored !== undefined) {
+    const { setting, requires } = ignored;
+
+    return yield* Effect.die(new IgnoredDnsSetting({ setting, requires }));
   }
 
-  return { mode, reportEmail };
+  const dmarc = Option.map(reports, (target): DmarcSettings => ({
+    policy: Option.getOrElse(policy, (): DmarcPolicy => "none"),
+    reports:
+      target === "cloudflare"
+        ? DmarcReports.Cloudflare()
+        : DmarcReports.Mailbox({ address: target }),
+  }));
+
+  return { mode, dmarc, identitySpf };
 });
 
 export interface MxRecord {
@@ -89,11 +157,26 @@ export const mailFromRecords = (
   ];
 };
 
-export const dmarcRecord = (domain: string, reportEmail: string): TextRecord => ({
+export const dmarcValue = (policy: DmarcPolicy, reportAddress: string): string =>
+  `"v=DMARC1; p=${policy}; rua=mailto:${reportAddress}"`;
+
+export const dmarcRecord = <Req>(
+  domain: string,
+  policy: DmarcPolicy,
+  reportAddress: Output.Output<string, Req>,
+): TextRecordInput => ({
   id: "Dmarc",
   type: "TXT",
   name: `_dmarc.${domain}`.toLowerCase(),
-  value: `"v=DMARC1; p=none; rua=mailto:${reportEmail}"`,
+  value: reportAddress.pipe(Output.map((address: string) => dmarcValue(policy, address))),
+});
+
+/** The From domain's own SPF record, for the domain's other senders; SES uses `bounce.<domain>`. */
+export const identitySpfRecord = (domain: string, value: string): TextRecord => ({
+  id: "IdentitySpf",
+  type: "TXT",
+  name: domain.toLowerCase(),
+  value: `"${value}"`,
 });
 
 export class DkimRecordsUnavailable extends Data.TaggedError("DkimRecordsUnavailable")<{
@@ -232,3 +315,41 @@ export const publisherFor = (mode: DnsMode, domain: string) =>
     Match.when("cloudflare", () => Effect.map(cloudflareZoneOf(domain), publishToCloudflare)),
     Match.exhaustive,
   );
+
+class CloudflareReportAddressUnavailable extends Data.TaggedError(
+  "CloudflareReportAddressUnavailable",
+)<{
+  readonly zoneId: string;
+}> {}
+
+/** The host Cloudflare DMARC Management receives reports at; it authorizes every zone it serves. */
+const cloudflareReportHost = "dmarc-reports.cloudflare.net";
+
+/**
+ * Turns on Cloudflare DMARC Management for the zone and returns its report address. Enabling makes
+ * Cloudflare add that address to the existing `_dmarc` record; the DMARC record, which waits for
+ * the address, then writes the whole value, so the stack stays the record's only owner.
+ */
+const cloudflareReportAddress = (domain: string) =>
+  Effect.gen(function* () {
+    const zoneId = yield* cloudflareZoneOf(domain);
+
+    const reports = yield* Cloudflare.Email.DmarcReports("DmarcReports", { zone: zoneId }).pipe(
+      RemovalPolicy.retain(),
+    );
+
+    return reports.ruaPrefix.pipe(
+      Output.mapEffect((prefix: string | undefined) =>
+        prefix === undefined
+          ? Effect.die(new CloudflareReportAddressUnavailable({ zoneId }))
+          : Effect.succeed(`${prefix}@${cloudflareReportHost}`),
+      ),
+    );
+  });
+
+/** Where the DMARC record sends its reports, as a stack output. */
+export const reportAddressOf = (reports: DmarcReports, domain: string) =>
+  DmarcReports.$match(reports, {
+    Mailbox: ({ address }) => Effect.succeed(Output.asOutput(address)),
+    Cloudflare: () => cloudflareReportAddress(domain),
+  });
