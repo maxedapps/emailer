@@ -1,6 +1,6 @@
 # ADR-0049: Campaigns are light only
 
-- Status: Proposed
+- Status: Accepted (2026-11-27, after a green landing gate)
 - Date: 2026-11-27
 - Authority: Task 5198. On 2026-11-27 the operator decided that every campaign goes out light only, future ones included.
 - Amends: [ADR-0019](0019-markdown-campaign-bodies.md). Its layout's `color-scheme: light` was one look among any a hand-written HTML body could choose; it is now the only look a campaign may have, and the API enforces it.

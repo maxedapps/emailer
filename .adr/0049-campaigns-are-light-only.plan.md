@@ -29,7 +29,12 @@ Read on 2026-11-27 with `campaigns list` and `campaigns get` on prod: each unsen
 
 ## Hand check
 
-Pending: needs the test configuration (see the task report).
+On a fresh test stage, through the CLI, with a hand-written body declaring `light dark` (meta, CSS and a `prefers-color-scheme: dark` rule):
+
+- `campaigns create --html`, `campaigns update --html` and `campaigns variants set --html` were each refused: `InvalidTemplate`, part `html`, `the color-scheme meta "light dark" names dark: campaigns are light only (ADR-0049)`, line 4, column 1;
+- the same body declaring `light` was accepted, and so was a `--markdown` body.
+
+The landing gate ran all seven live groups green (43 tests) on its own stage, which it destroyed.
 
 ## Settled findings
 
