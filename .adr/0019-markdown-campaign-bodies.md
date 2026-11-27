@@ -9,6 +9,7 @@
 - Authority: On 2026-09-23 the user asked for Markdown authoring with email-conformant HTML output, and asked for MJML and other tools to be evaluated. After seeing the research, they followed the recommendation to use `marked` alone, in the CLI. See the plan (`work/drafting-and-preview.md`, in git history).
 - Amended by [ADR-0041](0041-personalized-templates.md): the backend no longer appends a footer below the card; a Markdown campaign writes `{{ unsubscribe_url }}` and `{{ postal_address }}` where it wants them, and Liquid tags pass through `marked` intact.
 - Amended by [ADR-0044](0044-images-only-from-absolute-https-urls.md): saving a draft refuses an HTML part with an `<img src>` that does not start with `https://`, so the consequence below is enforced, not advice.
+- Amended by [ADR-0049](0049-campaigns-are-light-only.md): campaigns are light only. The layout's `color-scheme: light` is the only look allowed, and saving a draft refuses an HTML part that declares dark support.
 
 ## Context
 

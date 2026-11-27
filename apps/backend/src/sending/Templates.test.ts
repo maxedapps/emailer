@@ -258,6 +258,81 @@ describe("validateParts", () => {
     }),
   );
 
+  it.effect.each([
+    [
+      '<meta name="color-scheme" content="light dark">',
+      'the color-scheme meta "light dark" names dark',
+      13,
+    ],
+    [
+      "<META CONTENT='dark' NAME='Supported-Color-Schemes'>",
+      'the supported-color-schemes meta "dark" names dark',
+      13,
+    ],
+    [
+      "<style>:root{color-scheme:light dark;supported-color-schemes:light dark}</style>",
+      'color-scheme "light dark" names dark',
+      26,
+    ],
+    [
+      '<div style="Supported-Color-Schemes: dark light !important">',
+      'Supported-Color-Schemes "dark light !important" names dark',
+      25,
+    ],
+    [
+      "<style>@media (prefers-color-scheme: dark) { .ink { color: #fff } }</style>",
+      "a prefers-color-scheme: dark rule styles dark mode",
+      28,
+    ],
+    [
+      "<style>:root{color-scheme /* support */: light dark}</style>",
+      'color-scheme "light dark" names dark',
+      26,
+    ],
+    [
+      "<style>@media (prefers-color-scheme: /* appearance */ dark) {}</style>",
+      "a prefers-color-scheme: dark rule styles dark mode",
+      28,
+    ],
+    [
+      '<img srcset="https://example.com/dark.png" media="(prefers-color-scheme:dark)" src="https://example.com/light.png">',
+      "a prefers-color-scheme: dark rule styles dark mode",
+      64,
+    ],
+  ] as const)(
+    "refuses the dark-mode declaration in %s, naming it and its place",
+    ([markup, reason, column]) =>
+      Effect.gen(function* () {
+        const error = yield* Effect.flip(
+          validateParts({ html: `<p>Hi</p>\n<p>News</p> ${markup}${htmlFooter}` }),
+        );
+
+        expect(error).toStrictEqual(
+          new InvalidTemplate({
+            part: "html",
+            reason: `${reason}: campaigns are light only (ADR-0049)`,
+            line: 2,
+            column,
+          }),
+        );
+      }),
+  );
+
+  it.effect("accepts a light-only look, including a light rule for prefers-color-scheme", () =>
+    validateParts({
+      html: [
+        '<meta name="color-scheme" content="light">',
+        "<meta name='supported-color-schemes' content='only light'>",
+        "<style>:root{color-scheme:light;supported-color-schemes:light}",
+        "@media (prefers-color-scheme: light) { .ink { color: #111 } }</style>",
+        '<meta name="description" content="Our dark roast is back">',
+        '<p style="color-scheme: normal">Dark chocolate, darker coffee</p>',
+        "<style>.ink{color-scheme:light /* no dark support */}</style>",
+        htmlFooter,
+      ].join("\n"),
+    }),
+  );
+
   it.effect("accepts loops, assignments and a subject without the required tags", () =>
     validateParts({
       subject: "News for {{ contact.name | default: 'you' }}",

@@ -229,24 +229,41 @@ const renderPart = (liquid: Liquid, part: CompiledPart, scope: Scope) =>
 
 const decodeSubject = Schema.decodeUnknownOption(Schemas.CampaignSubject);
 
-/** An `<img>` tag and its attributes, read past a `>` inside a quoted value. */
-const imageTag = /<img(?=[\s/>])((?:[^>"']|"[^"]*"|'[^']*')*)>/gi;
+/** A `name` tag's attributes, read past a `>` inside a quoted value. */
+const tagPattern = (name: string) =>
+  new RegExp(`<${name}(?=[\\s/>])((?:[^>"']|"[^"]*"|'[^']*')*)>`, "gi");
+
+const imageTag = tagPattern("img");
+
+const metaTag = tagPattern("meta");
 
 /** One attribute of a tag, as HTML tokenizes it: a name, then an optional quoted or bare value. */
 const tagAttribute = /([^\s"'/=>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g;
 
-const hostedImage = /^https:\/\//i;
-
-/** The tag's `src` value, the first one winning as in a browser; `undefined` when it has none. */
-const sourceOf = (attributes: string) => {
-  for (const [, name, ...values] of attributes.matchAll(tagAttribute)) {
-    if (name?.toLowerCase() === "src") {
+/** A tag's `name` attribute, the first one winning as in a browser; `undefined` when it has none. */
+const attributeOf = (attributes: string, name: string) => {
+  for (const [, attribute, ...values] of attributes.matchAll(tagAttribute)) {
+    if (attribute?.toLowerCase() === name) {
       return values.find((value) => value !== undefined) ?? "";
     }
   }
 
   return undefined;
 };
+
+/** Refuses the HTML part, pointing at the line and column of `index`. */
+const refuseAt = (html: string, index: number, reason: string) => {
+  const before = html.slice(0, index);
+
+  return new InvalidTemplate({
+    part: "html",
+    reason,
+    line: before.split("\n").length,
+    column: index - before.lastIndexOf("\n"),
+  });
+};
+
+const hostedImage = /^https:\/\//i;
 
 /**
  * Refuses an HTML part with an image that loads from anything but an absolute https URL
@@ -255,25 +272,78 @@ const sourceOf = (attributes: string) => {
  */
 const refuseUnhostedImages = Effect.fnUntraced(function* (html: string) {
   for (const match of html.matchAll(imageTag)) {
-    const source = sourceOf(match[1] ?? "");
+    const source = attributeOf(match[1] ?? "", "src");
 
     if (source !== undefined && !hostedImage.test(source)) {
-      const before = html.slice(0, match.index);
-
-      return yield* new InvalidTemplate({
-        part: "html",
-        reason: `image "${source}" must be an absolute https:// URL`,
-        line: before.split("\n").length,
-        column: match.index - before.lastIndexOf("\n"),
-      });
+      return yield* refuseAt(
+        html,
+        match.index,
+        `image "${source}" must be an absolute https:// URL`,
+      );
     }
+  }
+});
+
+const colorSchemeNames = new Set(["color-scheme", "supported-color-schemes"]);
+
+/** A `color-scheme` or `supported-color-schemes` CSS declaration, not `prefers-color-scheme`. */
+const colorSchemeProperty = /(?<![\w-])(color-scheme|supported-color-schemes)\s*:\s*([^;}"'<>]*)/gi;
+
+const darkMedia = /prefers-color-scheme\s*:\s*dark/i;
+
+const namesDark = /\bdark\b/i;
+
+const cssComment = /\/\*[\s\S]*?\*\//g;
+
+const lightOnly = "campaigns are light only (ADR-0049)";
+
+/**
+ * Refuses an HTML part that declares dark-mode support (ADR-0049): a client such as Apple Mail
+ * renders a copy dark only when it names `dark` in its `color-scheme` or `supported-color-schemes`
+ * meta or CSS, or styles `prefers-color-scheme: dark`.
+ */
+const refuseDarkMode = Effect.fnUntraced(function* (html: string) {
+  for (const match of html.matchAll(metaTag)) {
+    const attributes = match[1] ?? "";
+    const name = attributeOf(attributes, "name")?.toLowerCase();
+    const content = attributeOf(attributes, "content") ?? "";
+
+    if (name !== undefined && colorSchemeNames.has(name) && namesDark.test(content)) {
+      return yield* refuseAt(
+        html,
+        match.index,
+        `the ${name} meta "${content}" names dark: ${lightOnly}`,
+      );
+    }
+  }
+
+  // Blanked, not removed, so a refusal still points at the declaration's own line and column.
+  const css = html.replace(cssComment, (comment) => " ".repeat(comment.length));
+
+  for (const match of css.matchAll(colorSchemeProperty)) {
+    const value = (match[2] ?? "").trim();
+
+    if (namesDark.test(value)) {
+      return yield* refuseAt(html, match.index, `${match[1]} "${value}" names dark: ${lightOnly}`);
+    }
+  }
+
+  const media = darkMedia.exec(css);
+
+  if (media !== null) {
+    return yield* refuseAt(
+      html,
+      media.index,
+      `a prefers-color-scheme: dark rule styles dark mode: ${lightOnly}`,
+    );
   }
 });
 
 /**
  * Checks each part a draft edit gives, as a save does: Liquid syntax, known filters and tags, known
- * variables, the unsubscribe link and postal address in each body part, and hosted images in the
- * HTML part. Only a save checks the images: every stored copy passed one, so sending never pays.
+ * variables, the unsubscribe link and postal address in each body part, and hosted images and a light
+ * look in the HTML part. Only a save checks the HTML part's images and look: every stored copy passed
+ * one, so sending never pays.
  */
 export const validateParts = Effect.fn("Templates.validateParts")(function* (parts: {
   readonly subject?: string | undefined;
@@ -293,6 +363,7 @@ export const validateParts = Effect.fn("Templates.validateParts")(function* (par
   if (parts.html !== undefined && parts.html !== null) {
     yield* parsePart(engine(Schemas.defaultLanguage, true), "html", parts.html);
     yield* refuseUnhostedImages(parts.html);
+    yield* refuseDarkMode(parts.html);
   }
 });
 

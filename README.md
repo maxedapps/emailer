@@ -25,6 +25,7 @@ Self-hosted marketing email over Amazon SES. Deploy it to your own AWS account, 
 - There are no hosted sign-up or confirm pages. Your site hosts both and calls the sign-up API.
 - There is no click tracking: tag your links for your site's analytics ([Personalized templates](#personalized-templates)). Opens are tracked for campaign mail only ([Opens](#opens)).
 - Markdown campaigns share one fixed layout. For any other design, supply your own HTML.
+- There is no dark mode: campaigns are light only ([Light only](#light-only)).
 
 ## How it works
 
@@ -283,6 +284,26 @@ Every command also accepts:
 8. Follow its progress with `pnpm emailer campaigns get <campaignId>`.
 
 **Writing in Markdown.** The CLI renders both parts from the same file: HTML with inline styles in a 600px layout, and plain text. Images must load from absolute `https://` URLs: saving a draft refuses any other `<img src>`, such as `hero.png`, and names it. Raw HTML passes through unstyled. The service stores only the rendered result, so keep your Markdown file. For your own design, pass `--text` and `--html` files instead of `--markdown`.
+
+### Light only
+
+Every campaign goes out light ([ADR-0049](.adr/0049-campaigns-are-light-only.md)). The Markdown layout declares `color-scheme: light`. Your own HTML may declare `light` or nothing, but saving a draft or variant refuses one that declares dark support, and names the declaration:
+
+- a `color-scheme` or `supported-color-schemes` meta tag or CSS property that names `dark`, such as `light dark`;
+- a `prefers-color-scheme: dark` media query or `media` attribute.
+
+To fix a body, delete its dark rules and declare `light` in both places:
+
+```html
+<meta name="color-scheme" content="light" />
+<meta name="supported-color-schemes" content="light" />
+<style>
+  :root {
+    color-scheme: light;
+    supported-color-schemes: light;
+  }
+</style>
+```
 
 ### Personalized templates
 

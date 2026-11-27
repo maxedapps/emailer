@@ -5,7 +5,8 @@ We're using Alchemy (alchemy.run) and Effect (effect.website).
 
 - Linting, testing and other errors and warnings must be taken seriously and should be fixed properly
 - Low running cost is a hard constraint and outranks the next rule ([ADR-0032](.adr/0032-low-running-cost-is-a-hard-constraint.md)): DynamoDB stays (no relational database); state every change's steady-state cost effect (DynamoDB read/write units, GSI writes and storage, Lambda invocations and duration, SQS requests incl. idle long polling, CloudWatch Logs volume) and withdraw any change that costs more, even by cents
-- emailer is not used in production yet: within the cost constraint, ALWAYS evaluate alternatives and go for the cleanest solution and implementation, NEVER for the quick fix or workaround - think creatively, big refactors and rewrites are welcome
+- emailer sends production campaigns: data stored in prod moves with a one-off migration (`apps/backend/scripts/`, as ADR-0045 and ADR-0047 did); within the cost constraint, ALWAYS evaluate alternatives and go for the cleanest solution and implementation, NEVER for the quick fix or workaround - think creatively, big refactors and rewrites are welcome
+- Campaigns are light only ([ADR-0049](.adr/0049-campaigns-are-light-only.md)): saving a draft or variant refuses HTML that declares dark support (`color-scheme` or `supported-color-schemes` naming `dark`, `prefers-color-scheme: dark`); write and fix campaign HTML in light only, as the README's "Light only" shows
 - Fully embrace Alchemy and Effect and their features
 - ALWAYS consult the current official documentation (Alchemy, Effect, AWS) when working on code - do NOT make guesses or blind assumptions
 - Perform additional in-depth web research as needed to ensure you operate on proper up-to-date knowledge
